@@ -69,6 +69,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("rand: generator", rand_generator),
     ("net: address settings", net_config),
     ("net: two stacks ping each other (beenet in the kernel)", net_stack_ping),
+    ("net: TCP connection between two stacks", net_stack_tcp),
 ];
 
 /// Run every test silently (the health check of a trial kernel).
@@ -391,6 +392,18 @@ fn net_config() -> TestResult {
                 "10.0.0.2/24 gw", "10.0.0.2/24 10.0.0.1 extra", "10.0.0.2/33", "300.0.0.2/24"] {
         check!(net::parse_config(bad).is_err());
     }
+    // The saved settings file.
+    let s = net::parse_settings("static 10.0.0.2/24 10.0.0.1\ndns 1.1.1.1:5353\n").map_err(String::from)?;
+    check!(matches!(s.mode, net::Mode::Static(_)));
+    check_eq!(s.dns, Some((beenet::Ipv4([1, 1, 1, 1]), 5353)));
+    check_eq!(net::format_settings(&s).as_str(), "static 10.0.0.2/24 10.0.0.1\ndns 1.1.1.1:5353");
+    check_eq!(net::parse_settings("dhcp\n"), Ok(net::Settings { mode: net::Mode::Dhcp, dns: None }));
+    check_eq!(net::parse_settings("none").map(|s| s.mode), Ok(net::Mode::Off));
+    check_eq!(net::parse_settings("").map(|s| s.mode), Ok(net::Mode::Dhcp));
+    check_eq!(net::parse_dns_server("9.9.9.9"), Some((beenet::Ipv4([9, 9, 9, 9]), 53)));
+    for bad in ["dhcp now", "static", "dns 1.2.3", "dns 1.2.3.4:0", "dns 1.2.3.4:99999", "bogus"] {
+        check!(net::parse_settings(bad).is_err());
+    }
     Ok(())
 }
 
@@ -412,5 +425,40 @@ fn net_stack_ping() -> TestResult {
         }
     }
     check_eq!(a.take_event(), Some(Event::EchoReply { from: ip_b, id: 7, seq: 1, ttl: 64, len: 3 }));
+    Ok(())
+}
+
+fn net_stack_tcp() -> TestResult {
+    use beenet::{CloseReason, Config, Ipv4, Stack, TcpError, TcpStatus};
+    let (ip_a, ip_b) = (Ipv4([10, 9, 0, 1]), Ipv4([10, 9, 0, 2]));
+    let mut a = Stack::new([2, 0, 0, 0, 0, 1], 11);
+    let mut b = Stack::new([2, 0, 0, 0, 0, 2], 22);
+    a.set_config(Some(Config { ip: ip_a, prefix: 24, gateway: None }));
+    b.set_config(Some(Config { ip: ip_b, prefix: 24, gateway: None }));
+    b.tcp_listen(7).map_err(|e| String::from(e.message()))?;
+    let client = a.tcp_connect(ip_b, 7, 0).map_err(|e| String::from(e.message()))?;
+    // Carry frames between the two; time stands still (nothing is lost, so no timers are needed).
+    let carry = |a: &mut Stack, b: &mut Stack| {
+        for _ in 0..20 {
+            while let Some(f) = a.transmit() {
+                b.receive(&f, 0);
+            }
+            while let Some(f) = b.transmit() {
+                a.receive(&f, 0);
+            }
+        }
+    };
+    carry(&mut a, &mut b);
+    check_eq!(a.tcp_status(client), Ok(TcpStatus::Open));
+    let server = b.tcp_accept(7).ok_or("no connection at the server")?;
+    let message: Vec<u8> = (0..5000u32).map(|i| (i % 251) as u8).collect(); // several segments
+    check_eq!(a.tcp_send(client, &message, 0), Ok(message.len()));
+    a.tcp_close(client, 0).map_err(|e| String::from(e.message()))?;
+    carry(&mut a, &mut b);
+    let mut got = vec![0u8; 8192];
+    let n = b.tcp_recv(server, &mut got, 0).map_err(|e| String::from(e.message()))?;
+    check_eq!(n, message.len());
+    check!(got[..n] == message[..]);
+    check_eq!(b.tcp_recv(server, &mut got, 0), Err(TcpError::Closed(CloseReason::Normal)));
     Ok(())
 }

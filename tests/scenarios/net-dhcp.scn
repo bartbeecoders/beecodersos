@@ -1,0 +1,66 @@
+# Network phase N3: automatic address (DHCP), names (DNS), settings that survive a reboot.
+# QEMU's built-in DHCP server gives 10.0.2.15/24, gateway 10.0.2.2, DNS 10.0.2.3.
+@net
+@disk
+@dns bee.test=10.0.2.2 far.test=93.184.216.34
+$ net dhcp
+~ ^asking the network for an address \(DHCP\) \(saved\)\.\.\.$
+address 10.0.2.15/24 (DHCP), gateway 10.0.2.2, DNS 10.0.2.3
+$ net
+~ ^address: 10\.0\.2\.15/24 \(DHCP, lease ends in [\dhms ]+\)$
+gateway: 10.0.2.2
+dns:     10.0.2.3
+$ cat /system/net
+dhcp
+$ ping -c 1 10.0.2.2
+1 sent, 1 received, 0% loss
+# Names: use the test's DNS server.
+$ net dns {dns}
+~ ^DNS server 10\.0\.2\.2:\d+ \(saved\)$
+!~ \[net\]
+$ nslookup bee.test
+bee.test has address 10.0.2.2
+$ nslookup BEE.Test.
+BEE.Test. has address 10.0.2.2
+$ host far.test
+far.test has address 93.184.216.34
+$ ping -c 1 bee.test
+PING bee.test (10.0.2.2): 32 data bytes
+~ ^32 bytes from 10\.0\.2\.2: seq=1
+1 sent, 1 received, 0% loss
+$ nslookup 10.0.2.2
+10.0.2.2 has address 10.0.2.2
+$ nslookup nope.test
+nope.test: no such name
+$ ping nope.test
+nope.test: no such name
+$ nslookup "bad name"
+bad name: not a valid host name
+# A server that never answers: asked three times, then a clear message (5 s).
+$ nslookup drop.test
+drop.test: no answer from the DNS server
+# The event log records that the network came up, but never host names.
+$ log 40
+~ "ev":"net","state":"dhcp-bound"
+~ "ev":"cmd","cmd":"nslookup","status":"error"
+!~ bee\.test|nope\.test|10\.0\.2
+@reboot
+~ \[net\]  asking the network for an address \(DHCP\)
+$ net dhcp
+~ ^address 10\.0\.2\.15/24 \(DHCP\), gateway 10\.0\.2\.2, DNS 10\.0\.2\.2:\d+$
+$ nslookup bee.test
+bee.test has address 10.0.2.2
+$ net dns auto
+DNS server: the one DHCP gives (saved)
+$ net
+dns:     10.0.2.3
+# Back to a fixed address: DHCP stops, the DNS server from DHCP is gone.
+$ net static 10.0.2.20/24 10.0.2.2
+address 10.0.2.20/24, gateway 10.0.2.2 (saved)
+$ net
+address: 10.0.2.20/24 (static)
+dns:     none (net dns ADDRESS)
+$ nslookup bee.test
+bee.test: no DNS server configured (net dns ADDRESS)
+$ ping -c 1 10.0.2.2
+1 sent, 1 received, 0% loss

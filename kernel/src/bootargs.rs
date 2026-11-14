@@ -5,6 +5,9 @@
 //!   `test`      test mode: a panic or CPU exception ends QEMU with a failure
 //!               exit code (isa-debug-exit) instead of halting forever
 //!   `selftest`  run the in-kernel self-tests at boot (in test mode: then exit)
+//!   `slot=a|b`  which A/B kernel slot was booted (set by the boot disk)
+//!   `failboot`  tests: a trial kernel panics after arming the rollback
+//!   `nodhcp`    tests: don't request an address automatically at boot
 
 use crate::ring::Global;
 

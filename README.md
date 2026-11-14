@@ -23,7 +23,9 @@ Current version: **0.0.2** (see [Versioning](#versioning)).
 | 9 | AI-written apps in a WebAssembly sandbox | planned |
 | N1 | Networking: PCI and the e1000 network card driver | ✅ |
 | N2 | Networking: ARP, IPv4, ICMP: `ping` | ✅ |
-| N3–N6 | Networking: DHCP, DNS, TCP, HTTP, servers | planned |
+| N3 | Networking: UDP, DHCP (automatic address), DNS (names) | ✅ |
+| N4 | Networking: TCP connections (`nc`) | ✅ |
+| N5–N6 | Networking: HTTP, time, file transfer, servers | planned |
 
 The roadmap is `Docs/self-improving-os-plan.html`, the network plan is
 `Docs/network-stack-plan.html`; each phase is described below.
@@ -32,7 +34,7 @@ The roadmap is `Docs/self-improving-os-plan.html`, the network plan is
 
 ```sh
 make run-serial              # build and boot in this terminal (quit: Ctrl-A then X)
-make check                   # all tests, headless (~40 s)
+make check                   # all tests, headless (~1 min)
 make beehive                 # AI bridge on the host; then `ask ...` in the OS
 make evolve                  # turn collected signals into a change for you to review
 python3 tools/evolve/evolve.py approve N --deploy   # ship it to the VM (rollback if it fails)
@@ -73,9 +75,12 @@ assembler and linked with the bundled `rust-lld`.
   `virsh -c qemu:///system net-autostart default`.
 - **`ask` says "AI offline":** start `make beehive` on the host. `ai` in the OS
   shows the bridge status; `ai off` / `ai on` switches AI features.
-- **`ping` says "no IP address configured":** set one with
-  `net static IP/PREFIX [GATEWAY]` (for `vm1`: `net static 192.168.122.50/24 192.168.122.1`;
-  under `make run`: `net static 10.0.2.15/24 10.0.2.2`). Automatic setup (DHCP) is network phase N3.
+- **No network address:** `net` shows the state. The OS asks for an address
+  by itself (DHCP) at boot; `net dhcp` asks again and shows the result. If the
+  network has no DHCP server, set one by hand: `net static IP/PREFIX [GATEWAY]`
+  and `net dns ADDRESS`.
+- **Names don't resolve:** `net` shows the DNS server; `net dns 1.1.1.1` sets one
+  by hand, `net dns auto` goes back to the one DHCP gives.
 - **`evolve work` refuses to start:** the coding agent only sees committed
   code; commit your changes first (it lists them).
 - **A deploy was rolled back:** `slots` in the OS shows which slot runs and the
@@ -126,7 +131,10 @@ beefs/                 BeeFS filesystem library (no_std + alloc, shared by kerne
   src/partition.rs     MBR partitions: BeeFS inside partition 2 of the boot disk
 beenet/                network stack library (no_std + alloc, no hardware access; unit-tested on the host)
   src/wire.rs          packet formats: Ethernet, ARP, IPv4, ICMP, internet checksum
-  src/stack.rs         the stack: ARP cache, routing, ping; frames in, frames out
+  src/stack.rs         the stack: ARP cache, routing, ping, UDP sockets; frames in, frames out
+  src/dhcp.rs          DHCP client: automatic address, renewal
+  src/dns.rs           DNS resolver: names to addresses, with a cache
+  src/tcp.rs           TCP: connections, retransmission, flow control, close and reset
 tools/beefs-tool/      host CLI to create/inspect/edit BeeFS images (and boot disks)
 tests/boot_test.py     boot tests: drives the kernel in headless QEMU over serial
 tests/scenarios/       shell scenario tests (*.scn)
@@ -155,7 +163,7 @@ kernel/
   src/bootslots.rs     A/B kernel slots: arm the rollback, health check, report failed trials
   src/pci.rs           PCI: find devices, read their configuration (`lspci`)
   src/e1000.rs         Intel e1000 network card driver (polled descriptor rings)
-  src/net.rs           card + beenet stack: polling, address settings, `net` / `ping` / `arp`
+  src/net.rs           card + beenet stack: polling, settings, TCP streams, `net` / `ping` / `arp` / `nslookup` / `nc`
   src/rand.rs          random numbers (RDRAND, or a seeded generator)
   src/allocator.rs     kernel heap in free RAM from the Multiboot memory map
   src/console.rs       print!/println! to VGA + serial, line redraw helpers
@@ -246,7 +254,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `ai`,
-`slots`, `net`, `ping`, `arp`, `lspci`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `net`, `ping`, `nslookup`, `nc`, `arp`, `lspci`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Under the hood:** interrupts are enabled (IDT + remapped PIC; IRQ0 timer,
 IRQ1 keyboard, IRQ3 COM2 AI bridge, IRQ4 COM1 serial). Handlers queue raw bytes; the shell decodes them and sleeps with
@@ -321,7 +329,9 @@ person or an AI (this is the first step of `Docs/self-improving-os-plan.html`).
   `$! CMD` (the command must crash the kernel), `$^C CMD` (Ctrl+C after 1 s),
   `@signal REGEX` (beehive must have received it), `@bootdisk` /
   `@deploy` / `@deploy-crash` (A/B slots), `@wire` / `@frame` / `@send`
-  (a network cable to the test) and `@net` (QEMU's built-in network). The full format is at the top of
+  (a network cable to the test), `@net` (QEMU's built-in network), `@dns`
+  (a fake DNS server), `@tcp` (small TCP services) and `$& CMD` / `> TEXT` /
+  `$wait` (type into a running command). Scenarios without `@wire` or `@net` have no network card. The full format is at the top of
   `tests/boot_test.py`.
 - **Host tool tests:** `tests/test_beehive.py`, `tests/test_evolve.py` and
   `tests/test_bootdisk.py` (Python `unittest`, no LLM or login needed).
@@ -597,6 +607,86 @@ pinging each other, gateway routing, ARP giving up, spoofed ARP, and broken
 packets. `net-ip.scn` checks the exact bytes of the OS's ARP announcement, ARP
 reply and echo reply on a test wire. `net-ping.scn` pings QEMU's built-in
 gateway (`@net`) and checks that the address survives a reboot.
+
+## Networking — phase N3: UDP, DHCP, DNS ✅
+
+The OS now sets itself up and understands names:
+
+```
+[net]  e1000 (Intel 82540EM) 52:54:00:31:2f:d8, link up
+[net]  asking the network for an address (DHCP)
+...
+[net]  address 192.168.122.57/24 (DHCP), gateway 192.168.122.1, DNS 192.168.122.1
+bee:/$ ping -c 1 example.com
+PING example.com (93.184.216.34): 32 data bytes
+```
+
+- **UDP** sockets in `beenet` (8 at most, bounded queues, checksums verified).
+- **DHCP client:** at boot, unless other settings are saved, the OS asks the
+  network for an address, gateway and DNS server, in the background, so the shell is not
+  delayed. The result is shown at the next prompt. It renews the lease half-way
+  through, drops the address when a lease runs out, retries after 2, 4 and 8
+  seconds, and then keeps trying once a minute (a cable may be plugged in
+  later). `net dhcp` switches to automatic setup and waits for the result.
+- **DNS resolver:** A records over UDP with a cache (16 names, 5 s to 1 h).
+  Questions go out from a random port with a random ID, and an answer is only
+  accepted from the server that was asked, on that port, with that ID and the
+  same question. `nslookup NAME` (alias `host`); `ping` takes names.
+- **Settings** in `/system/net`: `dhcp` (the default when there is no file),
+  `none`, or `static IP/PREFIX [GATEWAY]`, plus an optional `dns ADDRESS[:PORT]`
+  line. `net dns ADDRESS` sets a DNS server by hand; `net dns auto` uses the
+  one from DHCP. `net` shows address, how it was obtained, gateway and DNS.
+- **Privacy:** the event log records that the network came up and that
+  `ping` / `nslookup` ran, never the names or addresses.
+
+Not done yet: TCP (N4), so no HTTP; DNS over TCP, DNSSEC and IPv6.
+
+Tests: `beenet` now has 32 host unit tests: full DHCP handshakes against a
+hand-built fake server (retries, refusals, renewal, expiry, odd answers), and
+DNS answers including aliases, errors, forged answers and cut-off packets.
+`net-dhcp.scn` gets an address from QEMU's DHCP server, resolves names through
+a fake DNS server run by the test (`@dns`), and checks that settings survive a
+reboot. `net-ip.scn` checks the DHCP DISCOVER frame on the wire.
+
+## Networking — phase N4: TCP ✅
+
+Reliable connections, the basis for HTTP and most other protocols:
+
+```
+bee:/$ nc 192.168.122.1 7 hello
+connected to 192.168.122.1 port 7
+hello
+(the other side closed the connection)
+```
+
+- **`beenet/src/tcp.rs`:** the three-way handshake, sequence numbers and
+  acknowledgements, retransmission with a measured timeout and backoff, fast
+  retransmit after three duplicate ACKs, flow control (16 KiB buffers, the
+  receive window, zero-window probes), orderly close in both directions
+  (including "I'm done sending, keep talking"), and resets.
+  - Kept simple: out-of-order segments are dropped and sent again by the peer
+    (no reassembly), no selective ACK or window scaling, and a basic congestion
+    rule (the window grows by one segment per ACK, collapses on a timeout).
+  - Hardened: a reset only counts at exactly the expected sequence number,
+    a segment acknowledging data that was never sent is ignored, and a
+    segment for no connection is answered with a reset. At most 8 connections.
+  - Listening for incoming connections exists in the stack (the tests use it),
+    but the OS does not listen on any port: inbound stays closed until N6.
+- **`nc HOST PORT`** opens a connection: lines you type are sent, what arrives
+  is shown; Ctrl+D ends your side, Ctrl+C quits. **`nc HOST PORT TEXT`** sends
+  one line, shows the answer and finishes. Errors are specific: "connection
+  refused (nothing is listening on that port)", "connection timed out",
+  "host unreachable".
+- Connections that are closed finish in the background, so buffered data is
+  still delivered after a command ends.
+
+Tests: 16 host tests drive two stacks over a simulated link: one megabyte
+through 10% loss with duplication and reordering arrives intact (and a much
+worse link still delivers), a perfect link sends every byte exactly once, a
+full receiver stalls the sender without errors, forged resets and data are
+ignored, a dead peer is detected. `net-tcp.scn` runs `nc` against small
+services (`@tcp`): one line each way, 300 lines in order, a refused port, a
+typed conversation, half-close with Ctrl+D, and ten connections in a row.
 
 ## Versioning
 

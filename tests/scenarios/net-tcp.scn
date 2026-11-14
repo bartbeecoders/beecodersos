@@ -1,0 +1,75 @@
+# Network phase N4: TCP connections with `nc`, against small services run by the test.
+@net
+@tcp
+$ net dhcp
+~ ^address 10\.0\.2\.15/24 \(DHCP\)
+# One line out, one line back, the server closes.
+$ nc {once} hello from BeeCodersOs
+~ ^connected to 10\.0\.2\.2 port \d+$
+you said: hello from BeeCodersOs
+(the other side closed the connection)
+# More data than fits in one packet or one buffer: 300 lines, in order, none missing.
+$ nc {lines} go
+line 001 of 300 ==============================
+line 002 of 300 ==============================
+line 150 of 300 ==============================
+line 299 of 300 ==============================
+line 300 of 300 ==============================
+(the other side closed the connection)
+!~ ^line.*line
+# Nothing listens there: refused at once, with a clear message.
+$ nc {closed}
+~ ^10\.0\.2\.2 port \d+: connection refused \(nothing is listening on that port\)$
+$ nc 10.0.2.2 0
+~ usage: nc HOST PORT
+$ nc 10.0.2.2 notaport
+~ usage: nc HOST PORT
+# A conversation: type lines, read answers; the server ends it.
+$& nc {echo}
+> first line
+> second line
+> bye
+$wait
+~ ^connected to 10\.0\.2\.2 port \d+ \(type lines; Ctrl\+D ends your side, Ctrl\+C quits\)$
+echo: first line
+echo: second line
+goodbye
+(the other side closed the connection)
+# Ctrl+D ends our side only: the server then answers and closes.
+$& nc {sink}
+> one
+> two
+> three
+>^D
+$wait
+(your side is closed; waiting for the other side, Ctrl+C quits)
+received 17 bytes in 3 lines
+(the other side closed the connection)
+# Ctrl+C leaves a connection.
+$& nc {echo}
+> still here
+>^C
+$wait
+echo: still here
+(closed)
+# Many connections in a row: every one is released again.
+$ nc {once} 1
+you said: 1
+$ nc {once} 2
+you said: 2
+$ nc {once} 3
+you said: 3
+$ nc {once} 4
+you said: 4
+$ nc {once} 5
+you said: 5
+$ nc {once} 6
+you said: 6
+$ nc {once} 7
+you said: 7
+$ nc {once} 8
+you said: 8
+$ nc {once} 9
+you said: 9
+$ nc {once} 10
+you said: 10

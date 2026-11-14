@@ -6,8 +6,12 @@
 //!   transmit()            the next frame to give to the card
 //!   take_event()          things the user of the stack wants to know
 //!
-//! All tables are bounded, so a flood of packets can't use up memory.
+//! UDP sockets, the DHCP client (dhcp.rs), the DNS resolver (dns.rs) and TCP
+//! (tcp.rs) sit on top. All tables are bounded, so a flood of packets can't use up memory.
 
+use crate::dhcp::{Dhcp, Notice};
+use crate::dns::{Dns, DnsError};
+use crate::tcp::TcpLayer;
 use crate::wire::{self, Arp, ARP_REPLY, ARP_REQUEST, ETHERTYPE_ARP, ETHERTYPE_IPV4};
 use crate::{netmask, Ipv4, Mac, BROADCAST_MAC};
 use alloc::collections::VecDeque;
@@ -23,6 +27,10 @@ const MAX_PENDING: usize = 16;
 const MAX_OUT: usize = 64;
 const MAX_EVENTS: usize = 32;
 const TTL: u8 = 64;
+const MAX_UDP_SOCKETS: usize = 8;
+/// Datagrams waiting in one socket; more are dropped.
+const UDP_QUEUE: usize = 16;
+pub const UDP_MAX_DATA: usize = wire::MTU - 28;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Config {
@@ -51,6 +59,11 @@ pub enum Error {
     /// Too many packets are already waiting for an address lookup.
     QueueFull,
     TooLarge,
+    /// All UDP sockets are in use.
+    NoSockets,
+    PortInUse,
+    /// The UDP port is not open.
+    NotOpen,
 }
 
 impl Error {
@@ -60,6 +73,9 @@ impl Error {
             Error::NoRoute => "no route: the address is outside the local network and no gateway is set",
             Error::QueueFull => "too many packets waiting for address lookups",
             Error::TooLarge => "packet too large",
+            Error::NoSockets => "too many open network connections",
+            Error::PortInUse => "that port is already in use",
+            Error::NotOpen => "that port is not open",
         }
     }
 }
@@ -76,6 +92,16 @@ pub enum Reason {
 pub enum Event {
     EchoReply { from: Ipv4, id: u16, seq: u16, ttl: u8, len: usize },
     Unreachable { dst: Ipv4, reason: Reason },
+    /// A name lookup started with `dns_lookup` finished.
+    Dns { handle: u32, result: Result<Ipv4, DnsError> },
+}
+
+/// A received UDP datagram: sender address, sender port, data.
+pub type Datagram = (Ipv4, u16, Vec<u8>);
+
+struct UdpSocket {
+    port: u16,
+    queue: VecDeque<Datagram>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,23 +134,32 @@ pub struct Stats {
     pub dropped_fragments: u64,
     /// Another machine used our IP address in an ARP packet.
     pub address_conflicts: u64,
+    /// TCP segments for no connection of ours, answered with a reset.
+    pub tcp_resets_sent: u64,
 }
 
 pub struct Stack {
-    mac: Mac,
-    config: Option<Config>,
+    pub(crate) mac: Mac,
+    pub(crate) config: Option<Config>,
     arp: Vec<ArpEntry>,
     lookups: Vec<Lookup>,
     pending: Vec<Pending>,
     out: VecDeque<Vec<u8>>,
     events: VecDeque<Event>,
+    pub(crate) notices: VecDeque<Notice>,
     next_id: u16,
+    rng: u32,
+    udp: Vec<UdpSocket>,
+    pub(crate) dhcp: Dhcp,
+    pub(crate) dns: Dns,
+    pub(crate) tcp: TcpLayer,
     pub stats: Stats,
 }
 
 impl Stack {
-    /// `ip_id_seed`: starting value for the IPv4 identification field.
-    pub fn new(mac: Mac, ip_id_seed: u16) -> Self {
+    /// `seed`: a random number; it starts the generator for packet IDs,
+    /// port numbers and transaction IDs (hard to guess, not cryptographic).
+    pub fn new(mac: Mac, seed: u32) -> Self {
         Stack {
             mac,
             config: None,
@@ -133,9 +168,30 @@ impl Stack {
             pending: Vec::new(),
             out: VecDeque::new(),
             events: VecDeque::new(),
-            next_id: ip_id_seed,
+            notices: VecDeque::new(),
+            next_id: seed as u16,
+            rng: seed | 1,
+            udp: Vec::new(),
+            dhcp: Dhcp::default(),
+            dns: Dns::default(),
+            tcp: TcpLayer::default(),
             stats: Stats::default(),
         }
+    }
+
+    /// The next pseudo-random number (xorshift32).
+    pub(crate) fn random(&mut self) -> u32 {
+        let mut x = self.rng;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        self.rng = x;
+        x
+    }
+
+    /// Mix fresh randomness into the generator (the kernel does this now and then).
+    pub fn reseed(&mut self, value: u32) {
+        self.rng = (self.rng ^ value) | 1;
     }
 
     pub fn mac(&self) -> Mac {
@@ -181,6 +237,11 @@ impl Stack {
         self.events.pop_front()
     }
 
+    /// Changes of the automatic (DHCP) address that the user should hear about.
+    pub fn take_notice(&mut self) -> Option<Notice> {
+        self.notices.pop_front()
+    }
+
     /// Queue an ICMP echo request ("ping").
     pub fn ping(&mut self, dst: Ipv4, id: u16, seq: u16, payload: &[u8], now_ms: u64) -> Result<(), Error> {
         let msg = wire::build_icmp(wire::ICMP_ECHO_REQUEST, 0, wire::echo_rest(id, seq), payload);
@@ -189,7 +250,7 @@ impl Stack {
 
     // --- sending ---------------------------------------------------------------
 
-    fn emit(&mut self, frame: Vec<u8>) {
+    pub(crate) fn emit(&mut self, frame: Vec<u8>) {
         if self.out.len() < MAX_OUT {
             self.out.push_back(frame);
         } else {
@@ -197,7 +258,7 @@ impl Stack {
         }
     }
 
-    fn event(&mut self, e: Event) {
+    pub(crate) fn event(&mut self, e: Event) {
         if self.events.len() == MAX_EVENTS {
             self.events.pop_front();
         }
@@ -246,8 +307,80 @@ impl Stack {
         Ok(())
     }
 
-    /// Timers: repeat unanswered ARP requests, give up after a few tries.
+    /// Timers: ARP retries, the DHCP lease, DNS retries.
     pub fn poll(&mut self, now_ms: u64) {
+        self.poll_arp(now_ms);
+        self.dhcp_poll(now_ms);
+        self.dns_poll(now_ms);
+        self.tcp_poll(now_ms);
+    }
+
+    // --- UDP ---------------------------------------------------------------------
+
+    /// Open a UDP port: a given one, or (None) a random free one above 49152.
+    pub fn udp_open(&mut self, port: Option<u16>) -> Result<u16, Error> {
+        if self.udp.len() >= MAX_UDP_SOCKETS {
+            return Err(Error::NoSockets);
+        }
+        let port = match port {
+            Some(p) if self.udp.iter().any(|s| s.port == p) => return Err(Error::PortInUse),
+            Some(p) => p,
+            None => loop {
+                let p = 49152 + (self.random() % 16384) as u16;
+                if !self.udp.iter().any(|s| s.port == p) {
+                    break p;
+                }
+            },
+        };
+        self.udp.push(UdpSocket { port, queue: VecDeque::new() });
+        Ok(port)
+    }
+
+    pub fn udp_close(&mut self, port: u16) {
+        self.udp.retain(|s| s.port != port);
+    }
+
+    pub fn udp_send(&mut self, src_port: u16, dst: Ipv4, dst_port: u16, data: &[u8], now_ms: u64) -> Result<(), Error> {
+        let c = self.config.ok_or(Error::NoAddress)?;
+        if data.len() > UDP_MAX_DATA {
+            return Err(Error::TooLarge);
+        }
+        let datagram = wire::build_udp(c.ip, dst, src_port, dst_port, data);
+        self.send_ipv4(dst, wire::PROTO_UDP, &datagram, now_ms)
+    }
+
+    /// The next datagram received on an open port.
+    pub fn udp_recv(&mut self, port: u16) -> Option<Datagram> {
+        self.udp.iter_mut().find(|s| s.port == port)?.queue.pop_front()
+    }
+
+    /// Broadcast a UDP datagram from 0.0.0.0 (DHCP, before we have an address).
+    pub(crate) fn udp_broadcast_unconfigured(&mut self, src_port: u16, dst_port: u16, data: &[u8]) {
+        let datagram = wire::build_udp(Ipv4::UNSPECIFIED, Ipv4::BROADCAST, src_port, dst_port, data);
+        self.next_id = self.next_id.wrapping_add(1);
+        let packet = wire::build_ipv4(Ipv4::UNSPECIFIED, Ipv4::BROADCAST, wire::PROTO_UDP, TTL, self.next_id, &datagram);
+        let frame = wire::build_eth(&BROADCAST_MAC, &self.mac, ETHERTYPE_IPV4, &packet);
+        self.emit(frame);
+    }
+
+    fn receive_udp(&mut self, src: Ipv4, dst: Ipv4, data: &[u8], now_ms: u64) {
+        let Some(udp) = wire::parse_udp(data, src, dst) else {
+            self.stats.dropped += 1;
+            return;
+        };
+        if udp.dst_port == crate::dhcp::CLIENT_PORT {
+            return self.dhcp_receive(udp.data, now_ms);
+        }
+        if self.dns_receive(src, udp.src_port, udp.dst_port, udp.data, now_ms) {
+            return;
+        }
+        match self.udp.iter_mut().find(|s| s.port == udp.dst_port) {
+            Some(socket) if socket.queue.len() < UDP_QUEUE => socket.queue.push_back((src, udp.src_port, udp.data.to_vec())),
+            _ => self.stats.dropped += 1, // nobody listens there, or the queue is full
+        }
+    }
+
+    fn poll_arp(&mut self, now_ms: u64) {
         let mut i = 0;
         while i < self.lookups.len() {
             let l = &mut self.lookups[i];
@@ -266,6 +399,7 @@ impl Stack {
                     p.next_hop != ip
                 });
                 for dst in failed {
+                    self.tcp_unreachable(dst);
                     self.event(Event::Unreachable { dst, reason: Reason::NoArpReply });
                 }
             } else {
@@ -358,8 +492,18 @@ impl Stack {
     }
 
     fn receive_ipv4(&mut self, payload: &[u8], now_ms: u64) {
-        let (Ok((ip, data)), Some(c)) = (wire::parse_ipv4(payload), self.config) else {
+        let Ok((ip, data)) = wire::parse_ipv4(payload) else {
             self.stats.dropped += 1;
+            return;
+        };
+        let Some(c) = self.config else {
+            // No address yet: the only packets of interest are DHCP answers.
+            match wire::parse_udp(data, ip.src, ip.dst) {
+                Some(udp) if ip.protocol == wire::PROTO_UDP && !ip.fragment && udp.dst_port == crate::dhcp::CLIENT_PORT => {
+                    self.dhcp_receive(udp.data, now_ms)
+                }
+                _ => self.stats.dropped += 1,
+            }
             return;
         };
         let for_us = ip.dst == c.ip;
@@ -372,8 +516,17 @@ impl Stack {
             return;
         }
         self.stats.rx_ipv4 += 1;
+        if ip.protocol == wire::PROTO_UDP {
+            return self.receive_udp(ip.src, ip.dst, data, now_ms);
+        }
+        if ip.protocol == wire::PROTO_TCP {
+            if for_us {
+                self.tcp_receive(ip.src, ip.dst, data, now_ms);
+            }
+            return;
+        }
         if ip.protocol != wire::PROTO_ICMP {
-            self.stats.dropped += 1; // UDP and TCP arrive in later phases
+            self.stats.dropped += 1;
             return;
         }
         let Some(icmp) = wire::parse_icmp(data) else {
@@ -396,6 +549,7 @@ impl Stack {
                 // holds the destination that could not be reached.
                 if let Some(dst) = icmp.data.get(16..20) {
                     let dst = Ipv4([dst[0], dst[1], dst[2], dst[3]]);
+                    self.tcp_unreachable(dst);
                     self.event(Event::Unreachable { dst, reason: Reason::Icmp(icmp.code) });
                 }
             }
@@ -537,6 +691,40 @@ mod tests {
     fn echo_request(dst_mac: &Mac, dst_ip: Ipv4) -> Vec<u8> {
         let icmp = build_icmp(ICMP_ECHO_REQUEST, 0, echo_rest(7, 1), b"data");
         build_eth(dst_mac, &MAC_B, ETHERTYPE_IPV4, &build_ipv4(IP_B, dst_ip, PROTO_ICMP, 64, 1, &icmp))
+    }
+
+    #[test]
+    fn udp_sockets() {
+        let (mut a, mut b) = (stack(MAC_A, IP_A), stack(MAC_B, IP_B));
+        exchange(&mut a, &mut b, 0);
+        assert_eq!(b.udp_open(Some(7000)), Ok(7000));
+        assert_eq!(b.udp_open(Some(7000)), Err(Error::PortInUse));
+        let port = a.udp_open(None).unwrap();
+        assert!(port >= 49152);
+        a.udp_send(port, IP_B, 7000, b"hello", 0).unwrap();
+        a.udp_send(port, IP_B, 7001, b"nobody listens", 0).unwrap();
+        exchange(&mut a, &mut b, 0);
+        assert_eq!(b.udp_recv(7000), Some((IP_A, port, b"hello".to_vec())));
+        assert_eq!(b.udp_recv(7000), None);
+        b.udp_send(7000, IP_A, port, b"hi back", 0).unwrap();
+        exchange(&mut a, &mut b, 0);
+        assert_eq!(a.udp_recv(port), Some((IP_B, 7000, b"hi back".to_vec())));
+        // The queue is bounded, and a closed port receives nothing.
+        for _ in 0..UDP_QUEUE + 5 {
+            a.udp_send(port, IP_B, 7000, b"flood", 0).unwrap();
+            exchange(&mut a, &mut b, 0);
+        }
+        assert_eq!(core::iter::from_fn(|| b.udp_recv(7000)).count(), UDP_QUEUE);
+        b.udp_close(7000);
+        a.udp_send(port, IP_B, 7000, b"late", 0).unwrap();
+        exchange(&mut a, &mut b, 0);
+        assert_eq!(b.udp_recv(7000), None);
+        assert_eq!(a.udp_send(port, IP_B, 1, &[0; UDP_MAX_DATA + 1], 0), Err(Error::TooLarge));
+        for _ in 0..MAX_UDP_SOCKETS {
+            let _ = a.udp_open(None);
+        }
+        assert_eq!(a.udp_open(None), Err(Error::NoSockets));
+        assert_eq!(Stack::new(MAC_A, 1).udp_send(1, IP_B, 1, b"", 0), Err(Error::NoAddress));
     }
 
     #[test]

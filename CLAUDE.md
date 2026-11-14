@@ -10,7 +10,7 @@ accurate); the roadmap is `Docs/self-improving-os-plan.html`.
 
 ```sh
 make              # build the kernel -> build/beecoders.elf
-make check        # ALL tests; must exit 0 before any change is done (~40 s)
+make check        # ALL tests; must exit 0 before any change is done (~1 min)
 make test         # BeeFS and beenet unit tests only (host)
 tests/boot_test.py selftest|scenarios|iso|iso-uefi [-v]   # one boot suite; -v shows serial output
 tests/boot_test.py scenarios tests/scenarios/files.scn     # one scenario
@@ -92,20 +92,26 @@ Kernel command-line flags (`qemu -append "..."`, read in `kernel/src/bootargs.rs
 - `selftest` — run the self-tests at boot (with `test`: exit with the result).
 
 Other flags: `slot=a|b` (set by the boot disk's limine.conf: which A/B slot
-booted) and `failboot` (tests only: a trial kernel panics after arming the
-rollback, to test it).
+booted), `failboot` (tests only: a trial kernel panics after arming the
+rollback, to test it) and `nodhcp` (tests only: no automatic address request
+at boot; `@wire` scenarios use it).
 
 The runner types commands on the serial console (COM1) and reads the output;
 ANSI colors are stripped. The prompt looks like `bee:/path$ `. Scenario
 directives (full list at the top of `tests/boot_test.py`): `@disk`, `@ai`,
 `@ai-offline`, `@bootdisk`, `@wire` (network card connected to the test),
-`@net` (QEMU's built-in network, gateway 10.0.2.2),
+`@net` (QEMU's built-in network: DHCP gives 10.0.2.15, gateway 10.0.2.2),
+`@dns NAME=IP ...` (fake DNS server; `{dns}` in a command is its address),
+`@tcp` (TCP test services: `{once}`, `{echo}`, `{lines}`, `{sink}`, `{closed}`),
+`$& CMD` / `> TEXT` / `>^D` / `>^C` / `$wait` (type into a running command),
 `@reboot`, `@deploy [ARGS]`, `@deploy-crash ARGS`, `@signal REGEX`,
 `@frame HEXREGEX` / `@send [Nx] HEX` (frames on the wire), `$ CMD`,
 `$! CMD` (must crash), `$^C CMD` (Ctrl+C after 1 s).
 
-Networking follows `Docs/network-stack-plan.html` (N1-N2 done: PCI, e1000,
-ARP/IPv4/ICMP in the `beenet` crate, `net` / `ping` / `arp`). Received packets
+Networking follows `Docs/network-stack-plan.html` (N1-N4 done: PCI, e1000,
+and in the `beenet` crate ARP, IPv4, ICMP, UDP, DHCP, DNS, TCP; commands `net`,
+`ping`, `arp`, `nslookup`, `nc`). The OS must not listen on any TCP port
+before phase N6 (default deny inbound). Never log host names or addresses (privacy rule). Received packets
 are untrusted: check every length, keep every table bounded, add a test with
 truncated input for every new parser.
 The card is polled from the idle loop (`input::read_key`) and from `net`

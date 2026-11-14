@@ -23,7 +23,7 @@ address 10.0.0.2/24, gateway 10.0.0.1 (RAM disk: not kept after reboot)
 $ arp
 ~ ^10\.0\.0\.3\s+02:00:00:00:00:0b  confirmed \d+ s ago$
 $ net
-address: 10.0.0.2/24
+address: 10.0.0.2/24 (static)
 gateway: 10.0.0.1
 # Nobody has 10.0.0.9: three ARP requests, then a clear message.
 $ ping -c 2 10.0.0.9
@@ -36,7 +36,7 @@ $ ping -c 1 8.8.8.8
 8.8.8.8 is unreachable: no machine with that address answered on the local network
 @frame ^ffffffffffff525400bee00108060001080006040001525400bee0010a0000020000000000000a000001
 $ ping example.com
-~ not an IPv4 address
+example.com: no DNS server configured (net dns ADDRESS)
 $ ping -c 0 10.0.0.3
 ~ usage: ping
 $ net off
@@ -46,4 +46,12 @@ no IP address configured
 # Without an address the OS stays silent: no reply to ARP.
 @send ffffffffffff02000000000b0806000108000604000102000000000b0a0000030000000000000a000002000000000000000000000000000000000000
 $ net
-address: none (set one: net static IP/PREFIX [GATEWAY])
+address: none (net dhcp, or net static IP/PREFIX [GATEWAY])
+# DHCP on the wire: a broadcast from 0.0.0.0, UDP port 68 to 67, a BOOTP request
+# with the broadcast flag, the DHCP magic cookie and message type 1 (DISCOVER).
+$^C net dhcp
+(still trying in the background)
+@frame ^ffffffffffff525400bee001080045[0-9a-f]{14}4011[0-9a-f]{4}00000000ffffffff00440043[0-9a-f]{8}01010600[0-9a-f]{8}00008000.*525400bee001.*63825363350101
+$ net
+~ ^address: none yet \(DHCP is looking for one
+$ net off

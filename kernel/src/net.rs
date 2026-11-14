@@ -1,6 +1,6 @@
 //! Networking in the kernel: the network card, the beenet protocol stack
-//! (ARP, IPv4, ICMP) and what the `net`, `ping` and `arp` commands need.
-//! See Docs/network-stack-plan.html (phases N1-N2).
+//! (ARP, IPv4, ICMP, UDP, DHCP, DNS, TCP) and what the `net`, `ping`, `arp`,
+//! `nslookup` and `nc` commands need. See Docs/network-stack-plan.html (phases N1-N4).
 //!
 //! `poll()` moves frames between the card and the stack. It runs from the idle
 //! loop (every 10 ms, so the OS answers pings at the prompt) and inside
@@ -11,10 +11,11 @@ use crate::input::{self, Key};
 use crate::ring::Global;
 use crate::{interrupts, pci, rand, time};
 use alloc::boxed::Box;
+use alloc::collections::VecDeque;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use beenet::{Config, Event, Ipv4, Reason, Stack};
+use beenet::{Config, Event, Ipv4, Lookup, Notice, Reason, Stack, TcpError, TcpHandle, TcpStatus, DNS_PORT};
 
 /// Largest Ethernet frame without the checksum, and the smallest the wire allows.
 pub const MAX_FRAME: usize = 1514;
@@ -61,10 +62,29 @@ struct Counters {
     last_rx: Option<([u8; 6], u16, usize)>,
 }
 
+/// How the IPv4 address is obtained.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Off,
+    Dhcp,
+    Static(Config),
+}
+
+/// What is saved in /system/net.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Settings {
+    pub mode: Mode,
+    /// A DNS server set by hand (address, port); None: the one DHCP gives.
+    pub dns: Option<(Ipv4, u16)>,
+}
+
 struct Net {
     dev: Box<dyn NetDevice>,
     stack: Stack,
     counters: Counters,
+    settings: Settings,
+    /// Messages for the user about the automatic address: (kind, text).
+    notices: VecDeque<(&'static str, String)>,
 }
 
 static NET: Global<Option<Net>> = Global::new(None);
@@ -85,8 +105,10 @@ pub fn init() -> Result<String, String> {
         Some(Ok(card)) => {
             let line =
                 format!("{} {}, link {}", card.name(), format_mac(&card.mac()), if card.link_up() { "up" } else { "down" });
-            let stack = Stack::new(card.mac(), rand::next_u32() as u16);
-            *NET.get() = Some(Net { dev: Box::new(card), stack, counters: Counters::default() });
+            let stack = Stack::new(card.mac(), rand::next_u32());
+            let settings = Settings { mode: Mode::Off, dns: None };
+            *NET.get() =
+                Some(Net { dev: Box::new(card), stack, counters: Counters::default(), settings, notices: VecDeque::new() });
             Ok(line)
         }
         Some(Err(e)) => Err(String::from(e)),
@@ -118,6 +140,9 @@ impl Net {
             self.stack.receive(&frame, now);
         }
         self.stack.poll(now);
+        while let Some(notice) = self.stack.take_notice() {
+            self.notice(notice);
+        }
         while let Some(frame) = self.stack.transmit() {
             match self.send_frame(&frame) {
                 Ok(()) => {}
@@ -129,6 +154,44 @@ impl Net {
             }
         }
     }
+}
+
+impl Net {
+    /// "address 10.0.2.15/24 (DHCP), gateway ..., DNS ...", if DHCP gave us an address.
+    fn lease_text(&self) -> Option<String> {
+        let lease = self.stack.dhcp_lease()?;
+        let mut text = format!("address {}/{} (DHCP)", lease.ip, lease.prefix);
+        if let Some(g) = lease.gateway {
+            text += &format!(", gateway {g}");
+        }
+        if let Some(dns) = self.stack.dns_server() {
+            text += &format!(", DNS {}", format_dns_server(dns));
+        }
+        Some(text)
+    }
+
+    fn notice(&mut self, notice: Notice) {
+        let entry = match notice {
+            Notice::Bound(lease) => {
+                if self.settings.dns.is_none() {
+                    self.stack.set_dns(lease.dns.map(|d| (d, DNS_PORT)));
+                }
+                ("dhcp-bound", self.lease_text().unwrap_or_default())
+            }
+            Notice::Failed => ("dhcp-failed", String::from("no DHCP server answered; still trying (or: net static IP/PREFIX [GATEWAY])")),
+            Notice::Lost => ("dhcp-lost", String::from("the DHCP lease ended; looking for a new address")),
+        };
+        if self.notices.len() == 8 {
+            self.notices.pop_front();
+        }
+        self.notices.push_back(entry);
+    }
+}
+
+/// The next message about the automatic address, for the shell to show:
+/// (kind for the event log, text).
+pub fn take_notice() -> Option<(&'static str, String)> {
+    NET.get().as_mut()?.notices.pop_front()
 }
 
 /// Move frames between the card and the protocol stack.
@@ -148,9 +211,9 @@ pub fn send_test_frame() -> Result<usize, NetError> {
     Ok(frame.len().max(MIN_FRAME))
 }
 
-// --- IPv4 configuration ---------------------------------------------------------------
+// --- settings --------------------------------------------------------------------------
 
-/// Text form used in /system/net and by `net static`: "IP/PREFIX [GATEWAY]".
+/// "IP/PREFIX [GATEWAY]", as typed after `net static`.
 pub fn parse_config(text: &str) -> Result<Config, &'static str> {
     let mut words = text.split_whitespace();
     let (ip, prefix) = words.next().and_then(beenet::parse_cidr).ok_or("address must look like 192.168.1.50/24")?;
@@ -181,12 +244,253 @@ pub fn format_config(c: &Config) -> String {
     }
 }
 
-/// Set or remove the IPv4 address. Announces a new address on the network.
-pub fn configure(config: Option<Config>) -> Result<(), NetError> {
+/// "ADDRESS" or "ADDRESS:PORT" of a DNS server.
+pub fn parse_dns_server(text: &str) -> Option<(Ipv4, u16)> {
+    match text.split_once(':') {
+        Some((ip, port)) => Some((Ipv4::parse(ip)?, port.parse().ok().filter(|p| *p != 0)?)),
+        None => Some((Ipv4::parse(text)?, DNS_PORT)),
+    }
+}
+
+fn format_dns_server((ip, port): (Ipv4, u16)) -> String {
+    if port == DNS_PORT {
+        format!("{ip}")
+    } else {
+        format!("{ip}:{port}")
+    }
+}
+
+/// The text of /system/net: a mode line ("dhcp", "none" or
+/// "static IP/PREFIX [GATEWAY]") and optionally "dns ADDRESS[:PORT]".
+pub fn parse_settings(text: &str) -> Result<Settings, &'static str> {
+    let mut settings = Settings { mode: Mode::Dhcp, dns: None };
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        match line.split_once(' ').unwrap_or((line, "")) {
+            ("dhcp", "") => settings.mode = Mode::Dhcp,
+            ("none", "") => settings.mode = Mode::Off,
+            ("static", config) => settings.mode = Mode::Static(parse_config(config)?),
+            ("dns", server) => settings.dns = Some(parse_dns_server(server.trim()).ok_or("bad DNS server")?),
+            _ => return Err("unknown line"),
+        }
+    }
+    Ok(settings)
+}
+
+pub fn format_settings(s: &Settings) -> String {
+    let mut out = match s.mode {
+        Mode::Dhcp => String::from("dhcp"),
+        Mode::Off => String::from("none"),
+        Mode::Static(c) => format!("static {}", format_config(&c)),
+    };
+    if let Some(dns) = s.dns {
+        out += &format!("\ndns {}", format_dns_server(dns));
+    }
+    out
+}
+
+pub fn settings() -> Option<Settings> {
+    NET.get().as_ref().map(|n| n.settings)
+}
+
+/// Put settings into effect: a fixed address, automatic setup (DHCP starts
+/// in the background) or no address.
+pub fn apply(settings: Settings) -> Result<(), NetError> {
     let net = NET.get().as_mut().ok_or(NetError::NoCard)?;
-    net.stack.set_config(config);
+    let now = time::uptime_ms();
+    net.stack.reseed(rand::next_u32());
+    match settings.mode {
+        Mode::Static(config) => {
+            net.stack.dhcp_stop();
+            net.stack.set_config(Some(config));
+        }
+        Mode::Dhcp => {
+            // Already on DHCP: leave the lease (or the running search) alone.
+            if net.settings.mode != Mode::Dhcp || !net.stack.dhcp_running() {
+                net.stack.set_config(None);
+                net.stack.dhcp_start(now);
+            }
+        }
+        Mode::Off => {
+            net.stack.dhcp_stop();
+            net.stack.set_config(None);
+        }
+    }
+    let lease_dns = net.stack.dhcp_lease().and_then(|l| l.dns).map(|d| (d, DNS_PORT));
+    net.stack.set_dns(settings.dns.or(if settings.mode == Mode::Dhcp { lease_dns } else { None }));
+    net.settings = settings;
     net.poll();
     Ok(())
+}
+
+fn cancelled() -> bool {
+    let mut stop = false;
+    while let Some(key) = input::poll_key() {
+        stop |= matches!(key, Key::Ctrl('c') | Key::Escape);
+    }
+    stop
+}
+
+pub enum DhcpWait {
+    /// An address was obtained: the text to show.
+    Bound(String),
+    Failed,
+    Cancelled,
+}
+
+/// Wait for the DHCP client to finish (after `apply` with `Mode::Dhcp`).
+pub fn dhcp_wait(timeout_ms: u64) -> DhcpWait {
+    let Some(net) = NET.get().as_mut() else { return DhcpWait::Failed };
+    let end = time::uptime_ms() + timeout_ms;
+    loop {
+        net.poll();
+        if let Some(text) = net.lease_text() {
+            net.notices.retain(|(kind, _)| *kind != "dhcp-bound"); // shown here, not again at the prompt
+            return DhcpWait::Bound(text);
+        }
+        while let Some((kind, text)) = net.notices.pop_front() {
+            match kind {
+                "dhcp-bound" => return DhcpWait::Bound(text),
+                "dhcp-failed" => return DhcpWait::Failed,
+                _ => {}
+            }
+        }
+        if cancelled() {
+            return DhcpWait::Cancelled;
+        }
+        if time::uptime_ms() >= end {
+            return DhcpWait::Failed;
+        }
+        interrupts::wait_until(input::pending);
+    }
+}
+
+// --- names --------------------------------------------------------------------------------
+
+/// Turn a host name or an IPv4 address into an address (Ctrl+C cancels).
+pub fn resolve(host: &str) -> Result<Ipv4, String> {
+    if let Some(ip) = Ipv4::parse(host) {
+        return Ok(ip);
+    }
+    let net = NET.get().as_mut().ok_or_else(|| String::from(NetError::NoCard.message()))?;
+    while net.stack.take_event().is_some() {}
+    let handle = match net.stack.dns_lookup(host, time::uptime_ms()) {
+        Ok(Lookup::Ready(ip)) => return Ok(ip),
+        Ok(Lookup::Pending(handle)) => handle,
+        Err(e) => return Err(format!("{host}: {}", e.message())),
+    };
+    loop {
+        net.poll();
+        while let Some(event) = net.stack.take_event() {
+            if let Event::Dns { handle: h, result } = event {
+                if h == handle {
+                    return result.map_err(|e| format!("{host}: {}", e.message()));
+                }
+            }
+        }
+        if cancelled() {
+            return Err(String::from("cancelled"));
+        }
+        interrupts::wait_until(input::pending); // the lookup times out by itself after 5 s
+    }
+}
+
+// --- TCP connections -------------------------------------------------------------------------
+
+/// A TCP connection. Calls poll the network while they wait; Ctrl+C cancels.
+/// Dropping it closes the connection (in the background if it is still busy).
+pub struct TcpStream(TcpHandle);
+
+pub enum Received {
+    /// This many bytes were put in the buffer.
+    Data(usize),
+    /// Nothing has arrived yet.
+    Nothing,
+    /// The other side finished sending and everything was read.
+    End,
+    Failed(&'static str),
+}
+
+/// Connect to `dst:port`. Waits for the result.
+pub fn tcp_connect(dst: Ipv4, port: u16) -> Result<TcpStream, &'static str> {
+    let net = NET.get().as_mut().ok_or(NetError::NoCard.message())?;
+    let handle = net.stack.tcp_connect(dst, port, time::uptime_ms()).map_err(|e| e.message())?;
+    let stream = TcpStream(handle);
+    loop {
+        net.poll();
+        match net.stack.tcp_status(handle) {
+            Ok(TcpStatus::Connecting) => {}
+            Ok(TcpStatus::Closed(reason)) => return Err(reason.message()),
+            Ok(_) => return Ok(stream),
+            Err(e) => return Err(e.message()),
+        }
+        if cancelled() {
+            return Err("cancelled"); // dropping `stream` gives up the attempt
+        }
+        interrupts::wait_until(input::pending);
+    }
+}
+
+impl TcpStream {
+    /// Send all of `data` (waits while the send buffer is full).
+    pub fn send(&self, mut data: &[u8]) -> Result<(), &'static str> {
+        let net = NET.get().as_mut().ok_or(NetError::NoCard.message())?;
+        while !data.is_empty() {
+            let n = net.stack.tcp_send(self.0, data, time::uptime_ms()).map_err(|e| e.message())?;
+            data = &data[n..];
+            net.poll();
+            if n == 0 {
+                if cancelled() {
+                    return Err("cancelled");
+                }
+                interrupts::wait_until(input::pending);
+            }
+        }
+        Ok(())
+    }
+
+    /// Take received data, without waiting.
+    pub fn receive(&self, buf: &mut [u8]) -> Received {
+        let Some(net) = NET.get().as_mut() else { return Received::Failed(NetError::NoCard.message()) };
+        net.poll();
+        let result = net.stack.tcp_recv(self.0, buf, time::uptime_ms());
+        net.poll(); // send a window update right away, if reading made room
+        match result {
+            Ok(0) => Received::Nothing,
+            Ok(n) => Received::Data(n),
+            Err(TcpError::Closed(beenet::CloseReason::Normal)) => Received::End,
+            Err(e) => Received::Failed(e.message()),
+        }
+    }
+
+    /// Finish sending (the other side sees the end of our data). Data can still arrive.
+    pub fn finish(&self) {
+        if let Some(net) = NET.get().as_mut() {
+            let _ = net.stack.tcp_close(self.0, time::uptime_ms());
+            net.poll();
+        }
+    }
+}
+
+impl Drop for TcpStream {
+    fn drop(&mut self) {
+        if let Some(net) = NET.get().as_mut() {
+            let now = time::uptime_ms();
+            // Close politely if we can; `tcp_release` resets whatever is still open.
+            let _ = net.stack.tcp_close(self.0, now);
+            net.poll();
+            net.stack.tcp_release(self.0, now);
+            net.poll();
+        }
+    }
+}
+
+/// Wait up to `ms` for a key or network activity (one timer tick at a time).
+pub fn idle(ms: u64) {
+    let end = time::uptime_ms() + ms;
+    while time::uptime_ms() < end && !input::pending() {
+        poll();
+        interrupts::wait_until(input::pending);
+    }
 }
 
 // --- ping -------------------------------------------------------------------------------
@@ -222,10 +526,8 @@ pub fn ping(dst: Ipv4, id: u16, seq: u16, timeout_ms: u64) -> Ping {
                 _ => {}
             }
         }
-        while let Some(key) = input::poll_key() {
-            if matches!(key, Key::Ctrl('c') | Key::Escape) {
-                return Ping::Cancelled;
-            }
+        if cancelled() {
+            return Ping::Cancelled;
         }
         // While the next hop's address is still being looked up, keep waiting:
         // the stack reports "unreachable" itself when nobody answers.
@@ -241,10 +543,8 @@ pub fn sleep(ms: u64) -> bool {
     let end = time::uptime_ms() + ms;
     while time::uptime_ms() < end {
         poll();
-        while let Some(key) = input::poll_key() {
-            if matches!(key, Key::Ctrl('c') | Key::Escape) {
-                return false;
-            }
+        if cancelled() {
+            return false;
         }
         interrupts::wait_until(input::pending); // the 100 Hz timer wakes us
     }
@@ -277,14 +577,26 @@ pub fn describe() -> Option<String> {
     );
     match net.stack.config() {
         Some(cfg) => {
-            out += &format!("address: {}/{}\n", cfg.ip, cfg.prefix);
+            let how = match (net.settings.mode, net.stack.dhcp_lease().and_then(|l| l.expires_ms())) {
+                (Mode::Dhcp, Some(end)) => {
+                    format!("DHCP, lease ends in {}", time::format_duration(end.saturating_sub(time::uptime_ms())))
+                }
+                (Mode::Dhcp, None) => String::from("DHCP"),
+                _ => String::from("static"),
+            };
+            out += &format!("address: {}/{} ({how})\n", cfg.ip, cfg.prefix);
             out += &match cfg.gateway {
                 Some(g) => format!("gateway: {g}\n"),
                 None => String::from("gateway: none (local network only)\n"),
             };
         }
-        None => out += "address: none (set one: net static IP/PREFIX [GATEWAY])\n",
+        None if net.settings.mode == Mode::Dhcp => out += "address: none yet (DHCP is looking for one; or: net static IP/PREFIX [GATEWAY])\n",
+        None => out += "address: none (net dhcp, or net static IP/PREFIX [GATEWAY])\n",
     }
+    out += &match net.stack.dns_server() {
+        Some(dns) => format!("dns:     {}{}\n", format_dns_server(dns), if net.settings.dns.is_some() { " (set by hand)" } else { "" }),
+        None => String::from("dns:     none (net dns ADDRESS)\n"),
+    };
     out += &format!(
         "frames:  {} sent, {} received\nbytes:   {} sent, {} received",
         c.tx_frames, c.rx_frames, c.tx_bytes, c.rx_bytes

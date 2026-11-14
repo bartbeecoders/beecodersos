@@ -17,7 +17,8 @@ use beefs::{normalize, FileKind, FsError};
 const LAYOUT_FILE: &str = "/system/keyboard";
 /// Contains "off" when the AI features are switched off (`ai off`).
 const AI_SWITCH: &str = "/system/ai";
-/// "static IP/PREFIX [GATEWAY]" or "none".
+/// Network settings: "dhcp", "none" or "static IP/PREFIX [GATEWAY]", and
+/// optionally a line "dns ADDRESS[:PORT]". No file: DHCP.
 const NET_FILE: &str = "/system/net";
 const INBOX: &str = "/system/inbox/signals.jsonl";
 const OLD_INBOX: &str = "/system/inbox/signals.old.jsonl";
@@ -89,6 +90,7 @@ impl Shell {
 
     pub fn run(&mut self) -> ! {
         loop {
+            self.show_notices();
             self.prompt();
             match self.editor.read_line() {
                 Line::Text(line) => self.run_line(&line),
@@ -99,6 +101,15 @@ impl Shell {
                     power::shutdown()
                 }
             }
+        }
+    }
+
+    /// Things that happened in the background (the network got an address, ...).
+    fn show_notices(&mut self) {
+        while let Some((kind, text)) = net::take_notice() {
+            println!("[net]  {text}");
+            let ev = eventlog::event("net").str("state", kind).finish();
+            eventlog::write(&mut self.storage.fs(), ev);
         }
     }
 
@@ -256,6 +267,11 @@ impl Shell {
             },
             ("net", ["static", config @ ..]) if !config.is_empty() => self.net_static(&config.join(" ")),
             ("net", ["off"]) => self.net_off(),
+            ("net", ["dhcp"]) => self.net_dhcp(),
+            ("net", ["dns", value]) => self.net_dns(value),
+            ("nslookup" | "host", [name]) => self.nslookup(name),
+            ("nc", [host, port]) => self.nc(host, port, None),
+            ("nc", [host, port, text @ ..]) => self.nc(host, port, Some(&text.join(" "))),
             ("arp", []) => {
                 let table = net::arp_table();
                 if table.is_empty() {
@@ -268,7 +284,7 @@ impl Shell {
             ("ping", [host]) => self.ping(host, 4),
             ("ping", ["-c", n, host]) => match n.parse() {
                 Ok(n @ 1..=1000) => self.ping(host, n),
-                _ => error("usage: ping [-c COUNT] ADDRESS   (count 1-1000)"),
+                _ => error("usage: ping [-c COUNT] HOST   (count 1-1000)"),
             },
             ("net", ["test"]) => match net::send_test_frame() {
                 Ok(len) => println!("sent a {len}-byte broadcast test frame (EtherType 0x{:04x})", net::ETHERTYPE_TEST),
@@ -374,62 +390,233 @@ impl Shell {
 
     // ----- network -------------------------------------------------------------------
 
-    /// Apply the network configuration saved on disk, if any.
+    /// Apply the network settings saved on disk. Without saved settings the
+    /// address is requested automatically (DHCP), in the background.
     pub fn load_network(&mut self) {
         if !net::present() {
             return;
         }
-        let Ok(data) = self.storage.fs().read_file(NET_FILE) else { return };
-        let text = String::from_utf8_lossy(&data);
-        let Some(config) = text.trim().strip_prefix("static ") else { return };
-        match net::parse_config(config) {
-            Ok(c) => {
-                let _ = net::configure(Some(c));
-                println!("[net]  address {}/{} (static){}", c.ip, c.prefix, c.gateway.map(|g| format!(", gateway {g}")).unwrap_or_default());
+        let saved = self.storage.fs().read_file(NET_FILE);
+        let settings = match saved.as_deref().map(String::from_utf8_lossy) {
+            Ok(text) => match net::parse_settings(&text) {
+                Ok(s) => s,
+                Err(e) => {
+                    println!("[net]  ignoring {NET_FILE}: {e}");
+                    return;
+                }
+            },
+            // `nodhcp` on the kernel command line: tests that need a silent card.
+            Err(_) if crate::bootargs::has("nodhcp") => return,
+            Err(_) => net::Settings { mode: net::Mode::Dhcp, dns: None },
+        };
+        let _ = net::apply(settings);
+        match settings.mode {
+            net::Mode::Static(c) => {
+                let gateway = c.gateway.map(|g| format!(", gateway {g}")).unwrap_or_default();
+                println!("[net]  address {}/{} (static){gateway}", c.ip, c.prefix);
             }
-            Err(e) => println!("[net]  ignoring {NET_FILE}: {e}"),
+            net::Mode::Dhcp => println!("[net]  asking the network for an address (DHCP)"),
+            net::Mode::Off => {}
         }
     }
 
-    fn save_network(&mut self, text: &str) -> &'static str {
+    /// Apply new settings and save them. Returns a note about saving.
+    fn set_network(&mut self, settings: net::Settings) -> Result<&'static str, &'static str> {
+        net::apply(settings).map_err(|e| e.message())?;
+        let text = net::format_settings(&settings);
         let mut fs = self.storage.fs();
         let saved = fs.mkdir_all("/system").and_then(|_| fs.write_file(NET_FILE, format!("{text}\n").as_bytes()));
         drop(fs);
-        match (saved, self.storage.persistent) {
+        Ok(match (saved, self.storage.persistent) {
             (Ok(()), true) => " (saved)",
             (Ok(()), false) => " (RAM disk: not kept after reboot)",
             (Err(_), _) => " (could not save)",
+        })
+    }
+
+    fn current_settings(&self) -> Option<net::Settings> {
+        let s = net::settings();
+        if s.is_none() {
+            error("no network card");
         }
+        s
     }
 
     fn net_static(&mut self, text: &str) {
+        let Some(old) = self.current_settings() else { return };
         let config = match net::parse_config(text) {
             Ok(c) => c,
             Err(e) => return error(&format!("{e}\nusage: net static IP/PREFIX [GATEWAY]   e.g. net static 192.168.1.50/24 192.168.1.1")),
         };
-        if let Err(e) = net::configure(Some(config)) {
-            return error(e.message());
+        match self.set_network(net::Settings { mode: net::Mode::Static(config), dns: old.dns }) {
+            Ok(note) => println!("address {}/{}, gateway {}{note}", config.ip, config.prefix, config.gateway.map(|g| format!("{g}")).unwrap_or_else(|| "none".into())),
+            Err(e) => error(e),
         }
-        let note = self.save_network(&format!("static {}", net::format_config(&config)));
-        println!("address {}/{}, gateway {}{note}", config.ip, config.prefix, config.gateway.map(|g| format!("{g}")).unwrap_or_else(|| "none".into()));
     }
 
     fn net_off(&mut self) {
-        if let Err(e) = net::configure(None) {
-            return error(e.message());
+        let Some(old) = self.current_settings() else { return };
+        match self.set_network(net::Settings { mode: net::Mode::Off, dns: old.dns }) {
+            Ok(note) => println!("IP address removed{note}"),
+            Err(e) => error(e),
         }
-        let note = self.save_network("none");
-        println!("IP address removed{note}");
+    }
+
+    /// `net dhcp`: automatic setup; waits for the result.
+    fn net_dhcp(&mut self) {
+        let Some(old) = self.current_settings() else { return };
+        let note = match self.set_network(net::Settings { mode: net::Mode::Dhcp, dns: old.dns }) {
+            Ok(note) => note,
+            Err(e) => return error(e),
+        };
+        println!("asking the network for an address (DHCP){note}...");
+        match net::dhcp_wait(15_000) {
+            net::DhcpWait::Bound(text) => {
+                println!("{text}");
+                let ev = eventlog::event("net").str("state", "dhcp-bound").finish();
+                eventlog::write(&mut self.storage.fs(), ev);
+            }
+            net::DhcpWait::Failed => error("no DHCP server answered; still trying in the background (see: net)"),
+            net::DhcpWait::Cancelled => println!("(still trying in the background)"),
+        }
+    }
+
+    /// `net dns ADDRESS[:PORT]` or `net dns auto`.
+    fn net_dns(&mut self, value: &str) {
+        let Some(old) = self.current_settings() else { return };
+        let dns = match value {
+            "auto" => None,
+            v => match net::parse_dns_server(v) {
+                Some(server) => Some(server),
+                None => return error("usage: net dns ADDRESS[:PORT]   or: net dns auto (use the one DHCP gives)"),
+            },
+        };
+        match self.set_network(net::Settings { mode: old.mode, dns }) {
+            Ok(note) if dns.is_some() => println!("DNS server {value}{note}"),
+            Ok(note) => println!("DNS server: the one DHCP gives{note}"),
+            Err(e) => error(e),
+        }
+    }
+
+    /// `nc HOST PORT`: a raw TCP connection. Lines you type are sent; what
+    /// arrives is shown. With TEXT: send that line, show the answer, finish.
+    fn nc(&mut self, host: &str, port: &str, text: Option<&str>) {
+        let port = match port.parse::<u16>() {
+            Ok(p) if p != 0 => p,
+            _ => return error("usage: nc HOST PORT [TEXT]   (port 1-65535)"),
+        };
+        let ip = match net::resolve(host) {
+            Ok(ip) => ip,
+            Err(e) => return error(&e),
+        };
+        let stream = match net::tcp_connect(ip, port) {
+            Ok(s) => s,
+            Err(e) => return error(&format!("{host} port {port}: {e}")),
+        };
+        let interactive = text.is_none();
+        if interactive {
+            println!("connected to {host} port {port} (type lines; Ctrl+D ends your side, Ctrl+C quits)");
+        } else {
+            println!("connected to {host} port {port}");
+        }
+        if let Some(t) = text {
+            if let Err(e) = stream.send(format!("{t}\r\n").as_bytes()) {
+                return error(e);
+            }
+        }
+        let mut line = String::new();
+        let mut buf = [0u8; 512];
+        let mut our_side_open = interactive;
+        let mut at_line_start = true;
+        let mut last_data = time::uptime_ms();
+        // Start messages of our own on a fresh line.
+        let fresh_line = |at_start: &mut bool| {
+            if !*at_start {
+                println!();
+                *at_start = true;
+            }
+        };
+        loop {
+            match stream.receive(&mut buf) {
+                net::Received::Data(n) => {
+                    for c in String::from_utf8_lossy(&buf[..n]).chars().filter(|c| *c != '\r') {
+                        let shown = if c == '\n' || c == '\t' || !c.is_control() { c } else { '.' };
+                        print!("{shown}");
+                        at_line_start = shown == '\n';
+                    }
+                    last_data = time::uptime_ms();
+                    continue;
+                }
+                net::Received::End => {
+                    fresh_line(&mut at_line_start);
+                    println!("(the other side closed the connection)");
+                    return;
+                }
+                net::Received::Failed(e) => {
+                    fresh_line(&mut at_line_start);
+                    return error(e);
+                }
+                net::Received::Nothing => {}
+            }
+            if !interactive && time::uptime_ms() - last_data > 5_000 {
+                fresh_line(&mut at_line_start);
+                println!("(nothing more for 5 seconds: closed)");
+                return;
+            }
+            while let Some(key) = crate::input::poll_key() {
+                match key {
+                    crate::input::Key::Ctrl('c') | crate::input::Key::Escape => {
+                        fresh_line(&mut at_line_start);
+                        println!("(closed)");
+                        return;
+                    }
+                    crate::input::Key::Ctrl('d') if our_side_open => {
+                        stream.finish();
+                        our_side_open = false;
+                        fresh_line(&mut at_line_start);
+                        println!("(your side is closed; waiting for the other side, Ctrl+C quits)");
+                    }
+                    crate::input::Key::Enter if our_side_open => {
+                        println!();
+                        at_line_start = true;
+                        let mut data = core::mem::take(&mut line);
+                        data.push_str("\r\n");
+                        if let Err(e) = stream.send(data.as_bytes()) {
+                            return error(e);
+                        }
+                    }
+                    crate::input::Key::Char(c) if our_side_open && line.len() < 500 => {
+                        line.push(c);
+                        print!("{c}");
+                        at_line_start = false;
+                    }
+                    _ => {}
+                }
+            }
+            net::idle(10); // one timer tick: data and keys are handled promptly
+        }
+    }
+
+    fn nslookup(&mut self, name: &str) {
+        match net::resolve(name) {
+            Ok(ip) => println!("{name} has address {ip}"),
+            Err(e) => error(&e),
+        }
     }
 
     fn ping(&mut self, host: &str, count: u32) {
-        let Some(dst) = beenet::Ipv4::parse(host) else {
-            return error(&format!("{host}: not an IPv4 address (names arrive with DNS, network phase N3)"));
+        let dst = match net::resolve(host) {
+            Ok(ip) => ip,
+            Err(e) => return error(&e),
         };
         let id = crate::rand::next_u32() as u16;
         let (mut received, mut min, mut max, mut total) = (0u32, u64::MAX, 0u64, 0u64);
         let mut sent = 0;
-        println!("PING {dst}: 32 data bytes");
+        if beenet::Ipv4::parse(host).is_some() {
+            println!("PING {dst}: 32 data bytes");
+        } else {
+            println!("PING {host} ({dst}): 32 data bytes");
+        }
         for seq in 1..=count {
             let started = time::uptime_ms();
             sent += 1;
@@ -737,8 +924,10 @@ const COMMANDS: &[(&str, &str)] = &[
     ("explain", "ask the AI about the last error or crash"),
     ("ai [on|off]", "AI bridge status; switch AI features on/off"),
     ("selftest", "run the kernel self-tests"),
-    ("net", "network status; net static IP/PREFIX [GATEWAY]; net off; net test"),
-    ("ping [-c N] ADDRESS", "check that a machine answers"),
+    ("net", "network status; net dhcp | static IP/PREFIX [GW] | dns ADDR | off"),
+    ("ping [-c N] HOST", "check that a machine answers"),
+    ("nslookup NAME", "look up the address of a host name"),
+    ("nc HOST PORT [TEXT]", "open a TCP connection: type lines, see the answers"),
     ("arp", "neighbours learned on the local network"),
     ("lspci", "list PCI devices"),
     ("slots", "A/B kernel slots: which one runs, last trial"),

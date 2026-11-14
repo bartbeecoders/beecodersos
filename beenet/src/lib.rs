@@ -5,8 +5,9 @@
 //! milliseconds. That makes it testable on the host (`cargo test`), including
 //! two stacks wired back to back.
 //!
-//! Network phase N2: Ethernet II, ARP with a cache, IPv4 (one interface, local
-//! subnet or default gateway, no fragments), ICMP echo and "unreachable".
+//! Ethernet II, ARP with a cache, IPv4 (one interface, local subnet or default
+//! gateway, no fragments), ICMP echo and "unreachable" (network phase N2);
+//! UDP sockets, a DHCP client and a DNS resolver (phase N3); TCP (phase N4).
 //! See Docs/network-stack-plan.html.
 //!
 //! Every received byte is untrusted: parsers check every length before use.
@@ -15,10 +16,16 @@
 
 extern crate alloc;
 
+mod dhcp;
+mod dns;
 mod stack;
+mod tcp;
 pub mod wire;
 
-pub use stack::{ArpEntry, Config, Error, Event, Reason, Stack, Stats};
+pub use dhcp::{Lease, Notice};
+pub use dns::{is_valid_name, DnsError, Lookup, PORT as DNS_PORT};
+pub use stack::{ArpEntry, Config, Datagram, Error, Event, Reason, Stack, Stats, UDP_MAX_DATA};
+pub use tcp::{CloseReason, TcpError, TcpHandle, TcpStatus, RECV_BUFFER, SEND_BUFFER};
 
 use core::fmt;
 

@@ -82,7 +82,7 @@ nav.toc a:hover { text-decoration: underline; }
 <h1>A network stack for BeeCodersOs</h1>
 <p class="lede">A plan to connect BeeCodersOs to the local network and the internet: a network card driver, a small TCP/IP stack of our own, and a set of basic protocols that make it useful from the shell.</p>
 <p class="meta">Plan v1 · 14 November 2026 · Starting point: BeeCodersOs 0.0.2 (phases 1–8 done).</p>
-<div class="callout"><b>Status:</b> N1 and N2 are done. The OS finds its e1000 card, takes a static IPv4 address (<code>net static</code>), answers and sends pings (<code>ping</code>, <code>arp</code>), and reaches other networks through a gateway. The protocols live in the <code>beenet</code> crate with host unit tests. Next: N3 (UDP, DHCP, DNS), for automatic setup and names.</div>
+<div class="callout"><b>Status:</b> N1 to N4 are done. The OS finds its e1000 card, gets its address, gateway and DNS server automatically (DHCP) or by hand, answers and sends pings, resolves names, and opens TCP connections (<code>nc</code>). The protocols live in the <code>beenet</code> crate with host unit tests, including TCP over a simulated lossy link. TCP listening already exists in the stack (the tests needed it), but the OS accepts no incoming connections. Next: N5 (HTTP, time, file transfer).</div>
 
 <nav class="toc card">
 <b>Contents</b>
@@ -284,7 +284,7 @@ nav.toc a:hover { text-decoration: underline; }
 </div>
 
 <div class="phase">
-<h3>N3 — UDP, DHCP, DNS: automatic setup and names <span class="tag t-next">Next</span></h3>
+<h3>N3 — UDP, DHCP, DNS: automatic setup and names <span class="tag t-now">Done</span></h3>
 <ul>
 <li>UDP with a small socket table.</li>
 <li>DHCP client: runs at boot when a card is found (does not delay the shell), renews the lease, falls back to "no address" cleanly. Settings saved in <code>/system/net</code> (<code>dhcp</code>, <code>static …</code> or <code>off</code>).</li>
@@ -296,7 +296,7 @@ nav.toc a:hover { text-decoration: underline; }
 </div>
 
 <div class="phase">
-<h3>N4 — TCP <span class="tag t-next">Next</span></h3>
+<h3>N4 — TCP <span class="tag t-now">Done</span></h3>
 <p>The largest and most delicate part. Built and tested mostly on the host before it runs in the kernel.</p>
 <ul>
 <li>Connection state machine (active open first, passive open for servers in N6), sequence numbers, acknowledgements, retransmission timer with backoff, receive window, FIN and RST handling, connection table, ephemeral ports.</li>
@@ -310,7 +310,7 @@ nav.toc a:hover { text-decoration: underline; }
 </div>
 
 <div class="phase">
-<h3>N5 — Useful clients: HTTP, time, files <span class="tag t-later">Later</span></h3>
+<h3>N5 — Useful clients: HTTP, time, files <span class="tag t-next">Next</span></h3>
 <ul>
 <li>HTTP/1.1 client and <code>wget</code>, with output to the screen or a BeeFS file (within the 8 MiB file limit).</li>
 <li>SNTP and <code>ntp</code>: the clock no longer depends on the VM's emulated clock.</li>

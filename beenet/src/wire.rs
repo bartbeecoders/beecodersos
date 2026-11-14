@@ -11,6 +11,8 @@ pub const ETH_HEADER: usize = 14;
 pub const MTU: usize = 1500;
 
 pub const PROTO_ICMP: u8 = 1;
+pub const PROTO_TCP: u8 = 6;
+pub const PROTO_UDP: u8 = 17;
 pub const ARP_REQUEST: u16 = 1;
 pub const ARP_REPLY: u16 = 2;
 pub const ICMP_ECHO_REPLY: u8 = 0;
@@ -214,9 +216,226 @@ pub fn echo_rest(id: u16, seq: u16) -> [u8; 4] {
     [i[0], i[1], s[0], s[1]]
 }
 
+// --- UDP ----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Udp<'a> {
+    pub src_port: u16,
+    pub dst_port: u16,
+    pub data: &'a [u8],
+}
+
+/// The checksum of a UDP datagram or TCP segment including the IPv4
+/// "pseudo header" (addresses, protocol, length).
+fn pseudo_checksum(src: Ipv4, dst: Ipv4, protocol: u8, segment: &[u8]) -> u16 {
+    let mut buf = Vec::with_capacity(12 + segment.len());
+    buf.extend_from_slice(&src.0);
+    buf.extend_from_slice(&dst.0);
+    buf.extend_from_slice(&[0, protocol]);
+    buf.extend_from_slice(&(segment.len() as u16).to_be_bytes());
+    buf.extend_from_slice(segment);
+    checksum(&buf)
+}
+
+fn udp_checksum(src: Ipv4, dst: Ipv4, datagram: &[u8]) -> u16 {
+    pseudo_checksum(src, dst, PROTO_UDP, datagram)
+}
+
+// --- TCP ----------------------------------------------------------------------------
+
+pub const TCP_FIN: u8 = 0x01;
+pub const TCP_SYN: u8 = 0x02;
+pub const TCP_RST: u8 = 0x04;
+pub const TCP_PSH: u8 = 0x08;
+pub const TCP_ACK: u8 = 0x10;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Tcp<'a> {
+    pub src_port: u16,
+    pub dst_port: u16,
+    pub seq: u32,
+    pub ack: u32,
+    pub flags: u8,
+    pub window: u16,
+    /// The "maximum segment size" option (only sent with SYN).
+    pub mss: Option<u16>,
+    pub data: &'a [u8],
+}
+
+impl Tcp<'_> {
+    pub fn has(&self, flag: u8) -> bool {
+        self.flags & flag != 0
+    }
+}
+
+/// Parse a TCP segment; the checksum must be correct.
+pub fn parse_tcp(p: &[u8], src: Ipv4, dst: Ipv4) -> Option<Tcp<'_>> {
+    if p.len() < 20 || pseudo_checksum(src, dst, PROTO_TCP, p) != 0 {
+        return None;
+    }
+    let header_len = (p[12] >> 4) as usize * 4;
+    if header_len < 20 || header_len > p.len() {
+        return None;
+    }
+    // Options: we only care about MSS (kind 2, length 4).
+    let (mut mss, mut i) = (None, 20);
+    while i < header_len {
+        match p[i] {
+            0 => break,  // end of options
+            1 => i += 1, // padding
+            kind => {
+                let len = *p.get(i + 1)? as usize;
+                if len < 2 || i + len > header_len {
+                    return None;
+                }
+                if kind == 2 && len == 4 {
+                    mss = Some(be16(p, i + 2));
+                }
+                i += len;
+            }
+        }
+    }
+    let be32 = |o: usize| u32::from_be_bytes([p[o], p[o + 1], p[o + 2], p[o + 3]]);
+    Some(Tcp {
+        src_port: be16(p, 0),
+        dst_port: be16(p, 2),
+        seq: be32(4),
+        ack: be32(8),
+        flags: p[13] & 0x3F,
+        window: be16(p, 14),
+        mss,
+        data: &p[header_len..],
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_tcp(src: Ipv4, dst: Ipv4, t: &Tcp) -> Vec<u8> {
+    let header_len = if t.mss.is_some() { 24 } else { 20 };
+    let mut p = Vec::with_capacity(header_len + t.data.len());
+    p.extend_from_slice(&t.src_port.to_be_bytes());
+    p.extend_from_slice(&t.dst_port.to_be_bytes());
+    p.extend_from_slice(&t.seq.to_be_bytes());
+    p.extend_from_slice(&t.ack.to_be_bytes());
+    p.extend_from_slice(&[(header_len as u8 / 4) << 4, t.flags]);
+    p.extend_from_slice(&t.window.to_be_bytes());
+    p.extend_from_slice(&[0, 0, 0, 0]); // checksum, urgent pointer
+    if let Some(mss) = t.mss {
+        p.extend_from_slice(&[2, 4]);
+        p.extend_from_slice(&mss.to_be_bytes());
+    }
+    p.extend_from_slice(t.data);
+    let sum = pseudo_checksum(src, dst, PROTO_TCP, &p);
+    p[16..18].copy_from_slice(&sum.to_be_bytes());
+    p
+}
+
+/// Parse a UDP datagram. The checksum is verified when the sender used one
+/// (a checksum field of 0 means "none").
+pub fn parse_udp(p: &[u8], src: Ipv4, dst: Ipv4) -> Option<Udp<'_>> {
+    if p.len() < 8 {
+        return None;
+    }
+    let len = be16(p, 4) as usize;
+    if len < 8 || len > p.len() {
+        return None;
+    }
+    let p = &p[..len];
+    if be16(p, 6) != 0 && udp_checksum(src, dst, p) != 0 {
+        return None;
+    }
+    Some(Udp { src_port: be16(p, 0), dst_port: be16(p, 2), data: &p[8..] })
+}
+
+pub fn build_udp(src: Ipv4, dst: Ipv4, src_port: u16, dst_port: u16, data: &[u8]) -> Vec<u8> {
+    let len = 8 + data.len();
+    let mut p = Vec::with_capacity(len);
+    p.extend_from_slice(&src_port.to_be_bytes());
+    p.extend_from_slice(&dst_port.to_be_bytes());
+    p.extend_from_slice(&(len as u16).to_be_bytes());
+    p.extend_from_slice(&[0, 0]);
+    p.extend_from_slice(data);
+    // A computed checksum of 0 is sent as 0xFFFF (0 means "no checksum").
+    let sum = match udp_checksum(src, dst, &p) {
+        0 => 0xFFFF,
+        s => s,
+    };
+    p[6..8].copy_from_slice(&sum.to_be_bytes());
+    p
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tcp_round_trip_and_rejects() {
+        let (a, b) = (Ipv4([10, 0, 0, 2]), Ipv4([10, 0, 0, 3]));
+        let syn = Tcp { src_port: 50000, dst_port: 80, seq: 0x0102_0304, ack: 0, flags: TCP_SYN, window: 16384, mss: Some(1460), data: b"" };
+        let bytes = build_tcp(a, b, &syn);
+        // Byte-exact header: ports, sequence, data offset 6 words, SYN, window, MSS option.
+        assert_eq!(&bytes[..16], &[0xC3, 0x50, 0, 80, 1, 2, 3, 4, 0, 0, 0, 0, 0x60, 0x02, 0x40, 0x00]);
+        assert_eq!(&bytes[20..], &[2, 4, 0x05, 0xB4]);
+        assert_eq!(parse_tcp(&bytes, a, b), Some(syn));
+        let data = Tcp { src_port: 80, dst_port: 50000, seq: 9, ack: 0x0102_0305, flags: TCP_ACK | TCP_PSH, window: 100, mss: None, data: b"hello" };
+        let bytes = build_tcp(b, a, &data);
+        assert_eq!(parse_tcp(&bytes, b, a), Some(data));
+        assert_eq!(parse_tcp(&bytes, a, b).map(|t| t.data), Some(&b"hello"[..])); // swapping both addresses keeps the sum
+        assert_eq!(parse_tcp(&bytes, b, Ipv4([10, 0, 0, 9])), None);
+        let mut bad = bytes.clone();
+        bad[22] ^= 1;
+        assert_eq!(parse_tcp(&bad, b, a), None);
+        for len in 0..bytes.len() {
+            assert_eq!(parse_tcp(&bytes[..len], b, a), None);
+        }
+        // A header length pointing past the segment, and a broken option, are rejected
+        // (the checksum is recomputed so only that field is wrong).
+        let fix = |mut p: Vec<u8>| {
+            p[16] = 0;
+            p[17] = 0;
+            let s = pseudo_checksum(b, a, PROTO_TCP, &p);
+            p[16..18].copy_from_slice(&s.to_be_bytes());
+            p
+        };
+        let mut long = bytes.clone();
+        long[12] = 0xF0;
+        assert_eq!(parse_tcp(&fix(long), b, a), None);
+        let mut short = bytes.clone();
+        short[12] = 0x40;
+        assert_eq!(parse_tcp(&fix(short), b, a), None);
+        let mut opt = build_tcp(a, b, &syn);
+        opt[21] = 9; // option length runs past the header
+        let s = { opt[16] = 0; opt[17] = 0; pseudo_checksum(a, b, PROTO_TCP, &opt) };
+        opt[16..18].copy_from_slice(&s.to_be_bytes());
+        assert_eq!(parse_tcp(&opt, a, b), None);
+    }
+
+    #[test]
+    fn udp_round_trip_and_rejects() {
+        let (a, b) = (Ipv4([10, 0, 0, 2]), Ipv4([10, 0, 0, 3]));
+        let d = build_udp(a, b, 5000, 53, b"query");
+        assert_eq!(parse_udp(&d, a, b), Some(Udp { src_port: 5000, dst_port: 53, data: b"query" }));
+        assert_eq!(parse_udp(&d, a, Ipv4([10, 0, 0, 4])), None); // wrong address: checksum fails
+        let mut bad = d.clone();
+        bad[9] ^= 1;
+        assert_eq!(parse_udp(&bad, a, b), None);
+        let mut nosum = d.clone();
+        nosum[6] = 0;
+        nosum[7] = 0;
+        assert!(parse_udp(&nosum, a, b).is_some()); // "no checksum" is accepted
+        let mut short = d.clone();
+        short[5] = 7; // length field smaller than the header
+        assert_eq!(parse_udp(&short, a, b), None);
+        let mut long = d.clone();
+        long[5] = 200; // length field larger than the packet
+        assert_eq!(parse_udp(&long, a, b), None);
+        for len in 0..d.len() {
+            let _ = parse_udp(&d[..len], a, b);
+        }
+        // Padding after the datagram is ignored.
+        let mut padded = d.clone();
+        padded.extend_from_slice(&[0; 9]);
+        assert_eq!(parse_udp(&padded, a, b).unwrap().data, b"query");
+    }
 
     #[test]
     fn checksum_known_values() {
