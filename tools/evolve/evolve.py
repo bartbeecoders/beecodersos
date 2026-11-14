@@ -72,7 +72,7 @@ def git(repo: Path, *args, check=True, capture=True) -> str:
                        capture_output=capture, check=False)
     if check and r.returncode != 0:
         sys.exit(f"git {' '.join(args)} failed:\n{r.stderr.strip()}")
-    return (r.stdout or "").strip()
+    return (r.stdout or "").rstrip()  # keep leading spaces: `git status --porcelain` needs them
 
 
 def slug(text: str) -> str:
@@ -529,6 +529,33 @@ def write_review(repo: Path, item: dict, v: dict, wt: Path) -> Path:
     return path
 
 
+def uncommitted(repo: Path) -> list[str]:
+    """Uncommitted changes outside the backlog and evolve's own files."""
+    return [l for l in git(repo, "status", "--porcelain", "--untracked-files=all").splitlines()
+            if not l[3:].startswith(("Docs/backlog/", "BUILD_NUMBER", ".evolve/"))]
+
+
+def preflight(repo: Path, base: str, allow_dirty: bool):
+    """The agent only sees committed history: make sure it has what it needs."""
+    problems = []
+    for f in ("CLAUDE.md", "Makefile"):
+        if subprocess.run(["git", "-C", str(repo), "cat-file", "-e", f"{base}:{f}"],
+                          capture_output=True).returncode != 0:
+            problems.append(f"{f} is not committed on {base}")
+    makefile = subprocess.run(["git", "-C", str(repo), "show", f"{base}:Makefile"],
+                              capture_output=True, text=True).stdout
+    if makefile and not re.search(r"^check:", makefile, re.M):
+        problems.append(f"the Makefile committed on {base} has no `check` target")
+    dirty = uncommitted(repo)
+    if dirty and not allow_dirty:
+        problems.append("uncommitted changes the agent would not see:\n    "
+                        + "\n    ".join(dirty[:12]) + ("\n    ..." if len(dirty) > 12 else ""))
+    if problems:
+        sys.exit("evolve: not starting the agent: it works from the last commit, and\n  - "
+                 + "\n  - ".join(problems)
+                 + "\nCommit your work first (or pass --allow-dirty if those changes don't matter).")
+
+
 def cmd_work(args, repo: Path):
     backlog = Backlog(repo)
     if args.id:
@@ -542,6 +569,7 @@ def cmd_work(args, repo: Path):
     if item["status"] not in ("open",):
         sys.exit(f"#{item['id']} is {item['status']}, not open")
     base = git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+    preflight(repo, base, args.allow_dirty)
     item["branch"] = f"evolve/{item['id']:03d}-{slug(item['title'])[:30]}"
     wt = repo / ".evolve" / "worktrees" / f"{item['id']:03d}"
     if wt.exists():
@@ -592,8 +620,7 @@ def cmd_approve(args, repo: Path):
     review = (backlog.reviews / f"{item['id']:03d}.md").read_text()
     if "NEEDS ATTENTION" in review and not args.force:
         sys.exit(f"#{item['id']} needs attention (see the review); approve anyway with --force")
-    dirty = [l for l in git(repo, "status", "--porcelain", "--untracked-files=all").splitlines()
-             if not l[3:].startswith(("Docs/backlog/", "BUILD_NUMBER", ".evolve/"))]
+    dirty = uncommitted(repo)
     if dirty:
         sys.exit("main working tree has uncommitted changes; commit or stash them first:\n" + "\n".join(dirty[:10]))
     git(repo, "merge", "-q", "--no-ff", item["branch"], "-m", f"evolve: merge #{item['id']} {item['title']}")
@@ -650,6 +677,8 @@ def main():
         p.add_argument("--model", help="model for the coding agent (default: the CLI's)")
         p.add_argument("--max-budget-usd", type=float, help="cost cap per attempt (API-key users)")
         p.add_argument("--check-cmd", default="make check", help="verification command (default: make check)")
+        p.add_argument("--allow-dirty", action="store_true",
+                       help="start the agent even with uncommitted changes (it won't see them)")
         p.add_argument("--fake-mode", default="good", choices=["good", "no-tests", "protected", "big"],
                        help=argparse.SUPPRESS)
 

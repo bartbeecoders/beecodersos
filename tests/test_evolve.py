@@ -27,6 +27,7 @@ class EvolveLoop(unittest.TestCase):
                     ["config", "user.email", "test@example.invalid"]):
             self.git(*cmd)
         (self.repo / "README.md").write_text("test repo\n")
+        (self.repo / "CLAUDE.md").write_text("rules for agents\n")
         (self.repo / "Makefile").write_text("check:\n\ttrue\n")
         (self.repo / ".gitignore").write_text(".evolve/\n")
         (self.repo / "tests" / "scenarios").mkdir(parents=True)
@@ -122,6 +123,20 @@ class EvolveLoop(unittest.TestCase):
         self.assertIn("diff too big", out)
         out = self.evolve("work", "--agent", "fake", "--check-cmd", "false", ok=False)
         self.assertIn("failed", out)
+
+    def test_work_needs_committed_infrastructure(self):
+        self.harvest()
+        (self.repo / "new_feature.rs").write_text("uncommitted\n")
+        out = self.evolve("work", "--agent", "fake", "--check-cmd", "true", ok=False)
+        self.assertIn("uncommitted changes the agent would not see", out)
+        self.assertIn("new_feature.rs", out)
+        self.assertNotIn("evolve/", self.git("branch"))  # nothing started
+        (self.repo / "new_feature.rs").unlink()
+        self.git("rm", "-q", "CLAUDE.md")
+        self.git("commit", "-q", "-m", "drop rules")
+        out = self.evolve("work", "--agent", "fake", "--check-cmd", "true", ok=False)
+        self.assertIn("CLAUDE.md is not committed", out)
+        self.assertTrue(all(i["status"] == "open" for i in self.items().values()))
 
     def test_approve_refuses_dirty_main(self):
         self.harvest()
