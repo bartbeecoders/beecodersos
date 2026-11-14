@@ -19,6 +19,7 @@ mod console;
 // After `console`: uses println!.
 mod bootslots;
 mod crash;
+mod e1000;
 mod editor;
 mod eventlog;
 mod input;
@@ -26,8 +27,11 @@ mod json;
 mod interrupts;
 mod keyboard;
 mod layouts;
+mod net;
+mod pci;
 mod port;
 mod power;
+mod rand;
 mod ring;
 mod selftest;
 mod serial;
@@ -90,6 +94,11 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info: u32) -> ! {
         if testmode::enabled() {
             testmode::exit(if passed { testmode::SUCCESS } else { testmode::FAILURE });
         }
+    }
+
+    match net::init() {
+        Ok(line) => println!("[net]  {line}"),
+        Err(e) => println!("[net]  {e}"),
     }
 
     let storage = storage::mount();

@@ -13,7 +13,8 @@ use crate::ring::Ring;
 use crate::vga::Color;
 use crate::json::{self, Obj, Value};
 use crate::bootslots::{self, Phase};
-use crate::{allocator, console, keyboard, serial, shell, time};
+use crate::pci::{self, Bar};
+use crate::{allocator, console, e1000, keyboard, net, rand, serial, shell, time};
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
@@ -63,6 +64,9 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("shell: did-you-mean distance", shell_edit_distance),
     ("shell: calc expressions", shell_calc),
     ("slots: parse and patch limine.conf", slots_state),
+    ("pci: config address and BAR decoding", pci_decoding),
+    ("net: frames, MAC text, descriptor rings", net_basics),
+    ("rand: generator", rand_generator),
 ];
 
 /// Run every test silently (the health check of a trial kernel).
@@ -335,5 +339,43 @@ fn slots_state() -> TestResult {
     check_eq!(bootslots::parse(&sector), Some(ok));
     sector[0] = b'x';
     check!(bootslots::parse(&sector).is_none());
+    Ok(())
+}
+
+fn pci_decoding() -> TestResult {
+    check_eq!(pci::config_address(0, 0, 0, 0), 0x8000_0000);
+    check_eq!(pci::config_address(0, 3, 0, 0x10), 0x8000_1810);
+    check_eq!(pci::config_address(1, 31, 7, 0x3F), 0x8001_FF3C); // offset rounded down to 4
+    check_eq!(pci::decode_bar(0xFEBC_0000, 0), Bar::Memory { addr: 0xFEBC_0000, is_64bit: false });
+    check_eq!(pci::decode_bar(0xFE00_000C, 0x1), Bar::Memory { addr: 0x1_FE00_0000, is_64bit: true });
+    check_eq!(pci::decode_bar(0x0000_C041, 0), Bar::Io { port: 0xC040 });
+    check_eq!(pci::decode_bar(0, 0xFFFF_FFFF), Bar::None);
+    let d = pci::Device { bus: 0, dev: 3, func: 0, vendor: 0x8086, device: 0x100E, class: 2, subclass: 0, irq: 11 };
+    check_eq!(d.class_name(), "Ethernet controller");
+    Ok(())
+}
+
+fn net_basics() -> TestResult {
+    let mac = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
+    check_eq!(net::format_mac(&mac).as_str(), "52:54:00:12:34:56");
+    let f = net::ethernet_frame(&[0xFF; 6], &mac, net::ETHERTYPE_TEST, b"hi");
+    check_eq!(f, vec![0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x52, 0x54, 0x00, 0x12, 0x34, 0x56, 0x88, 0xB5, b'h', b'i']);
+    // The card and the driver must agree on the descriptor layout.
+    check_eq!(core::mem::size_of::<e1000::RxDesc>(), 16);
+    check_eq!(core::mem::size_of::<e1000::TxDesc>(), 16);
+    check_eq!(core::mem::align_of::<e1000::RxDesc>(), 16);
+    check_eq!(e1000::ring_next(0, e1000::RX_RING), 1);
+    check_eq!(e1000::ring_next(e1000::RX_RING - 1, e1000::RX_RING), 0);
+    check!(net::MAX_FRAME <= e1000::BUFFER_SIZE);
+    Ok(())
+}
+
+fn rand_generator() -> TestResult {
+    let mut state = 1u64;
+    check_eq!(rand::xorshift(&mut state), 0x47E4_CE4B_896C_DD1D);
+    check!(state != 1);
+    let (a, b, c) = (rand::next_u64(), rand::next_u64(), rand::next_u64());
+    check!(a != b && b != c && a != c);
+    check!(rand::next_u32() != rand::next_u32() || rand::next_u32() != rand::next_u32());
     Ok(())
 }

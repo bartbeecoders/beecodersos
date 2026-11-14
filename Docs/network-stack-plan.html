@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BeeCodersOs Network Stack</title>
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #ffffff; --surface-2: #f3f1ec; --text: #1d1b16; --muted: #6b665c;
+  --border: #e3dfd6; --accent: #b7791f; --accent-soft: #fdf3e1; --ok: #2f855a; --ok-soft: #e6f4ec;
+  --warn: #c05621; --warn-soft: #fdecdf; --risk: #c53030; --risk-soft: #fde8e8; --code: #f3f1ec;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15140f; --surface: #1d1b16; --surface-2: #26241d; --text: #ece8de; --muted: #a39d8f;
+    --border: #36332a; --accent: #e9b04f; --accent-soft: #2e2617; --ok: #68d391; --ok-soft: #1a2b21;
+    --warn: #f6ad55; --warn-soft: #2f2216; --risk: #fc8181; --risk-soft: #301c1c; --code: #26241d;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #15140f; --surface: #1d1b16; --surface-2: #26241d; --text: #ece8de; --muted: #a39d8f;
+  --border: #36332a; --accent: #e9b04f; --accent-soft: #2e2617; --ok: #68d391; --ok-soft: #1a2b21;
+  --warn: #f6ad55; --warn-soft: #2f2216; --risk: #fc8181; --risk-soft: #301c1c; --code: #26241d;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 920px; margin: 0 auto; padding: 48px 16px 96px; }
+h1 { font-size: 2.1rem; line-height: 1.2; margin: 0 0 8px; letter-spacing: -0.01em; }
+h2 { font-size: 1.45rem; margin: 56px 0 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+h3 { font-size: 1.1rem; margin: 28px 0 8px; }
+p, li { color: var(--text); }
+.lede { font-size: 1.12rem; color: var(--muted); margin: 0 0 24px; }
+.meta { font-size: .9rem; color: var(--muted); }
+code { font-family: ui-monospace, "JetBrains Mono", Menlo, monospace; font-size: .88em;
+  background: var(--code); padding: 1px 5px; border-radius: 4px; }
+pre { background: var(--code); padding: 14px 16px; border-radius: 8px; overflow-x: auto;
+  font-size: .85rem; line-height: 1.5; border: 1px solid var(--border); }
+pre code { background: none; padding: 0; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; margin: 16px 0; }
+.callout { background: var(--accent-soft); border-left: 4px solid var(--accent); border-radius: 6px; padding: 14px 18px; margin: 20px 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.phase { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px 22px; margin: 18px 0; }
+.phase h3 { margin-top: 0; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.tag { font-size: .75rem; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.t-now { background: var(--ok-soft); color: var(--ok); }
+.t-next { background: var(--accent-soft); color: var(--accent); }
+.t-later { background: var(--surface-2); color: var(--muted); }
+.done { font-size: .92rem; background: var(--surface-2); border-radius: 6px; padding: 10px 14px; margin-top: 12px; }
+.done b { color: var(--ok); }
+table { width: 100%; border-collapse: collapse; font-size: .93rem; margin: 12px 0; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: .82rem; text-transform: uppercase; letter-spacing: .04em; }
+.table-wrap { overflow-x: auto; }
+.lvl { font-weight: 700; white-space: nowrap; }
+.l0 { color: var(--ok); } .l1 { color: var(--ok); } .l2 { color: var(--warn); } .l3 { color: var(--risk); }
+.diagram { width: 100%; height: auto; display: block; margin: 8px 0; }
+.diagram text { font-family: system-ui, sans-serif; fill: var(--text); }
+.diagram .muted { fill: var(--muted); }
+.diagram .box { fill: var(--surface); stroke: var(--border); stroke-width: 1.5; }
+.diagram .box-a { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+.diagram .zone { fill: var(--surface-2); stroke: var(--border); stroke-dasharray: 5 4; }
+.diagram .line { stroke: var(--muted); stroke-width: 1.6; fill: none; }
+.diagram .line-a { stroke: var(--accent); stroke-width: 2; fill: none; }
+.loop { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 14px 0; }
+.loop span.step { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; font-weight: 600; font-size: .92rem; }
+.loop span.arrow { color: var(--muted); }
+ol.steps li { margin-bottom: 6px; }
+nav.toc { font-size: .93rem; }
+nav.toc a { color: var(--accent); text-decoration: none; }
+nav.toc a:hover { text-decoration: underline; }
+
+.tier { font-weight: 700; white-space: nowrap; }
+.t1 { color: var(--ok); } .t2 { color: var(--accent); } .t3 { color: var(--warn); } .t4 { color: var(--muted); }
+.rec { background: var(--ok-soft); border-left: 4px solid var(--ok); border-radius: 6px; padding: 12px 16px; margin: 14px 0; }
+.diagram .box-ok { fill: var(--ok-soft); stroke: var(--ok); stroke-width: 1.5; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>A network stack for BeeCodersOs</h1>
+<p class="lede">A plan to connect BeeCodersOs to the local network and the internet: a network card driver, a small TCP/IP stack of our own, and a set of basic protocols that make it useful from the shell.</p>
+<p class="meta">Plan v1 · 14 November 2026 · Starting point: BeeCodersOs 0.0.2 (phases 1–8 done).</p>
+<div class="callout"><b>Status:</b> N1 is done: the OS finds its e1000 card, reads the MAC address, and sends and receives raw Ethernet frames (<code>lspci</code>, <code>net</code>, <code>net test</code>). It has no IP address yet. Next: N2 (ARP, IPv4, ping).</div>
+
+<nav class="toc card">
+<b>Contents</b>
+<ol>
+<li><a href="#summary">Summary and recommendations</a></li>
+<li><a href="#start">What we have and what is missing</a></li>
+<li><a href="#arch">Architecture</a></li>
+<li><a href="#protocols">Proposed protocols</a></li>
+<li><a href="#phases">Phases N1–N6</a></li>
+<li><a href="#threads">Threads</a></li>
+<li><a href="#testing">Testing</a></li>
+<li><a href="#security">Security and guardrails</a></li>
+<li><a href="#decisions">Decisions for you</a></li>
+</ol>
+</nav>
+
+<h2 id="summary">1. Summary and recommendations</h2>
+<p>Yes, TCP, but TCP sits on top of several smaller layers that have to exist first. The full path from the shell to the internet is:</p>
+<div class="loop">
+  <span class="step">PCI</span><span class="arrow">→</span>
+  <span class="step">e1000 driver</span><span class="arrow">→</span>
+  <span class="step">Ethernet + ARP</span><span class="arrow">→</span>
+  <span class="step">IPv4 + ICMP</span><span class="arrow">→</span>
+  <span class="step">UDP · DHCP · DNS</span><span class="arrow">→</span>
+  <span class="step">TCP</span><span class="arrow">→</span>
+  <span class="step">HTTP, NTP, …</span>
+</div>
+<div class="rec">
+<b>Recommended choices</b>
+<ul>
+<li><b>Network card: Intel e1000 first.</b> <code>vm1</code> already has one, it is QEMU's default, and it is well documented. A small device trait keeps the door open for virtio-net later.</li>
+<li><b>Our own stack, in a separate crate <code>beenet</code></b> (<code>no_std</code> + <code>alloc</code>, like <code>beefs</code>). It fits the from-scratch project and the "no new crates" rule, and it can be unit-tested on the host with simulated packet loss. The alternative is the <code>smoltcp</code> crate (see <a href="#decisions">decisions</a>).</li>
+<li><b>Plain-text protocols first, TLS later.</b> We should not write cryptography ourselves. Until TLS exists, HTTPS-only sites are out of reach directly; plain HTTP, DNS, NTP, TFTP and anything on your LAN work.</li>
+<li><b>Polling before interrupts.</b> The 100 Hz timer already wakes the idle loop, so the stack can poll the card every 10 ms. That keeps the protected interrupt code untouched in the first phases.</li>
+<li><b>Outbound only by default.</b> Servers (web page, remote shell) come last and stay off until switched on.</li>
+</ul>
+</div>
+<p>Six phases, N1 to N6. After N3 the OS can <code>ping</code> names on the internet; after N4 it can fetch a web page over plain HTTP; N5 adds the commands that make it useful day to day; N6 adds servers and the links to the self-improvement loop.</p>
+
+<h2 id="start">2. What we have and what is missing</h2>
+<div class="grid">
+<div class="card"><b>Already there</b>
+<ul>
+<li><code>vm1</code>: e1000 card on libvirt's NAT network (192.168.122.0/24, DHCP and DNS from dnsmasq, internet through NAT)</li>
+<li>100 Hz timer and clock: timeouts, retransmits</li>
+<li>Memory identity-mapped up to 4 GiB: device memory and DMA buffers need no page-table work</li>
+<li>Heap, lock-free IRQ queue, event log, shell with Ctrl+C handling</li>
+<li>A pattern for a shared, host-tested crate (<code>beefs</code>)</li>
+<li>Scenario tests in headless QEMU; QEMU has a built-in user-mode network that needs no root</li>
+</ul></div>
+<div class="card"><b>Missing</b>
+<ul>
+<li>PCI: finding devices, reading their addresses, enabling bus mastering</li>
+<li>Any network card driver</li>
+<li>Every protocol layer</li>
+<li>A source of random numbers (TCP sequence numbers, DNS and DHCP IDs)</li>
+<li>A socket-like API for shell commands</li>
+<li>Processes or threads: everything runs in one flow, so network I/O must be cooperative</li>
+</ul></div>
+</div>
+
+<h2 id="arch">3. Architecture</h2>
+<div class="card">
+<svg class="diagram" viewBox="0 0 860 470" role="img" aria-label="Layers of the network stack: shell commands on top of a socket API, the beenet crate with TCP, UDP, ICMP, IPv4, ARP and Ethernet, then the e1000 driver and PCI in the kernel, connected to the network">
+  <rect class="zone" x="10" y="14" width="840" height="76" rx="10"/>
+  <text x="24" y="36" font-weight="700" font-size="14">Shell commands (kernel/src/shell.rs, net commands)</text>
+  <g font-size="12" font-weight="600">
+    <rect class="box" x="24" y="48" width="92" height="30" rx="6"/><text x="70" y="68" text-anchor="middle">net / ifconfig</text>
+    <rect class="box" x="124" y="48" width="60" height="30" rx="6"/><text x="154" y="68" text-anchor="middle">ping</text>
+    <rect class="box" x="192" y="48" width="76" height="30" rx="6"/><text x="230" y="68" text-anchor="middle">nslookup</text>
+    <rect class="box" x="276" y="48" width="60" height="30" rx="6"/><text x="306" y="68" text-anchor="middle">ntp</text>
+    <rect class="box" x="344" y="48" width="64" height="30" rx="6"/><text x="376" y="68" text-anchor="middle">wget</text>
+    <rect class="box" x="416" y="48" width="56" height="30" rx="6"/><text x="444" y="68" text-anchor="middle">nc</text>
+    <rect class="box" x="480" y="48" width="60" height="30" rx="6"/><text x="510" y="68" text-anchor="middle">tftp</text>
+    <rect class="box" x="548" y="48" width="70" height="30" rx="6"/><text x="583" y="68" text-anchor="middle">httpd</text>
+    <rect class="box" x="626" y="48" width="100" height="30" rx="6"/><text x="676" y="68" text-anchor="middle">remote shell</text>
+    <rect class="box" x="734" y="48" width="104" height="30" rx="6"/><text x="786" y="68" text-anchor="middle">AI bridge (TCP)</text>
+  </g>
+
+  <rect class="box-a" x="10" y="104" width="840" height="46" rx="10"/>
+  <text x="24" y="124" font-weight="700" font-size="14">Socket API (kernel/src/net.rs)</text>
+  <text x="24" y="141" class="muted" font-size="12">blocking calls with timeouts and Ctrl+C: connect, send, recv, close, udp_send, udp_recv, resolve · polls the stack while waiting</text>
+
+  <rect class="zone" x="10" y="164" width="840" height="186" rx="10"/>
+  <text x="24" y="186" font-weight="700" font-size="14">beenet crate (no_std + alloc, unit-tested on the host)</text>
+  <g font-size="13" font-weight="600">
+    <rect class="box-ok" x="24" y="198" width="150" height="34" rx="6"/><text x="99" y="220" text-anchor="middle">DHCP client</text>
+    <rect class="box-ok" x="184" y="198" width="150" height="34" rx="6"/><text x="259" y="220" text-anchor="middle">DNS resolver</text>
+    <rect class="box-ok" x="344" y="198" width="150" height="34" rx="6"/><text x="419" y="220" text-anchor="middle">SNTP · TFTP</text>
+    <rect class="box-ok" x="504" y="198" width="334" height="34" rx="6"/><text x="671" y="220" text-anchor="middle">HTTP/1.1 client and server</text>
+    <rect class="box" x="24" y="242" width="470" height="34" rx="6"/><text x="259" y="264" text-anchor="middle">UDP</text>
+    <rect class="box" x="504" y="242" width="334" height="34" rx="6"/><text x="671" y="264" text-anchor="middle">TCP (handshake, retransmit, windows, close)</text>
+    <rect class="box" x="24" y="286" width="560" height="26" rx="6"/><text x="304" y="304" text-anchor="middle">IPv4 (routing: local subnet or gateway)</text>
+    <rect class="box" x="594" y="286" width="244" height="26" rx="6"/><text x="716" y="304" text-anchor="middle">ICMP (echo, errors)</text>
+    <rect class="box" x="24" y="318" width="560" height="24" rx="6"/><text x="304" y="335" text-anchor="middle">Ethernet II frames</text>
+    <rect class="box" x="594" y="318" width="244" height="24" rx="6"/><text x="716" y="335" text-anchor="middle">ARP + cache</text>
+  </g>
+
+  <rect class="box-a" x="10" y="364" width="840" height="40" rx="10"/>
+  <text x="24" y="382" font-weight="700" font-size="14">NetDevice trait: send(frame), receive() -&gt; frame, mac()</text>
+  <text x="24" y="397" class="muted" font-size="12">e1000 driver (kernel/src/e1000.rs): descriptor rings in the heap, polled every 10 ms · later: virtio-net, interrupts</text>
+
+  <rect class="box" x="10" y="418" width="410" height="40" rx="10"/>
+  <text x="24" y="436" font-weight="700" font-size="14">PCI (kernel/src/pci.rs)</text>
+  <text x="24" y="451" class="muted" font-size="12">find devices, read BARs, enable bus mastering</text>
+  <rect class="box" x="440" y="418" width="410" height="40" rx="10"/>
+  <text x="454" y="436" font-weight="700" font-size="14">Random + time</text>
+  <text x="454" y="451" class="muted" font-size="12">RDRAND/RDTSC for sequence numbers and IDs · 100 Hz timer for timeouts</text>
+</svg>
+</div>
+
+<h3>How it runs without threads</h3>
+<p>BeeCodersOs has one flow of control. The stack is a state machine with one entry point, <code>poll(now)</code>: it takes received frames from the card, updates ARP, answers pings, moves TCP connections forward and sends what is due (including retransmits). It is called from two places:</p>
+<ul>
+<li><b>The idle loop</b> (where the shell waits for a key; it already handles AI bridge messages there). So the OS answers pings and keeps its DHCP lease while you are at the prompt.</li>
+<li><b>Inside blocking network calls</b>, such as <code>recv</code> in <code>wget</code>, which loop on <code>poll</code> until data arrives, a timeout passes or you press Ctrl+C. This is the same pattern <code>ask</code> uses today.</li>
+</ul>
+<p>A long-running command that never waits for input would starve the network; the socket calls and the idle loop cover every command that exists today. Servers in N6 need more than this: see <a href="#threads">Threads</a>.</p>
+
+<h3>Why a separate crate</h3>
+<p><code>beenet</code> never touches hardware: it gets frames in and gives frames out. That makes it testable on the host with <code>cargo test</code>: known packets with known checksums, two stacks wired back to back, and a simulated link that drops, duplicates and reorders packets to prove TCP recovers. The improvement loop's coding agent can then change network code and get a clear pass or fail, as with <code>beefs</code>.</p>
+
+<h2 id="protocols">4. Proposed protocols</h2>
+<p>Grouped by how much they are needed. Tier 1 is the stack itself; without all of it nothing works. Tiers 2 and 3 are what you can do with it.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Tier</th><th>Protocol</th><th>What it gives us</th><th>Scope for a first version</th></tr></thead>
+<tbody>
+<tr><td class="tier t1">1 Core</td><td>Ethernet II</td><td>Frames on the local network</td><td>Unicast + broadcast, no VLANs</td></tr>
+<tr><td class="tier t1">1 Core</td><td>ARP</td><td>Find the hardware address for a local IP</td><td>Request, reply, cache with expiry</td></tr>
+<tr><td class="tier t1">1 Core</td><td>IPv4</td><td>Addressing and routing</td><td>One interface, local subnet or default gateway; no fragmentation at first (drop fragments), no options</td></tr>
+<tr><td class="tier t1">1 Core</td><td>ICMP</td><td><code>ping</code> out, answer pings, error messages</td><td>Echo request and reply, destination unreachable</td></tr>
+<tr><td class="tier t1">1 Core</td><td>UDP</td><td>Simple datagrams (DNS, DHCP, NTP, TFTP)</td><td>Ports, checksum, small socket table</td></tr>
+<tr><td class="tier t1">1 Core</td><td>DHCP (client)</td><td>Address, gateway and DNS server automatically</td><td>Discover, offer, request, ack, renew; static config as fallback</td></tr>
+<tr><td class="tier t1">1 Core</td><td>DNS (resolver)</td><td>Names instead of IP addresses</td><td>A records over UDP, small cache, CNAME following; no DNSSEC, no TCP fallback</td></tr>
+<tr><td class="tier t1">1 Core</td><td>TCP</td><td>Reliable connections: the basis for most of the internet</td><td>Handshake, retransmit with timeout, receive window, in-order delivery, FIN and RST; no SACK, no window scaling, simple congestion handling</td></tr>
+<tr><td class="tier t2">2 Useful</td><td>HTTP/1.1 client</td><td><code>wget URL &gt; file</code>, fetch text, call simple APIs</td><td>GET and POST, <code>Content-Length</code> and chunked bodies, redirects; plain HTTP only until TLS</td></tr>
+<tr><td class="tier t2">2 Useful</td><td>SNTP</td><td>Set the clock from the network: <code>ntp</code></td><td>One request, one reply over UDP</td></tr>
+<tr><td class="tier t2">2 Useful</td><td>Raw TCP client</td><td><code>nc HOST PORT</code>: talk to any text protocol by hand</td><td>Lines in, lines out; good for debugging</td></tr>
+<tr><td class="tier t2">2 Useful</td><td>TFTP client</td><td>Copy files to and from the host or a LAN machine: <code>tftp get</code> / <code>put</code></td><td>Read and write requests over UDP. QEMU has a built-in TFTP server, which also makes it ideal for tests</td></tr>
+<tr><td class="tier t3">3 Servers</td><td>HTTP server</td><td>A status page and read-only file browser for the LAN: <code>httpd</code></td><td>GET only, serves <code>/home</code> and a status page; off by default</td></tr>
+<tr><td class="tier t3">3 Servers</td><td>Remote shell</td><td>Use BeeShell from another machine (Telnet-style, port 23)</td><td>One session, password required, off by default, LAN only: it is not encrypted</td></tr>
+<tr><td class="tier t4">4 Later</td><td>TLS 1.3</td><td>HTTPS: most of today's web, and the Claude API directly</td><td>Use an existing <code>no_std</code> crate (needs approval for new crates), or a TLS-terminating proxy on the host</td></tr>
+<tr><td class="tier t4">4 Later</td><td>IPv6, mDNS</td><td>Modern addressing, <code>beecodersos.local</code> names</td><td>After IPv4 is solid</td></tr>
+<tr><td class="tier t4">4 Later</td><td>SSH</td><td>A secure remote shell</td><td>Large: needs the same cryptography as TLS and more</td></tr>
+</tbody>
+</table>
+</div>
+<div class="callout">
+<b>What "the internet" means without TLS:</b> the OS will reach any address, resolve any name and speak plain HTTP, but most websites redirect to HTTPS. Until tier 4, useful targets are your LAN, plain-HTTP services, NTP servers, and services you run on the host. The AI bridge keeps working as it does now, through the host.
+</div>
+
+<h3>Shell commands this adds</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Command</th><th>Does</th><th>Phase</th></tr></thead>
+<tbody>
+<tr><td><code>lspci</code></td><td>List PCI devices</td><td>N1</td></tr>
+<tr><td><code>net</code> (alias <code>ifconfig</code>)</td><td>Card, MAC, IP, gateway, DNS, packet counters; <code>net dhcp</code>, <code>net static IP/MASK GW DNS</code>, <code>net off</code></td><td>N1–N3</td></tr>
+<tr><td><code>arp</code></td><td>Show the ARP cache</td><td>N2</td></tr>
+<tr><td><code>ping HOST</code></td><td>Echo requests with round-trip times; Ctrl+C stops</td><td>N2</td></tr>
+<tr><td><code>nslookup NAME</code></td><td>Resolve a name</td><td>N3</td></tr>
+<tr><td><code>nc HOST PORT</code></td><td>Raw TCP session</td><td>N4</td></tr>
+<tr><td><code>wget URL [&gt; FILE]</code></td><td>HTTP GET to the screen or a file</td><td>N5</td></tr>
+<tr><td><code>ntp [SERVER]</code></td><td>Set the clock</td><td>N5</td></tr>
+<tr><td><code>tftp get|put HOST FILE</code></td><td>File transfer</td><td>N5</td></tr>
+<tr><td><code>httpd on|off</code>, <code>remote on|off</code></td><td>Servers</td><td>N6</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="phases">5. Phases</h2>
+<p>Named N1–N6 so they don't collide with the roadmap's phase 9 (WebAssembly apps). Each ends with a test for "done". Sizes are rough estimates of new code.</p>
+
+<div class="phase">
+<h3>N1 — PCI and the e1000 driver <span class="tag t-now">Done</span></h3>
+<ul>
+<li><b>PCI</b> (<code>kernel/src/pci.rs</code>): configuration access through ports 0xCF8/0xCFC, scan bus 0, read vendor/device IDs, classes and BARs, enable memory access and bus mastering. <code>lspci</code> command.</li>
+<li><b>e1000</b> (<code>kernel/src/e1000.rs</code>): reset, read the MAC address, set up receive and transmit descriptor rings in heap memory (physical address = virtual address here), send a frame, poll for received frames, link status.</li>
+<li><b><code>NetDevice</code> trait</b> so the stack does not depend on the card.</li>
+<li><b>Random numbers</b>: RDRAND when the CPU has it, otherwise RDTSC mixed with the clock.</li>
+<li><code>net</code> shows the card, MAC, link state and frame counters.</li>
+</ul>
+<p class="meta">About 600 lines. Touches no protected files: polling only, no interrupt changes.</p>
+<div class="done"><b>Done when:</b> in QEMU, <code>net</code> shows the MAC address QEMU assigned and "link up", and a test sees a broadcast frame from the OS in a packet capture.</div>
+<p class="meta"><b>Found while building it:</b> under QEMU/KVM most e1000 register writes are buffered until the virtual CPU next exits to QEMU. An idle, polling OS never does, so the card stopped receiving after 31 frames. The driver now reads a register after updating the receive tail (a "write flush"). The test injects 80 frames while the OS idles to keep this fixed.</p>
+</div>
+
+<div class="phase">
+<h3>N2 — Ethernet, ARP, IPv4, ICMP: ping <span class="tag t-next">Next</span></h3>
+<ul>
+<li>Start the <code>beenet</code> crate: frame parsing and building, internet checksum, ARP with a cache, IPv4 send and receive with a routing decision (local subnet or gateway), ICMP echo.</li>
+<li><code>poll</code> wired into the idle loop and blocking calls.</li>
+<li><code>net static …</code> for a fixed address, <code>ping</code>, <code>arp</code>.</li>
+<li>Host unit tests: checksums against known packets, ARP request and reply, two stacks pinging each other.</li>
+</ul>
+<p class="meta">About 900 lines including tests.</p>
+<div class="done"><b>Done when:</b> the OS pings its gateway (10.0.2.2 in QEMU, 192.168.122.1 in <code>vm1</code>), and the host can ping <code>vm1</code>.</div>
+</div>
+
+<div class="phase">
+<h3>N3 — UDP, DHCP, DNS: automatic setup and names <span class="tag t-next">Next</span></h3>
+<ul>
+<li>UDP with a small socket table.</li>
+<li>DHCP client: runs at boot when a card is found (does not delay the shell), renews the lease, falls back to "no address" cleanly. Settings saved in <code>/system/net</code> (<code>dhcp</code>, <code>static …</code> or <code>off</code>).</li>
+<li>DNS resolver with a cache; <code>nslookup</code>; <code>ping</code> accepts names.</li>
+<li>Boot line: <code>[net]  e1000 52:54:00:…, 192.168.122.57 (DHCP), gateway 192.168.122.1</code>. Network events go to the event log.</li>
+</ul>
+<p class="meta">About 800 lines including tests.</p>
+<div class="done"><b>Done when:</b> <code>vm1</code> boots, gets an address by itself, and <code>ping example.com</code> works. That is the first packet to the internet and back.</div>
+</div>
+
+<div class="phase">
+<h3>N4 — TCP <span class="tag t-next">Next</span></h3>
+<p>The largest and most delicate part. Built and tested mostly on the host before it runs in the kernel.</p>
+<ul>
+<li>Connection state machine (active open first, passive open for servers in N6), sequence numbers, acknowledgements, retransmission timer with backoff, receive window, FIN and RST handling, connection table, ephemeral ports.</li>
+<li>Kept simple: out-of-order segments are dropped and re-requested, fixed-size buffers, a conservative send rate.</li>
+<li>Socket API in the kernel: <code>connect</code>, <code>send</code>, <code>recv</code>, <code>close</code> with timeouts and Ctrl+C.</li>
+<li><code>nc HOST PORT</code>.</li>
+<li>Host tests: two stacks connected by a simulated link with loss, duplication, reordering and delay must still transfer data intact and close cleanly.</li>
+</ul>
+<p class="meta">About 1,500 lines including tests.</p>
+<div class="done"><b>Done when:</b> <code>nc</code> exchanges text with a server on the host, a 1 MiB transfer over a 10%-loss simulated link arrives intact in the unit tests, and a connection to a closed port fails quickly with a clear message.</div>
+</div>
+
+<div class="phase">
+<h3>N5 — Useful clients: HTTP, time, files <span class="tag t-later">Later</span></h3>
+<ul>
+<li>HTTP/1.1 client and <code>wget</code>, with output to the screen or a BeeFS file (within the 8 MiB file limit).</li>
+<li>SNTP and <code>ntp</code>: the clock no longer depends on the VM's emulated clock.</li>
+<li>TFTP client: move files between the OS and the host without stopping the VM.</li>
+<li><code>ask</code> could later use HTTP to reach an AI proxy on the LAN, so the AI bridge also works on real hardware without the COM2 port.</li>
+</ul>
+<p class="meta">About 900 lines including tests.</p>
+<div class="done"><b>Done when:</b> <code>wget http://example.com</code> prints the page, <code>ntp</code> sets the clock to within a second, and a file round-trips through TFTP unchanged.</div>
+</div>
+
+<div class="phase">
+<h3>T — Cooperative threads (before N6) <span class="tag t-later">Later</span></h3>
+<p>Needed for servers, not for N1–N5. Details in <a href="#threads">section 6</a>.</p>
+<ul>
+<li>Kernel threads with their own stacks and a small context-switch routine.</li>
+<li>Switches only at explicit points: waiting for a key, waiting on a socket, sleeping.</li>
+<li>A background network task replaces the polling in the idle loop.</li>
+</ul>
+<p class="meta">About 300–400 lines plus tests. No change to the interrupt code.</p>
+<div class="done"><b>Done when:</b> two shells (local and a test session) run side by side, a long-running command no longer stalls <code>ping</code> replies, and <code>make check</code> passes unchanged.</div>
+</div>
+
+<div class="phase">
+<h3>N6 — Servers and the self-improvement loop <span class="tag t-later">Later</span></h3>
+<ul>
+<li>TCP passive open (listen and accept), on top of cooperative threads (phase T).</li>
+<li><code>httpd</code>: status page (version, uptime, slot state, recent events) and read-only files, for the LAN.</li>
+<li>Remote shell with a password, off by default.</li>
+<li><b>Signals over the network:</b> wishes, crashes and health reports sent to beehive over TCP as an alternative to COM2.</li>
+<li><b>Kernel download:</b> fetch a new kernel into the spare A/B slot over HTTP or TFTP and try it, with the phase 8 rollback as the safety net. This is the roadmap's "the OS drives its own improvement" step, and it should wait for a signature check on the downloaded kernel.</li>
+<li>Interrupt-driven receive, if polling every 10 ms proves too slow (needs approval: it touches the protected interrupt code).</li>
+</ul>
+<div class="done"><b>Done when:</b> a browser on your PC opens the OS's status page, and a deploy can be triggered without stopping the VM.</div>
+</div>
+
+<h2 id="threads">6. Threads</h2>
+<p><b>Decision: no threads for N1–N5; cooperative threads before N6; preemption only if an app ever needs it.</b></p>
+<h3>Why not first</h3>
+<p>The stack is a state machine with one <code>poll()</code> call, driven from the idle loop and from blocking calls. That is how small-system stacks are normally run, it covers every client-side phase, and it works unchanged once threads exist, so nothing is rewritten.</p>
+<p>Preemptive threads would cost more than they give right now, because the kernel assumes one flow of control in several places:</p>
+<ul>
+<li><b>Shared state</b> (console, keyboard decoder, AI bridge, …) uses a "single flow only" wrapper with no locking.</li>
+<li><b>The heap lock</b> is a spinlock: on one core, a thread preempted while holding it deadlocks the next thread that allocates.</li>
+<li><b>Crash reports</b> check whether the file system was mid-operation, assuming only one thing can use the disk.</li>
+<li><b>The interrupt entry code</b> is protected, and a timer-driven context switch has to change it.</li>
+</ul>
+<p>Mistakes there show up as rare, timing-dependent bugs, the kind automated tests are worst at catching. Multiple CPU cores are a further step again and buy nothing: nothing in the OS is CPU-bound.</p>
+<h3>Where threads become useful</h3>
+<ul>
+<li><b>Servers (N6):</b> a remote shell next to the local shell is two flows of control; so is a web server that answers while you type.</li>
+<li><b>Long-running commands:</b> today a command that never waits for input stalls the network. TCP tolerates short stalls, because the other side retransmits, but not long ones.</li>
+<li><b>Phase 9 apps:</b> a running app should not freeze the shell.</li>
+</ul>
+<h3>The plan: cooperative threads</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th></th><th>Cooperative (planned)</th><th>Preemptive (not planned)</th></tr></thead>
+<tbody>
+<tr><td>Switch happens</td><td>Only where a thread waits: for a key, a socket, a timer, or calls <code>yield</code></td><td>Anywhere, on a timer interrupt</td></tr>
+<tr><td>Existing "single flow" code</td><td>Mostly still correct: nothing is interrupted halfway</td><td>Needs locks everywhere, with interrupts disabled around them</td></tr>
+<tr><td>Interrupt code</td><td>Unchanged</td><td>Must be changed (protected)</td></tr>
+<tr><td>A thread that never waits</td><td>Blocks the others; acceptable for kernel code we write and review</td><td>Is cut off by the timer</td></tr>
+<tr><td>Size</td><td>300–400 lines + a context-switch routine</td><td>Several times that, plus an audit of all shared state</td></tr>
+</tbody>
+</table>
+</div>
+<p>Rules that keep it safe: a thread may not switch while it holds the file system (the existing guard already tracks that), each thread gets a fixed stack with a guard value that is checked on every switch, and the crash report records which thread was running.</p>
+<p class="meta">Optional: the same threads could go in just before N4, which would make the socket API slightly cleaner. N4 does not need them.</p>
+
+<h2 id="testing">7. Testing</h2>
+<ul>
+<li><b>Host unit tests for <code>beenet</code></b> (in <code>make check</code>): packet parsing and building against known bytes, checksums, the ARP cache, DHCP and DNS message handling, and the TCP state machine over a simulated bad link. Most bugs should be caught here, where they are easy to reproduce.</li>
+<li><b>Kernel self-tests</b> for the pieces that live in the kernel (PCI decoding, descriptor ring bookkeeping).</li>
+<li><b>A test wire</b> (<code>@wire</code>): the virtual card is connected to the test runner, which sees every frame the OS sends and can inject frames. Used from N1 for exact, repeatable driver and protocol tests.</li>
+<li><b>Scenario tests in QEMU</b> with a new <code>@net</code> directive that adds <code>-netdev user</code> and an e1000 card. QEMU's user-mode network needs no root and provides a DHCP server, a gateway at 10.0.2.2 that answers pings and reaches services on the host, a DNS forwarder, and a built-in TFTP server. The runner starts small Python servers on the host (HTTP, a TCP echo, a fake DNS) so tests never depend on the real internet.</li>
+<li><b>Packet captures</b>: QEMU can write every frame to a pcap file (<code>-object filter-dump</code>). Tests can assert on it, and you can open it in Wireshark when something looks wrong.</li>
+<li><b>Real network</b>: <code>vm1</code> on libvirt's NAT network for manual checks against the internet. For other LAN machines to reach the OS (N6), the VM needs a bridged or macvtap interface instead of NAT.</li>
+</ul>
+
+<h2 id="security">8. Security and guardrails</h2>
+<ul>
+<li><b>Default deny inbound.</b> Until N6 the OS answers ARP and ping and nothing else; unexpected TCP gets a reset, unexpected UDP is dropped. Servers are off until switched on, and the setting is saved on disk.</li>
+<li><b>The remote shell is not encrypted.</b> Password required, LAN use only, and the docs say so plainly. No remote shell is reachable in the default NAT setup anyway.</li>
+<li><b>No secrets in the OS</b> stays true: API keys remain in beehive on the host. Direct calls to AI services wait for TLS.</li>
+<li><b>Untrusted input everywhere.</b> Every packet is attacker-controlled data. The parsers get bounds checks on every field, tests with truncated and malformed packets, and fixed limits on table sizes (ARP entries, connections, DNS cache) so a flood can't exhaust the heap.</li>
+<li><b>Random sequence numbers and IDs</b> so connections and DNS answers can't be guessed.</li>
+<li><b>Privacy rule extended:</b> the event log records that a network command ran and whether it worked, not the hosts or URLs.</li>
+<li><b>Protected list:</b> the inbound defaults, the remote-shell password check and (later) the kernel-download signature check should join the files the coding agent may not change.</li>
+<li><b>Kill switch:</b> <code>net off</code> disables the card and is saved, like <code>ai off</code>.</li>
+</ul>
+
+<h2 id="decisions">9. Decisions for you</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Decision</th><th>Recommendation</th><th>Alternative and trade-off</th></tr></thead>
+<tbody>
+<tr><td><b>Own TCP/IP stack or the <code>smoltcp</code> crate?</b></td><td>Own stack in <code>beenet</code>. Fits the from-scratch goal, no new dependencies, fully testable and understandable by the coding agent.</td><td><code>smoltcp</code> is mature and would replace most of N2–N4 with integration work, perhaps a third of the effort, and its TCP is more complete. It breaks the "no new crates" rule and makes the stack a black box.</td></tr>
+<tr><td><b>Which card first?</b></td><td>e1000: already in <code>vm1</code>, QEMU's default.</td><td>virtio-net is faster in VMs but only exists in VMs. It can be added behind the same trait later.</td></tr>
+<tr><td><b>TLS</b></td><td>Defer. Finish N1–N5 in plain text, then choose.</td><td>(a) Approve a <code>no_std</code> TLS crate and its cryptography crates. (b) A TLS proxy on the host, so the OS speaks plain HTTP to it. Faster, but the host stays in the path.</td></tr>
+<tr><td><b>Do you want inbound services (N6)?</b></td><td>Status page yes; remote shell only if you will use it.</td><td>Skipping the remote shell removes the largest security surface.</td></tr>
+<tr><td><b>IPv6</b></td><td>Not now.</td><td>Needed only on IPv6-only networks.</td></tr>
+<tr><td><b>Threads</b> (decided)</td><td>Cooperative threads before N6; none before that.</td><td>Preemptive threads: only if an app ever needs them.</td></tr>
+</tbody>
+</table>
+</div>
+<p class="meta">Total estimate for N1–N5: roughly 4,700 lines including tests, more than the kernel has today. N1–N3 (ping by name) is about half of that.</p>
+
+</main>
+</body>
+</html>

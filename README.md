@@ -21,8 +21,11 @@ Current version: **0.0.2** (see [Versioning](#versioning)).
 | 7 | Improvement loop: signals → backlog → coding agent → review → ship | ✅ |
 | 8 | A/B kernel slots with automatic rollback | ✅ |
 | 9 | AI-written apps in a WebAssembly sandbox | planned |
+| N1 | Networking: PCI and the e1000 network card driver | ✅ |
+| N2–N6 | Networking: ping, DHCP, DNS, TCP, HTTP, servers | planned |
 
-The roadmap is `Docs/self-improving-os-plan.html`; each phase is described below.
+The roadmap is `Docs/self-improving-os-plan.html`, the network plan is
+`Docs/network-stack-plan.html`; each phase is described below.
 
 ## Quick start
 
@@ -54,6 +57,7 @@ assembler and linked with the bundled `rust-lld`.
 | Design and every phase | this README |
 | Rules for AI agents (and humans) changing the code | `CLAUDE.md` |
 | Roadmap | `Docs/self-improving-os-plan.html` |
+| Network stack plan (phases N1–N6, threads) | `Docs/network-stack-plan.html` |
 | Backlog and review reports | `Docs/backlog/` (see its README) |
 | Tool options | `--help` of `tools/beehive/beehive.py`, `tools/evolve/evolve.py`, `tools/bootdisk.py`, `tools/deploy.py`, `tools/bee_report.py`, `tests/boot_test.py` |
 | Shell commands | `help` in the OS |
@@ -142,6 +146,10 @@ kernel/
   src/json.rs          minimal JSON (event log, crash reports, AI protocol)
   src/aibridge.rs      AI bridge: JSON lines on COM2 to beehive on the host
   src/bootslots.rs     A/B kernel slots: arm the rollback, health check, report failed trials
+  src/pci.rs           PCI: find devices, read their configuration (`lspci`)
+  src/e1000.rs         Intel e1000 network card driver (polled descriptor rings)
+  src/net.rs           network card interface, frame counters, `net` command
+  src/rand.rs          random numbers (RDRAND, or a seeded generator)
   src/allocator.rs     kernel heap in free RAM from the Multiboot memory map
   src/console.rs       print!/println! to VGA + serial, line redraw helpers
   src/keyboard.rs      PS/2 keyboard driver + scancode decoder (modifiers, dead keys)
@@ -170,7 +178,7 @@ kernel/
    command line, puts the heap in free RAM and, on a trial kernel, arms the A/B
    rollback (phase 8).
 5. It sets up interrupts, the timer and clock, the keyboard, COM1 and the COM2
-   AI bridge, reads ACPI, and mounts BeeFS (a disk, the boot disk's partition 2,
+   AI bridge, reads ACPI, starts the network card, and mounts BeeFS (a disk, the boot disk's partition 2,
    or a RAM disk).
 6. It reports a crash from the previous boot, logs the boot, runs a trial
    kernel's health check, and starts the terminal.
@@ -231,7 +239,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `ai`,
-`slots`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `net`, `lspci`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Under the hood:** interrupts are enabled (IDT + remapped PIC; IRQ0 timer,
 IRQ1 keyboard, IRQ3 COM2 AI bridge, IRQ4 COM1 serial). Handlers queue raw bytes; the shell decodes them and sleeps with
@@ -304,8 +312,9 @@ person or an AI (this is the first step of `Docs/self-improving-os-plan.html`).
 
   Later phases added `@ai` / `@ai-offline` (COM2 with or without beehive),
   `$! CMD` (the command must crash the kernel), `$^C CMD` (Ctrl+C after 1 s),
-  `@signal REGEX` (beehive must have received it), and `@bootdisk` /
-  `@deploy` / `@deploy-crash` (A/B slots). The full format is at the top of
+  `@signal REGEX` (beehive must have received it), `@bootdisk` /
+  `@deploy` / `@deploy-crash` (A/B slots), and `@wire` / `@frame` / `@send`
+  (a network cable to the test). The full format is at the top of
   `tests/boot_test.py`.
 - **Host tool tests:** `tests/test_beehive.py`, `tests/test_evolve.py` and
   `tests/test_bootdisk.py` (Python `unittest`, no LLM or login needed).
@@ -507,6 +516,39 @@ slot) and a broken one (`failboot`: crashes after arming; the good slot
 boots again and reports it), checks that files survive and that beehive gets
 both signals. `tests/test_bootdisk.py` covers the FAT16 writer/reader, the
 state changes and the watchdog's verdicts.
+
+## Networking — phase N1: the network card ✅
+
+The first step of `Docs/network-stack-plan.html` (the path to ping, DHCP, DNS,
+TCP and HTTP). The OS now finds its network card and moves raw Ethernet frames;
+it has **no IP address yet** (that is N2/N3), so it cannot reach other machines.
+
+- **PCI** (`pci.rs`): scans the bus (following bridges), reads device IDs,
+  classes and base addresses. `lspci` lists the devices.
+- **e1000 driver** (`e1000.rs`): Intel 82540EM, the default card in QEMU and
+  libvirt (`vm1` has one). Reset, MAC address, receive and transmit descriptor
+  rings in heap memory, link status. It is **polled**: the 100 Hz timer wakes
+  the idle loop, which takes received frames from the card every 10 ms, so no
+  interrupt code changed.
+- **`net`** shows the card, MAC address, link and frame counters;
+  `net test` sends one harmless broadcast frame (EtherType 0x88B5) to check the
+  transmit path. Boot prints `[net]  e1000 (Intel 82540EM) 52:54:00:..., link up`.
+- **Random numbers** (`rand.rs`) for later protocol IDs: RDRAND when the CPU has
+  it, otherwise a generator seeded from the timestamp counter and the clock.
+- A `NetDevice` trait keeps the protocol stack independent of the card.
+
+A QEMU/KVM detail worth knowing: QEMU buffers most e1000 register writes
+("coalesced MMIO") until the virtual CPU next exits to QEMU. An idle OS that
+only sleeps and polls never does, so the card stopped receiving after one ring
+(31 frames) until a key was pressed. The driver now reads a register after
+updating the receive tail (a "write flush"), which pushes the writes through.
+
+Tests: `net-card.scn` connects the card to the test runner with `@wire`: it
+checks the exact bytes of the frame `net test` sends, injects frames (to our
+address, broadcast, and one for another address that must be ignored), sends
+more frames than the transmit ring holds, and injects a burst of 80 while the
+OS idles (more than the receive ring holds). Self-tests cover PCI decoding,
+frame building, descriptor layout and the generator.
 
 ## Versioning
 

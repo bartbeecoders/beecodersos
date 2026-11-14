@@ -1,6 +1,6 @@
 //! Unified input: key events from the PS/2 keyboard and the serial port.
 
-use crate::{acpi, aibridge, interrupts, keyboard, serial};
+use crate::{acpi, aibridge, interrupts, keyboard, net, serial};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
@@ -52,6 +52,8 @@ pub fn read_key() -> Key {
         }
         // Handle messages from beehive while idle (welcome after it connects).
         aibridge::drain();
+        // Take frames from the network card (the 100 Hz timer wakes us).
+        net::poll();
         interrupts::wait_until(|| {
             keyboard::pending() || serial::pending() || acpi::power_button_pending() || aibridge::pending()
         });

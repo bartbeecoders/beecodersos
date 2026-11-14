@@ -15,6 +15,8 @@ Scenario files (tests/scenarios/*.scn):
     @disk                      (first lines) boot with a fresh BeeFS disk instead of the RAM disk
     @ai                        (first lines) attach COM2 and run beehive with its fake backend
     @ai-offline                (first lines) attach COM2 but run no beehive
+    @wire                      (first lines) connect the e1000 network card to the test: it
+                               sees every frame the OS sends and can inject frames
     @bootdisk                  (first lines) boot from an A/B boot disk (tools/bootdisk.py)
                                with the kernel in both slots, BeeFS in partition 2
     $ COMMAND                  type a command, wait for the next prompt
@@ -25,6 +27,9 @@ Scenario files (tests/scenarios/*.scn):
     !~ REGEX                   no output line may match REGEX
     @reboot                    shut down, boot again with the same disk
     @signal REGEX              (with @ai) beehive must have received a signal matching REGEX
+    @frame HEXREGEX            (with @wire) the OS must have sent a frame whose bytes, as
+                               lowercase hex, match the regex (waits up to 3 s)
+    @send [Nx] HEX             (with @wire) inject this frame (hex, spaces allowed), N times
     @deploy [ARGS]             (with @bootdisk) shut down, deploy the kernel to the spare
                                slot (ARGS: extra kernel arguments for it), boot again
     @deploy-crash ARGS         like @deploy, but the trial kernel must crash; boots again
@@ -58,6 +63,8 @@ OVMF_CODE = Path("/usr/share/edk2/x64/OVMF_CODE.4m.fd")
 EXIT_SUCCESS = (0x10 << 1) | 1  # testmode::SUCCESS through isa-debug-exit
 EXIT_FAILURE = (0x11 << 1) | 1
 
+WIRE_MAC = "52:54:00:be:e0:01"  # the OS's card in @wire scenarios
+
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b[()][A-Z0-9]|\x1b[=>]")
 PROMPT = re.compile(r"bee:\S*\$ $")
 BOOT_TIMEOUT = 30
@@ -82,7 +89,8 @@ def clean(text: str) -> str:
 class Vm:
     """One QEMU run with the serial port on stdin/stdout."""
 
-    def __init__(self, *, kernel_args=None, cdrom=None, disk=None, uefi=False, ai_port=None, bootdisk=None):
+    def __init__(self, *, kernel_args=None, cdrom=None, disk=None, uefi=False, ai_port=None, bootdisk=None,
+                 wire=None):
         cmd = ["qemu-system-x86_64", "-m", "128M", "-display", "none", "-serial", "stdio",
                "-monitor", "none", "-no-reboot",
                "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04"]
@@ -98,6 +106,10 @@ class Vm:
             cmd += ["-drive", f"file={disk},format=raw,if=ide,index=0,media=disk"]
         if uefi:
             cmd += ["-drive", f"if=pflash,format=raw,readonly=on,file={OVMF_CODE}"]
+        if wire:  # e1000 on a UDP "wire": each datagram is one Ethernet frame
+            ours, theirs = wire
+            cmd += ["-netdev", f"socket,id=n0,udp=127.0.0.1:{ours},localaddr=127.0.0.1:{theirs}",
+                    "-device", f"e1000,netdev=n0,mac={WIRE_MAC}"]
         if ai_port:  # COM2 = AI bridge, a TCP server for beehive
             cmd += ["-chardev", f"socket,id=ai,host=127.0.0.1,port={ai_port},server=on,wait=off",
                     "-serial", "chardev:ai"]
@@ -234,8 +246,11 @@ def parse_scenario(path: Path):
         line = raw.rstrip()
         if not line or line.startswith("#"):
             continue
-        if line in ("@disk", "@ai", "@ai-offline", "@bootdisk"):
+        if line in ("@disk", "@ai", "@ai-offline", "@bootdisk", "@wire"):
             opts.add(line[1:])
+        elif line.startswith(("@frame ", "@send ")):
+            kind, _, arg = line[1:].partition(" ")
+            steps.append((kind, arg.strip(), []))
         elif line.startswith("@deploy"):
             kind, _, extra = line[1:].partition(" ")
             steps.append((kind, extra.strip(), []))
@@ -280,6 +295,56 @@ def check_output(path: Path, cmd: str, out: list[str], expectations):
                               f"--- output ---\n" + "\n".join(out))
 
 
+class Wire:
+    """The test's end of the network cable (see @wire)."""
+
+    def __init__(self):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind(("127.0.0.1", 0))
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        probe.bind(("127.0.0.1", 0))
+        self.ports = (self.sock.getsockname()[1], probe.getsockname()[1])  # (ours, QEMU's)
+        probe.close()
+        self.frames = []
+        self.ready_at = 0.0
+
+    def booted(self):
+        # QEMU's e1000 holds back received frames for 1 s after the guest
+        # enables its receiver; inject nothing before that.
+        self.ready_at = time.monotonic() + 1.2
+
+    def expect(self, pattern: str, where: str):
+        rx, deadline = re.compile(pattern), time.monotonic() + 3
+        while True:
+            for i, f in enumerate(self.frames):
+                if rx.search(f):
+                    del self.frames[:i + 1]
+                    return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TestFailure(f"{where}: the OS sent no frame matching /{pattern}/\n--- frames seen ---\n"
+                                  + ("\n".join(self.frames) or "(none)"))
+            self.sock.settimeout(remaining)
+            try:
+                self.frames.append(self.sock.recv(4096).hex())
+            except TimeoutError:
+                pass
+
+    def send(self, hex_frame: str):
+        time.sleep(max(0.0, self.ready_at - time.monotonic()))
+        count = 1
+        if m := re.match(r"(\d+)x\s+(.*)", hex_frame):
+            count, hex_frame = int(m[1]), m[2]
+        frame = bytes.fromhex(hex_frame.replace(" ", ""))
+        for _ in range(count):
+            self.sock.sendto(frame, ("127.0.0.1", self.ports[1]))
+            time.sleep(0.02)  # slower than the OS's 10 ms polling: no overrun
+        time.sleep(0.2)  # let QEMU deliver the last one
+
+    def close(self):
+        self.sock.close()
+
+
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -322,12 +387,20 @@ def test_scenario(path: Path):
                 [sys.executable, str(BEEHIVE), "--no-config", "--backend", "fake", "--retry", "0.1",
                  "--connect", f"127.0.0.1:{ai_port}", "--state-dir", str(Path(tmp) / "beehive")],
                 stdout=subprocess.PIPE if not VERBOSE else None, stderr=subprocess.STDOUT)
-        boot = lambda: Vm(disk=disk, ai_port=ai_port, bootdisk=bootdisk)
+        wire = Wire() if "wire" in opts else None
+        boot = lambda: Vm(disk=disk, ai_port=ai_port, bootdisk=bootdisk, wire=wire.ports if wire else None)
         vm = boot()
         try:
             boot_to_prompt(vm)
+            if wire:
+                wire.booted()
             commands = 0
             for kind, cmd, expectations in steps:
+                if kind in ("frame", "send"):
+                    if not wire:
+                        raise TestFailure(f"{path.name}: @{kind} needs @wire")
+                    wire.expect(cmd, path.name) if kind == "frame" else wire.send(cmd)
+                    continue
                 if kind == "reboot":
                     vm.shutdown()
                     vm = boot()
@@ -366,6 +439,8 @@ def test_scenario(path: Path):
             return f"{commands} commands"
         finally:
             vm.kill()
+            if wire:
+                wire.close()
             if hive:
                 hive.kill()
                 hive.wait()

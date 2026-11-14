@@ -96,5 +96,11 @@ rollback, to test it).
 The runner types commands on the serial console (COM1) and reads the output;
 ANSI colors are stripped. The prompt looks like `bee:/path$ `. Scenario
 directives (full list at the top of `tests/boot_test.py`): `@disk`, `@ai`,
-`@ai-offline`, `@bootdisk`, `@reboot`, `@deploy [ARGS]`, `@deploy-crash ARGS`,
-`@signal REGEX`, `$ CMD`, `$! CMD` (must crash), `$^C CMD` (Ctrl+C after 1 s).
+`@ai-offline`, `@bootdisk`, `@wire` (network card connected to the test),
+`@reboot`, `@deploy [ARGS]`, `@deploy-crash ARGS`, `@signal REGEX`,
+`@frame HEXREGEX` / `@send [Nx] HEX` (frames on the wire), `$ CMD`,
+`$! CMD` (must crash), `$^C CMD` (Ctrl+C after 1 s).
+
+Networking follows `Docs/network-stack-plan.html` (N1 done: PCI, e1000, `net`).
+The card is polled from the idle loop (`input::read_key`) and from `net`
+commands; keep the "write flush" in `e1000.rs` (see its comment).

@@ -1,0 +1,53 @@
+# Network phase N1: PCI, the e1000 driver, frames out and in (on a test wire).
+@wire
+$ lspci
+~ ^00:00\.0 8086:1237 Host bridge$
+~ ^00:0\d\.0 8086:100e Ethernet controller \(IRQ \d+\)$
+$ net
+card:    e1000 (Intel 82540EM)
+mac:     52:54:00:be:e0:01
+link:    up
+frames:  0 sent, 0 received
+$ net test
+sent a 60-byte broadcast test frame (EtherType 0x88b5)
+# On the wire: broadcast, from our MAC, EtherType 88b5, payload "BeeCodersOs ...", padded to 60 bytes.
+@frame ^ffffffffffff525400bee00188b5426565436f646572734f73[0-9a-f]{66}0000$
+# A frame to our MAC, and a broadcast, both arrive; one for another MAC does not.
+@send 52 54 00 be e0 01  02 00 00 00 00 aa  88 b5  68 65 6c 6c 6f 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+$ net
+frames:  1 sent, 1 received
+bytes:   60 sent, 60 received
+last received: 60 bytes from 02:00:00:00:00:aa, type 0x88b5
+@send 02 00 00 00 00 bb  02 00 00 00 00 aa  88 b5  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+@send ff ff ff ff ff ff  02 00 00 00 00 cc  08 06  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+$ net
+frames:  1 sent, 2 received
+last received: 60 bytes from 02:00:00:00:00:cc, type 0x0806
+# More frames than the transmit ring holds: the ring wraps around.
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net
+frames:  21 sent, 2 received
+# More frames than the receive ring holds (32): it wraps around too.
+@send 80x ff ff ff ff ff ff  02 00 00 00 00 dd  88 b5  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+$ net
+frames:  21 sent, 82 received
+last received: 60 bytes from 02:00:00:00:00:dd, type 0x88b5

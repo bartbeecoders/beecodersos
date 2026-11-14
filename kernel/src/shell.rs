@@ -7,7 +7,7 @@ use crate::vga::Color;
 use crate::aibridge::{self, Outcome};
 use crate::json::Obj;
 use crate::ring::Global;
-use crate::{allocator, bootslots, console, crash, eventlog, keyboard, power, selftest, time};
+use crate::{allocator, bootslots, console, crash, eventlog, keyboard, net, pci, power, selftest, time};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -242,6 +242,20 @@ impl Shell {
             ("explain", []) => self.explain(),
             ("ai", []) => self.ai_status(),
             ("ai", [s @ ("on" | "off")]) => self.ai_switch(s),
+            ("lspci", []) => {
+                for d in pci::scan() {
+                    let irq = if d.irq != 0 && d.irq != 0xFF { format!(" (IRQ {})", d.irq) } else { String::new() };
+                    println!("{:02x}:{:02x}.{} {:04x}:{:04x} {}{irq}", d.bus, d.dev, d.func, d.vendor, d.device, d.class_name());
+                }
+            }
+            ("net" | "ifconfig", []) => match net::describe() {
+                Some(text) => println!("{text}"),
+                None => println!("no network card (supported: Intel e1000; see lspci)"),
+            },
+            ("net", ["test"]) => match net::send_test_frame() {
+                Ok(len) => println!("sent a {len}-byte broadcast test frame (EtherType 0x{:04x})", net::ETHERTYPE_TEST),
+                Err(e) => error(e.message()),
+            },
             ("slots", []) => match bootslots::describe() {
                 Some(text) => println!("{text}"),
                 None => println!("not booted from a boot disk with A/B slots (see tools/bootdisk.py)"),
@@ -611,6 +625,8 @@ const COMMANDS: &[(&str, &str)] = &[
     ("explain", "ask the AI about the last error or crash"),
     ("ai [on|off]", "AI bridge status; switch AI features on/off"),
     ("selftest", "run the kernel self-tests"),
+    ("net [test]", "network card status; send a test frame"),
+    ("lspci", "list PCI devices"),
     ("slots", "A/B kernel slots: which one runs, last trial"),
     ("crash", "deliberately crash the kernel (tests crash reports)"),
     ("reboot, shutdown", "restart / power off"),
