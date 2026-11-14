@@ -17,6 +17,8 @@ use beefs::{normalize, FileKind, FsError};
 const LAYOUT_FILE: &str = "/system/keyboard";
 /// Contains "off" when the AI features are switched off (`ai off`).
 const AI_SWITCH: &str = "/system/ai";
+/// "static IP/PREFIX [GATEWAY]" or "none".
+const NET_FILE: &str = "/system/net";
 const INBOX: &str = "/system/inbox/signals.jsonl";
 const OLD_INBOX: &str = "/system/inbox/signals.old.jsonl";
 
@@ -252,6 +254,22 @@ impl Shell {
                 Some(text) => println!("{text}"),
                 None => println!("no network card (supported: Intel e1000; see lspci)"),
             },
+            ("net", ["static", config @ ..]) if !config.is_empty() => self.net_static(&config.join(" ")),
+            ("net", ["off"]) => self.net_off(),
+            ("arp", []) => {
+                let table = net::arp_table();
+                if table.is_empty() {
+                    println!("no neighbours known yet (addresses are learned when packets are exchanged)");
+                }
+                for (ip, mac, age) in table {
+                    println!("{:<16} {}  confirmed {age} s ago", format!("{ip}"), net::format_mac(&mac));
+                }
+            }
+            ("ping", [host]) => self.ping(host, 4),
+            ("ping", ["-c", n, host]) => match n.parse() {
+                Ok(n @ 1..=1000) => self.ping(host, n),
+                _ => error("usage: ping [-c COUNT] ADDRESS   (count 1-1000)"),
+            },
             ("net", ["test"]) => match net::send_test_frame() {
                 Ok(len) => println!("sent a {len}-byte broadcast test frame (EtherType 0x{:04x})", net::ETHERTYPE_TEST),
                 Err(e) => error(e.message()),
@@ -352,6 +370,100 @@ impl Shell {
             aibridge::send(&msg);
         }
         aibridge::peer().is_some()
+    }
+
+    // ----- network -------------------------------------------------------------------
+
+    /// Apply the network configuration saved on disk, if any.
+    pub fn load_network(&mut self) {
+        if !net::present() {
+            return;
+        }
+        let Ok(data) = self.storage.fs().read_file(NET_FILE) else { return };
+        let text = String::from_utf8_lossy(&data);
+        let Some(config) = text.trim().strip_prefix("static ") else { return };
+        match net::parse_config(config) {
+            Ok(c) => {
+                let _ = net::configure(Some(c));
+                println!("[net]  address {}/{} (static){}", c.ip, c.prefix, c.gateway.map(|g| format!(", gateway {g}")).unwrap_or_default());
+            }
+            Err(e) => println!("[net]  ignoring {NET_FILE}: {e}"),
+        }
+    }
+
+    fn save_network(&mut self, text: &str) -> &'static str {
+        let mut fs = self.storage.fs();
+        let saved = fs.mkdir_all("/system").and_then(|_| fs.write_file(NET_FILE, format!("{text}\n").as_bytes()));
+        drop(fs);
+        match (saved, self.storage.persistent) {
+            (Ok(()), true) => " (saved)",
+            (Ok(()), false) => " (RAM disk: not kept after reboot)",
+            (Err(_), _) => " (could not save)",
+        }
+    }
+
+    fn net_static(&mut self, text: &str) {
+        let config = match net::parse_config(text) {
+            Ok(c) => c,
+            Err(e) => return error(&format!("{e}\nusage: net static IP/PREFIX [GATEWAY]   e.g. net static 192.168.1.50/24 192.168.1.1")),
+        };
+        if let Err(e) = net::configure(Some(config)) {
+            return error(e.message());
+        }
+        let note = self.save_network(&format!("static {}", net::format_config(&config)));
+        println!("address {}/{}, gateway {}{note}", config.ip, config.prefix, config.gateway.map(|g| format!("{g}")).unwrap_or_else(|| "none".into()));
+    }
+
+    fn net_off(&mut self) {
+        if let Err(e) = net::configure(None) {
+            return error(e.message());
+        }
+        let note = self.save_network("none");
+        println!("IP address removed{note}");
+    }
+
+    fn ping(&mut self, host: &str, count: u32) {
+        let Some(dst) = beenet::Ipv4::parse(host) else {
+            return error(&format!("{host}: not an IPv4 address (names arrive with DNS, network phase N3)"));
+        };
+        let id = crate::rand::next_u32() as u16;
+        let (mut received, mut min, mut max, mut total) = (0u32, u64::MAX, 0u64, 0u64);
+        let mut sent = 0;
+        println!("PING {dst}: 32 data bytes");
+        for seq in 1..=count {
+            let started = time::uptime_ms();
+            sent += 1;
+            match net::ping(dst, id, seq as u16, 1000) {
+                net::Ping::Reply { ttl, micros, len } => {
+                    received += 1;
+                    (min, max, total) = (min.min(micros), max.max(micros), total + micros);
+                    println!("{len} bytes from {dst}: seq={seq} ttl={ttl} time={}", millis(micros));
+                }
+                net::Ping::Timeout => println!("no answer from {dst}: seq={seq} (timeout)"),
+                net::Ping::Unreachable(beenet::Reason::NoArpReply) => {
+                    error(&format!("{dst} is unreachable: no machine with that address answered on the local network"));
+                    break;
+                }
+                net::Ping::Unreachable(beenet::Reason::Icmp(code)) => {
+                    error(&format!("{dst} is unreachable (a router said so, code {code})"));
+                    break;
+                }
+                net::Ping::Cancelled => {
+                    sent -= 1;
+                    break;
+                }
+                net::Ping::Failed(why) => return error(why),
+            }
+            // One ping per second.
+            if seq < count && !net::sleep(1000u64.saturating_sub(time::uptime_ms() - started)) {
+                break;
+            }
+        }
+        let loss = if sent > 0 { 100 - received * 100 / sent } else { 0 };
+        println!("{sent} sent, {received} received, {loss}% loss");
+        if received > 0 {
+            println!("round trip min/avg/max = {}/{}/{}", millis(min), millis(total / received as u64), millis(max));
+        }
     }
 
     // ----- phase 6: AI bridge ---------------------------------------------------
@@ -625,7 +737,9 @@ const COMMANDS: &[(&str, &str)] = &[
     ("explain", "ask the AI about the last error or crash"),
     ("ai [on|off]", "AI bridge status; switch AI features on/off"),
     ("selftest", "run the kernel self-tests"),
-    ("net [test]", "network card status; send a test frame"),
+    ("net", "network status; net static IP/PREFIX [GATEWAY]; net off; net test"),
+    ("ping [-c N] ADDRESS", "check that a machine answers"),
+    ("arp", "neighbours learned on the local network"),
     ("lspci", "list PCI devices"),
     ("slots", "A/B kernel slots: which one runs, last trial"),
     ("crash", "deliberately crash the kernel (tests crash reports)"),
@@ -652,6 +766,15 @@ fn help() {
 fn report(r: Result<(), FsError>) {
     if let Err(e) = r {
         error(&e.to_string());
+    }
+}
+
+/// Microseconds as "0.42 ms" / "12.3 ms" / "150 ms".
+fn millis(micros: u64) -> String {
+    match micros {
+        0..=9_999 => format!("{}.{:02} ms", micros / 1000, micros % 1000 / 10),
+        10_000..=99_999 => format!("{}.{} ms", micros / 1000, micros % 1000 / 100),
+        _ => format!("{} ms", micros / 1000),
     }
 }
 

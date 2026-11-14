@@ -82,7 +82,7 @@ nav.toc a:hover { text-decoration: underline; }
 <h1>A network stack for BeeCodersOs</h1>
 <p class="lede">A plan to connect BeeCodersOs to the local network and the internet: a network card driver, a small TCP/IP stack of our own, and a set of basic protocols that make it useful from the shell.</p>
 <p class="meta">Plan v1 · 14 November 2026 · Starting point: BeeCodersOs 0.0.2 (phases 1–8 done).</p>
-<div class="callout"><b>Status:</b> N1 is done: the OS finds its e1000 card, reads the MAC address, and sends and receives raw Ethernet frames (<code>lspci</code>, <code>net</code>, <code>net test</code>). It has no IP address yet. Next: N2 (ARP, IPv4, ping).</div>
+<div class="callout"><b>Status:</b> N1 and N2 are done. The OS finds its e1000 card, takes a static IPv4 address (<code>net static</code>), answers and sends pings (<code>ping</code>, <code>arp</code>), and reaches other networks through a gateway. The protocols live in the <code>beenet</code> crate with host unit tests. Next: N3 (UDP, DHCP, DNS), for automatic setup and names.</div>
 
 <nav class="toc card">
 <b>Contents</b>
@@ -272,7 +272,7 @@ nav.toc a:hover { text-decoration: underline; }
 </div>
 
 <div class="phase">
-<h3>N2 — Ethernet, ARP, IPv4, ICMP: ping <span class="tag t-next">Next</span></h3>
+<h3>N2 — Ethernet, ARP, IPv4, ICMP: ping <span class="tag t-now">Done</span></h3>
 <ul>
 <li>Start the <code>beenet</code> crate: frame parsing and building, internet checksum, ARP with a cache, IPv4 send and receive with a routing decision (local subnet or gateway), ICMP echo.</li>
 <li><code>poll</code> wired into the idle loop and blocking calls.</li>

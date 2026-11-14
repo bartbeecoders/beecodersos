@@ -9,7 +9,7 @@
 #   make run-vm     rebuild the ISO and power-cycle an ISO-booted libvirt VM ($(VM))
 #                   (vm1 boots from the A/B boot disk now: use make deploy)
 #   make disk       create the BeeFS data disk build/disk.img (kept between runs)
-#   make test       run the BeeFS unit tests on the host
+#   make test       run the BeeFS and beenet (network stack) unit tests on the host
 #   make beehive    run the AI bridge daemon on the host (Claude; see tools/beehive/)
 #   make report     what the OS recorded: crashes, missing commands, wishes, ...
 #   make evolve     improvement loop: signals -> backlog -> coding agent -> review
@@ -27,8 +27,8 @@
 OS_VERSION := 0.0.2
 BUILD_NUMBER_FILE := BUILD_NUMBER
 BUILD_STAMP := build/.build-stamp
-SOURCES    := $(shell find kernel/src beefs/src boot -type f) \
-              kernel/build.rs kernel/linker.ld kernel/Cargo.toml beefs/Cargo.toml
+SOURCES    := $(shell find kernel/src beefs/src beenet/src boot -type f) \
+              kernel/build.rs kernel/linker.ld kernel/Cargo.toml beefs/Cargo.toml beenet/Cargo.toml
 
 KERNEL_DIR := kernel
 KERNEL_ELF := $(KERNEL_DIR)/target/x86_64-unknown-none/release/beecoders_kernel
@@ -142,6 +142,7 @@ disk: tool
 
 test:
 	cd beefs && cargo test
+	cd beenet && cargo test
 
 # --- AI bridge and self-observation (phases 5-6) ------------------------------
 # beehive answers `ask` / `explain` in the OS and collects its signals.
@@ -192,6 +193,7 @@ evolve:
 # Single suites: tests/boot_test.py selftest|scenarios|iso|iso-uefi [-v]
 check: $(IMAGE) $(ISO) tool
 	cd beefs && cargo test --quiet
+	cd beenet && cargo test --quiet
 	python3 tests/test_beehive.py
 	python3 tests/test_evolve.py
 	python3 tests/test_bootdisk.py
@@ -201,5 +203,6 @@ clean:
 	cd $(KERNEL_DIR) && cargo clean
 	cd tools/beefs-tool && cargo clean
 	cd beefs && cargo clean
+	cd beenet && cargo clean
 	@# Keep the disk images: they hold the VMs' files (delete them by hand if you mean it).
 	find build -mindepth 1 -maxdepth 1 ! -name beecoders.img ! -name disk.img -exec rm -rf {} + 2>/dev/null || true

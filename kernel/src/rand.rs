@@ -31,12 +31,6 @@ fn rdrand() -> Option<u64> {
     None
 }
 
-fn rdtsc() -> u64 {
-    let (lo, hi): (u32, u32);
-    unsafe { asm!("rdtsc", out("eax") lo, out("edx") hi, options(nomem, nostack, preserves_flags)) };
-    (hi as u64) << 32 | lo as u64
-}
-
 /// One step of xorshift64*.
 pub fn xorshift(state: &mut u64) -> u64 {
     let mut x = *state;
@@ -55,7 +49,7 @@ pub fn next_u64() -> u64 {
     }
     let state = FALLBACK.get();
     // Mix in fresh timing on every call; never let the state be zero.
-    *state ^= rdtsc() ^ time::now_unix().unwrap_or(0).rotate_left(32);
+    *state ^= time::rdtsc() ^ time::now_unix().unwrap_or(0).rotate_left(32);
     if *state == 0 {
         *state = 0x9E37_79B9_7F4A_7C15;
     }

@@ -11,6 +11,7 @@ bench = false
 
 [dependencies]
 beefs = { path = "../beefs" }
+beenet = { path = "../beenet" }
 linked_list_allocator = "0.10"
 
 [profile.dev]

@@ -17,6 +17,9 @@ Scenario files (tests/scenarios/*.scn):
     @ai-offline                (first lines) attach COM2 but run no beehive
     @wire                      (first lines) connect the e1000 network card to the test: it
                                sees every frame the OS sends and can inject frames
+    @net                       (first lines) connect the card to QEMU's built-in network: a
+                               gateway at 10.0.2.2 that answers pings; isolated from the
+                               host's network (use 10.0.2.15/24 as the OS's address)
     @bootdisk                  (first lines) boot from an A/B boot disk (tools/bootdisk.py)
                                with the kernel in both slots, BeeFS in partition 2
     $ COMMAND                  type a command, wait for the next prompt
@@ -90,7 +93,7 @@ class Vm:
     """One QEMU run with the serial port on stdin/stdout."""
 
     def __init__(self, *, kernel_args=None, cdrom=None, disk=None, uefi=False, ai_port=None, bootdisk=None,
-                 wire=None):
+                 wire=None, usernet=False):
         cmd = ["qemu-system-x86_64", "-m", "128M", "-display", "none", "-serial", "stdio",
                "-monitor", "none", "-no-reboot",
                "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04"]
@@ -110,6 +113,8 @@ class Vm:
             ours, theirs = wire
             cmd += ["-netdev", f"socket,id=n0,udp=127.0.0.1:{ours},localaddr=127.0.0.1:{theirs}",
                     "-device", f"e1000,netdev=n0,mac={WIRE_MAC}"]
+        if usernet:  # QEMU's user-mode network, cut off from the outside world
+            cmd += ["-netdev", "user,id=n0,restrict=on", "-device", f"e1000,netdev=n0,mac={WIRE_MAC}"]
         if ai_port:  # COM2 = AI bridge, a TCP server for beehive
             cmd += ["-chardev", f"socket,id=ai,host=127.0.0.1,port={ai_port},server=on,wait=off",
                     "-serial", "chardev:ai"]
@@ -246,7 +251,7 @@ def parse_scenario(path: Path):
         line = raw.rstrip()
         if not line or line.startswith("#"):
             continue
-        if line in ("@disk", "@ai", "@ai-offline", "@bootdisk", "@wire"):
+        if line in ("@disk", "@ai", "@ai-offline", "@bootdisk", "@wire", "@net"):
             opts.add(line[1:])
         elif line.startswith(("@frame ", "@send ")):
             kind, _, arg = line[1:].partition(" ")
@@ -388,7 +393,8 @@ def test_scenario(path: Path):
                  "--connect", f"127.0.0.1:{ai_port}", "--state-dir", str(Path(tmp) / "beehive")],
                 stdout=subprocess.PIPE if not VERBOSE else None, stderr=subprocess.STDOUT)
         wire = Wire() if "wire" in opts else None
-        boot = lambda: Vm(disk=disk, ai_port=ai_port, bootdisk=bootdisk, wire=wire.ports if wire else None)
+        boot = lambda: Vm(disk=disk, ai_port=ai_port, bootdisk=bootdisk, wire=wire.ports if wire else None,
+                          usernet="net" in opts)
         vm = boot()
         try:
             boot_to_prompt(vm)

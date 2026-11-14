@@ -1,0 +1,26 @@
+# Network phase N2: ping a real peer (QEMU's built-in gateway), and the
+# address survives a reboot.
+@net
+@disk
+$ net static 10.0.2.15/24 10.0.2.2
+address 10.0.2.15/24, gateway 10.0.2.2 (saved)
+$ cat /system/net
+static 10.0.2.15/24 10.0.2.2
+@reboot
+~ \[net\]  e1000 \(Intel 82540EM\) 52:54:00:be:e0:01, link up
+~ \[net\]  address 10\.0\.2\.15/24 \(static\), gateway 10\.0\.2\.2
+$ ping -c 3 10.0.2.2
+PING 10.0.2.2: 32 data bytes
+~ ^32 bytes from 10\.0\.2\.2: seq=1 ttl=\d+ time=[\d.]+ ms$
+~ ^32 bytes from 10\.0\.2\.2: seq=2 ttl=\d+ time=[\d.]+ ms$
+~ ^32 bytes from 10\.0\.2\.2: seq=3 ttl=\d+ time=[\d.]+ ms$
+3 sent, 3 received, 0% loss
+~ ^round trip min/avg/max = [\d.]+ ms/[\d.]+ ms/[\d.]+ ms$
+$ arp
+~ ^10\.0\.2\.2\s+52:55:0a:00:02:02  confirmed \d+ s ago$
+$ net off
+IP address removed (saved)
+@reboot
+!~ \[net\]  address
+$ net
+address: none (set one: net static IP/PREFIX [GATEWAY])

@@ -138,3 +138,40 @@ fn read_rtc() -> Option<u64> {
     let days = days_from_civil(year, month, day);
     Some(days as u64 * 86400 + hour * 3600 + conv(min) as u64 * 60 + conv(sec) as u64)
 }
+
+// --- precise time (for ping round trips) -------------------------------------------
+
+static TSC_PER_MS: AtomicU64 = AtomicU64::new(0);
+
+pub fn rdtsc() -> u64 {
+    let (lo, hi): (u32, u32);
+    unsafe { core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nomem, nostack, preserves_flags)) };
+    (hi as u64) << 32 | lo as u64
+}
+
+/// Timestamp-counter ticks per millisecond, measured once against the 100 Hz
+/// timer (takes about 60 ms the first time; interrupts must be enabled).
+fn tsc_per_ms() -> u64 {
+    let known = TSC_PER_MS.load(Ordering::Relaxed);
+    if known != 0 {
+        return known;
+    }
+    let wait_for_tick = |t: u64| {
+        while TICKS.load(Ordering::Relaxed) < t {
+            core::hint::spin_loop();
+        }
+    };
+    let start = TICKS.load(Ordering::Relaxed) + 1;
+    wait_for_tick(start); // start on a tick edge
+    let t0 = rdtsc();
+    wait_for_tick(start + 5);
+    let per_ms = ((rdtsc() - t0) / (5 * 1000 / HZ)).max(1);
+    TSC_PER_MS.store(per_ms, Ordering::Relaxed);
+    per_ms
+}
+
+/// Microseconds since an arbitrary start; for measuring short intervals.
+pub fn micros() -> u64 {
+    let per_ms = tsc_per_ms();
+    (rdtsc() as u128 * 1000 / per_ms as u128) as u64
+}

@@ -1,0 +1,49 @@
+# Network phase N2: ARP, IPv4 and ICMP, checked byte by byte on a test wire.
+# The OS is 10.0.0.2 (52:54:00:be:e0:01); the test plays 10.0.0.3 (02:00:00:00:00:0b).
+@wire
+$ ping 10.0.0.3
+no IP address configured
+$ net static 10.0.0.2
+~ address must look like 192.168.1.50/24
+$ net static 10.0.0.255/24
+~ network or broadcast address
+$ net static 10.0.0.2/24 10.0.9.1
+~ gateway must be another address in the same subnet
+$ net static 10.0.0.2/24 10.0.0.1
+address 10.0.0.2/24, gateway 10.0.0.1 (RAM disk: not kept after reboot)
+# It announces its address: a broadcast ARP request for its own IP.
+@frame ^ffffffffffff525400bee00108060001080006040001525400bee0010a0000020000000000000a000002(00){18}$
+# "Who has 10.0.0.2?" from the test -> an ARP reply sent straight back to the asker.
+@send ffffffffffff02000000000b0806000108000604000102000000000b0a0000030000000000000a000002000000000000000000000000000000000000
+@frame ^02000000000b525400bee00108060001080006040002525400bee0010a00000202000000000b0a000003(00){18}$
+# A ping to the OS (id 0x0b0b, seq 7, data "abcdefgh") -> an echo reply with the same id, seq and data,
+# a valid ICMP checksum (6358), TTL 64, from 10.0.0.2 to 10.0.0.3.
+@send 525400bee00102000000000b08004500002400014000400126d40a0000030a00000208005b580b0b0007616263646566676800000000000000000000
+@frame ^02000000000b525400bee001080045000024[0-9a-f]{4}40004001[0-9a-f]{4}0a0000020a000003000063580b0b00076162636465666768(00){10}$
+$ arp
+~ ^10\.0\.0\.3\s+02:00:00:00:00:0b  confirmed \d+ s ago$
+$ net
+address: 10.0.0.2/24
+gateway: 10.0.0.1
+# Nobody has 10.0.0.9: three ARP requests, then a clear message.
+$ ping -c 2 10.0.0.9
+PING 10.0.0.9: 32 data bytes
+10.0.0.9 is unreachable: no machine with that address answered on the local network
+1 sent, 0 received, 100% loss
+@frame ^ffffffffffff525400bee00108060001080006040001525400bee0010a0000020000000000000a000009
+# An address outside the subnet goes to the gateway: the ARP request is for 10.0.0.1.
+$ ping -c 1 8.8.8.8
+8.8.8.8 is unreachable: no machine with that address answered on the local network
+@frame ^ffffffffffff525400bee00108060001080006040001525400bee0010a0000020000000000000a000001
+$ ping example.com
+~ not an IPv4 address
+$ ping -c 0 10.0.0.3
+~ usage: ping
+$ net off
+IP address removed (RAM disk: not kept after reboot)
+$ ping -c 1 10.0.0.3
+no IP address configured
+# Without an address the OS stays silent: no reply to ARP.
+@send ffffffffffff02000000000b0806000108000604000102000000000b0a0000030000000000000a000002000000000000000000000000000000000000
+$ net
+address: none (set one: net static IP/PREFIX [GATEWAY])

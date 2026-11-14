@@ -67,6 +67,8 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("pci: config address and BAR decoding", pci_decoding),
     ("net: frames, MAC text, descriptor rings", net_basics),
     ("rand: generator", rand_generator),
+    ("net: address settings", net_config),
+    ("net: two stacks ping each other (beenet in the kernel)", net_stack_ping),
 ];
 
 /// Run every test silently (the health check of a trial kernel).
@@ -377,5 +379,38 @@ fn rand_generator() -> TestResult {
     let (a, b, c) = (rand::next_u64(), rand::next_u64(), rand::next_u64());
     check!(a != b && b != c && a != c);
     check!(rand::next_u32() != rand::next_u32() || rand::next_u32() != rand::next_u32());
+    Ok(())
+}
+
+fn net_config() -> TestResult {
+    let c = net::parse_config("192.168.1.50/24 192.168.1.1").map_err(String::from)?;
+    check_eq!((c.ip, c.prefix, c.gateway), (beenet::Ipv4([192, 168, 1, 50]), 24, Some(beenet::Ipv4([192, 168, 1, 1]))));
+    check_eq!(net::format_config(&c).as_str(), "192.168.1.50/24 192.168.1.1");
+    check_eq!(net::parse_config("10.0.0.2/8").map(|c| c.gateway), Ok(None));
+    for bad in ["", "10.0.0.2", "10.0.0.0/24", "10.0.0.255/24", "10.0.0.2/24 10.0.1.1", "10.0.0.2/24 10.0.0.2",
+                "10.0.0.2/24 gw", "10.0.0.2/24 10.0.0.1 extra", "10.0.0.2/33", "300.0.0.2/24"] {
+        check!(net::parse_config(bad).is_err());
+    }
+    Ok(())
+}
+
+fn net_stack_ping() -> TestResult {
+    use beenet::{Config, Event, Ipv4, Stack};
+    let (ip_a, ip_b) = (Ipv4([10, 9, 0, 1]), Ipv4([10, 9, 0, 2]));
+    let mut a = Stack::new([2, 0, 0, 0, 0, 1], 1);
+    let mut b = Stack::new([2, 0, 0, 0, 0, 2], 1);
+    a.set_config(Some(Config { ip: ip_a, prefix: 24, gateway: None }));
+    b.set_config(Some(Config { ip: ip_b, prefix: 24, gateway: None }));
+    a.ping(ip_b, 7, 1, b"bee", 0).map_err(|e| String::from(e.message()))?;
+    // Carry frames between the two until both are quiet.
+    for _ in 0..10 {
+        while let Some(f) = a.transmit() {
+            b.receive(&f, 0);
+        }
+        while let Some(f) = b.transmit() {
+            a.receive(&f, 0);
+        }
+    }
+    check_eq!(a.take_event(), Some(Event::EchoReply { from: ip_b, id: 7, seq: 1, ttl: 64, len: 3 }));
     Ok(())
 }

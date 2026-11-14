@@ -7,11 +7,16 @@ name = "beecoders_kernel"
 version = "0.1.0"
 dependencies = [
  "beefs",
+ "beenet",
  "linked_list_allocator",
 ]
 
 [[package]]
 name = "beefs"
+version = "0.1.0"
+
+[[package]]
+name = "beenet"
 version = "0.1.0"
 
 [[package]]

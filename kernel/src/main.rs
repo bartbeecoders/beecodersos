@@ -104,6 +104,7 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info: u32) -> ! {
     let storage = storage::mount();
     let mut shell = shell::Shell::new(storage);
     shell.load_layout();
+    shell.load_network();
     let layout = keyboard::layout();
     println!("[kbd]  keyboard layout: {} ('layout' to change)", layout.name());
     if bridge {

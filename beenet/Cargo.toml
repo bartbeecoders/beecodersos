@@ -1,0 +1,7 @@
+[package]
+name = "beenet"
+version = "0.1.0"
+edition = "2021"
+description = "BeeCodersOs network stack: Ethernet, ARP, IPv4, ICMP (no_std + alloc, no hardware access)"
+
+[dependencies]

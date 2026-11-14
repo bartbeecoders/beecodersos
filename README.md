@@ -22,7 +22,8 @@ Current version: **0.0.2** (see [Versioning](#versioning)).
 | 8 | A/B kernel slots with automatic rollback | ✅ |
 | 9 | AI-written apps in a WebAssembly sandbox | planned |
 | N1 | Networking: PCI and the e1000 network card driver | ✅ |
-| N2–N6 | Networking: ping, DHCP, DNS, TCP, HTTP, servers | planned |
+| N2 | Networking: ARP, IPv4, ICMP: `ping` | ✅ |
+| N3–N6 | Networking: DHCP, DNS, TCP, HTTP, servers | planned |
 
 The roadmap is `Docs/self-improving-os-plan.html`, the network plan is
 `Docs/network-stack-plan.html`; each phase is described below.
@@ -31,7 +32,7 @@ The roadmap is `Docs/self-improving-os-plan.html`, the network plan is
 
 ```sh
 make run-serial              # build and boot in this terminal (quit: Ctrl-A then X)
-make check                   # all tests, headless (~25 s)
+make check                   # all tests, headless (~40 s)
 make beehive                 # AI bridge on the host; then `ask ...` in the OS
 make evolve                  # turn collected signals into a change for you to review
 python3 tools/evolve/evolve.py approve N --deploy   # ship it to the VM (rollback if it fails)
@@ -72,6 +73,9 @@ assembler and linked with the bundled `rust-lld`.
   `virsh -c qemu:///system net-autostart default`.
 - **`ask` says "AI offline":** start `make beehive` on the host. `ai` in the OS
   shows the bridge status; `ai off` / `ai on` switches AI features.
+- **`ping` says "no IP address configured":** set one with
+  `net static IP/PREFIX [GATEWAY]` (for `vm1`: `net static 192.168.122.50/24 192.168.122.1`;
+  under `make run`: `net static 10.0.2.15/24 10.0.2.2`). Automatic setup (DHCP) is network phase N3.
 - **`evolve work` refuses to start:** the coding agent only sees committed
   code; commit your changes first (it lists them).
 - **A deploy was rolled back:** `slots` in the OS shows which slot runs and the
@@ -120,6 +124,9 @@ beefs/                 BeeFS filesystem library (no_std + alloc, shared by kerne
   src/device.rs        BlockDevice trait + RamDisk
   src/fs.rs            superblock, bitmap, inodes, directories, path ops (+ unit tests)
   src/partition.rs     MBR partitions: BeeFS inside partition 2 of the boot disk
+beenet/                network stack library (no_std + alloc, no hardware access; unit-tested on the host)
+  src/wire.rs          packet formats: Ethernet, ARP, IPv4, ICMP, internet checksum
+  src/stack.rs         the stack: ARP cache, routing, ping; frames in, frames out
 tools/beefs-tool/      host CLI to create/inspect/edit BeeFS images (and boot disks)
 tests/boot_test.py     boot tests: drives the kernel in headless QEMU over serial
 tests/scenarios/       shell scenario tests (*.scn)
@@ -148,7 +155,7 @@ kernel/
   src/bootslots.rs     A/B kernel slots: arm the rollback, health check, report failed trials
   src/pci.rs           PCI: find devices, read their configuration (`lspci`)
   src/e1000.rs         Intel e1000 network card driver (polled descriptor rings)
-  src/net.rs           network card interface, frame counters, `net` command
+  src/net.rs           card + beenet stack: polling, address settings, `net` / `ping` / `arp`
   src/rand.rs          random numbers (RDRAND, or a seeded generator)
   src/allocator.rs     kernel heap in free RAM from the Multiboot memory map
   src/console.rs       print!/println! to VGA + serial, line redraw helpers
@@ -239,7 +246,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `ai`,
-`slots`, `net`, `lspci`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `net`, `ping`, `arp`, `lspci`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Under the hood:** interrupts are enabled (IDT + remapped PIC; IRQ0 timer,
 IRQ1 keyboard, IRQ3 COM2 AI bridge, IRQ4 COM1 serial). Handlers queue raw bytes; the shell decodes them and sleeps with
@@ -274,7 +281,7 @@ then restarts it for Reboot). `shutdown` and `reboot` work inside the VM too.
 One command checks the whole OS without anyone watching a screen:
 
 ```sh
-make check    # unit tests (BeeFS, host tools) + kernel self-tests + shell scenarios + ISO boots
+make check    # unit tests (BeeFS, beenet, host tools) + kernel self-tests + shell scenarios + ISO boots
 ```
 
 Example output (from when this phase was added; there are more tests now):
@@ -313,8 +320,8 @@ person or an AI (this is the first step of `Docs/self-improving-os-plan.html`).
   Later phases added `@ai` / `@ai-offline` (COM2 with or without beehive),
   `$! CMD` (the command must crash the kernel), `$^C CMD` (Ctrl+C after 1 s),
   `@signal REGEX` (beehive must have received it), `@bootdisk` /
-  `@deploy` / `@deploy-crash` (A/B slots), and `@wire` / `@frame` / `@send`
-  (a network cable to the test). The full format is at the top of
+  `@deploy` / `@deploy-crash` (A/B slots), `@wire` / `@frame` / `@send`
+  (a network cable to the test) and `@net` (QEMU's built-in network). The full format is at the top of
   `tests/boot_test.py`.
 - **Host tool tests:** `tests/test_beehive.py`, `tests/test_evolve.py` and
   `tests/test_bootdisk.py` (Python `unittest`, no LLM or login needed).
@@ -549,6 +556,47 @@ address, broadcast, and one for another address that must be ignored), sends
 more frames than the transmit ring holds, and injects a burst of 80 while the
 OS idles (more than the receive ring holds). Self-tests cover PCI decoding,
 frame building, descriptor layout and the generator.
+
+## Networking — phase N2: ARP, IPv4, ICMP ✅
+
+The OS now has an IP address and can `ping`, and it answers pings itself.
+
+```
+bee:/$ net static 10.0.2.15/24 10.0.2.2
+address 10.0.2.15/24, gateway 10.0.2.2 (saved)
+bee:/$ ping -c 2 10.0.2.2
+PING 10.0.2.2: 32 data bytes
+32 bytes from 10.0.2.2: seq=1 ttl=255 time=0.05 ms
+32 bytes from 10.0.2.2: seq=2 ttl=255 time=0.05 ms
+2 sent, 2 received, 0% loss
+```
+
+- **`beenet`** (new crate, like `beefs`): the protocol stack, with no hardware
+  access. Frames go in with `receive`, frames to send come out of `transmit`,
+  and time is passed in, so it runs in `cargo test` on the host.
+  - **ARP** with a cache (32 entries, 60 s lifetime, oldest replaced), three
+    tries a second apart, and rules against obvious spoofing (only hosts in
+    our subnet; our own address used by someone else is counted as a conflict).
+  - **IPv4:** one interface; the local subnet is reached directly, everything
+    else through the gateway. Header checksums are verified; fragments and
+    packets for other addresses are dropped.
+  - **ICMP:** answers echo requests to its own address, sends them, and turns
+    "destination unreachable" into a clear message.
+  - Every table and queue is bounded, and the parsers are tested with
+    truncated and random packets: received bytes are untrusted.
+- **Address settings:** `net static IP/PREFIX [GATEWAY]`, `net off`; saved in
+  `/system/net` and applied at boot. There is no automatic setup yet (DHCP is N3)
+  and no names (DNS is N3): `ping` takes an IPv4 address.
+- **`ping [-c N] ADDRESS`** (Ctrl+C stops) measures round trips with the CPU's
+  timestamp counter; **`arp`** lists the neighbours it has learned.
+- The OS answers pings while it sits at the prompt, because the idle loop
+  polls the card.
+
+Tests: 16 host unit tests in `beenet` (`make test`), including two stacks
+pinging each other, gateway routing, ARP giving up, spoofed ARP, and broken
+packets. `net-ip.scn` checks the exact bytes of the OS's ARP announcement, ARP
+reply and echo reply on a test wire. `net-ping.scn` pings QEMU's built-in
+gateway (`@net`) and checks that the address survives a reboot.
 
 ## Versioning
 
