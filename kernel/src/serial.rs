@@ -4,6 +4,7 @@
 use crate::input::Key;
 use crate::port::{inb, outb};
 use crate::ring::{Global, Ring};
+use alloc::vec::Vec;
 
 const COM1: u16 = 0x3F8;
 
@@ -65,6 +66,12 @@ pub fn poll_key() -> Option<Key> {
         }
     }
     None
+}
+
+/// Decode bytes with a fresh decoder (for the self-tests).
+pub(crate) fn decode_for_test(bytes: &[u8]) -> Vec<Key> {
+    let mut d = SerialDecoder::new();
+    bytes.iter().filter_map(|&b| d.feed(b)).collect()
 }
 
 struct SerialDecoder {

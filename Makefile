@@ -9,13 +9,18 @@
 #   make run-vm     rebuild the ISO and power-cycle the libvirt VM ($(VM)) with it
 #   make disk       create the BeeFS data disk build/disk.img (kept between runs)
 #   make test       run the BeeFS unit tests on the host
+#   make beehive    run the AI bridge daemon on the host (Claude; see tools/beehive/)
+#   make report     what the OS recorded: crashes, missing commands, wishes, ...
+#   make evolve     improvement loop: signals -> backlog -> coding agent -> review
+#   make check      all automated tests: unit tests, in-kernel self-tests, shell
+#                   scenarios and ISO boots (BIOS + UEFI) in headless QEMU
 #   make clean
 #
 # Versioning: OS_VERSION is set by hand below. The build number lives in the
 # BUILD_NUMBER file and is bumped automatically whenever a build sees changed
 # sources (not after `make clean`, and not when nothing changed).
 
-OS_VERSION := 0.0.1
+OS_VERSION := 0.0.2
 BUILD_NUMBER_FILE := BUILD_NUMBER
 BUILD_STAMP := build/.build-stamp
 SOURCES    := $(shell find kernel/src beefs/src boot -type f) \
@@ -31,9 +36,13 @@ BEEFS_TOOL := tools/beefs-tool/target/release/beefs-tool
 DISK_FLAGS := -drive file=$(DISK),format=raw,if=ide,index=0,media=disk
 # Serial console on this terminal; signal=off passes Ctrl+C to BeeCodersOs.
 SERIAL     := -chardev stdio,id=serial0,signal=off -serial chardev:serial0
-QEMU_FLAGS := -kernel $(IMAGE) -m 128M $(SERIAL) $(DISK_FLAGS)
+# COM2 = AI bridge: a TCP server on localhost that beehive connects to.
+# (The libvirt VM uses port 4555, see README; beehive serves both.)
+AI_PORT    := 4556
+AI_SERIAL  := -chardev socket,id=ai,host=127.0.0.1,port=$(AI_PORT),server=on,wait=off -serial chardev:ai
+QEMU_FLAGS := -kernel $(IMAGE) -m 128M $(SERIAL) $(AI_SERIAL) $(DISK_FLAGS)
 
-.PHONY: all kernel tool run run-nokvm run-serial iso run-iso run-iso-uefi run-vm disk test clean
+.PHONY: all kernel tool run run-nokvm run-serial iso run-iso run-iso-uefi run-vm disk test check beehive report evolve clean
 
 all: $(IMAGE)
 
@@ -64,7 +73,7 @@ run-nokvm: $(IMAGE) | $(DISK)
 	$(QEMU) $(QEMU_FLAGS)
 
 run-serial: $(IMAGE) | $(DISK)
-	$(QEMU) -kernel $(IMAGE) -m 128M -nographic $(DISK_FLAGS)
+	$(QEMU) -kernel $(IMAGE) -m 128M -nographic -serial mon:stdio $(AI_SERIAL) $(DISK_FLAGS)
 
 # --- Bootable ISO (Limine) ------------------------------------------------
 # Limine binaries: Arch package `limine` installs them in /usr/share/limine.
@@ -95,7 +104,7 @@ $(ISO): $(IMAGE) boot/limine.conf
 	@echo "ISO ready: $(ISO)"
 
 run-iso: $(ISO) | $(DISK)
-	$(QEMU) -cdrom $(ISO) -m 128M $(SERIAL) -enable-kvm -cpu host $(DISK_FLAGS)
+	$(QEMU) -cdrom $(ISO) -m 128M $(SERIAL) $(AI_SERIAL) -enable-kvm -cpu host $(DISK_FLAGS)
 
 run-iso-uefi: $(ISO) | $(DISK)
 	$(QEMU) -cdrom $(ISO) -m 128M $(SERIAL) -enable-kvm -cpu host $(DISK_FLAGS) \
@@ -129,6 +138,35 @@ disk: tool
 
 test:
 	cd beefs && cargo test
+
+# --- AI bridge and self-observation (phases 5-6) ------------------------------
+# beehive answers `ask` / `explain` in the OS and collects its signals.
+# Default backend: Claude via the Anthropic SDK (uv installs it on first run).
+# Other backends: make beehive BEEHIVE_ARGS="--backend claude-code"   (Claude Code CLI login)
+#                 make beehive BEEHIVE_ARGS="--backend grok"          (grok CLI login)
+#                 make beehive BEEHIVE_ARGS="--backend openai --base-url http://localhost:11434/v1 --model llama3.2"
+BEEHIVE_ARGS ?=
+beehive:
+	uv run tools/beehive/beehive.py $(BEEHIVE_ARGS)
+
+# Reads build/disk.img (VM must be off) and beehive's signals.
+report: tool
+	python3 tools/bee_report.py --disk $(DISK) --beehive
+
+# --- Improvement loop (phase 7) ----------------------------------------------------
+# Signals -> Docs/backlog -> coding agent (own worktree) -> make check -> review -> approve.
+#   make evolve                       harvest signals, let the agent work on the top item
+#   python3 tools/evolve/evolve.py status | review N | approve N [--deploy] | reject N
+evolve:
+	python3 tools/evolve/evolve.py run $(EVOLVE_ARGS)
+
+# Everything an AI or human change must pass. Exit status 0 = all good.
+# Single suites: tests/boot_test.py selftest|scenarios|iso|iso-uefi [-v]
+check: $(IMAGE) $(ISO) tool
+	cd beefs && cargo test --quiet
+	python3 tests/test_beehive.py
+	python3 tests/test_evolve.py
+	python3 tests/boot_test.py all
 
 clean:
 	cd $(KERNEL_DIR) && cargo clean

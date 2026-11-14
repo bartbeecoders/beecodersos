@@ -7,6 +7,7 @@ use crate::input::Key;
 use crate::layouts::{compose, Layout, Mapped};
 use crate::port::{inb, outb};
 use crate::ring::{Global, Ring};
+use alloc::vec::Vec;
 
 const DATA: u16 = 0x60;
 const STATUS: u16 = 0x64; // read
@@ -77,6 +78,19 @@ pub fn poll() -> Option<Key> {
         }
     }
     None
+}
+
+/// Decode scancodes with a fresh decoder (for the self-tests; no hardware access
+/// as long as Caps Lock / Num Lock are not pressed).
+pub(crate) fn decode_for_test(layout: Layout, codes: &[u8]) -> Vec<Key> {
+    let mut d = Decoder::new();
+    d.layout = layout;
+    let mut out = Vec::new();
+    for &sc in codes {
+        out.extend(d.feed(sc));
+        out.extend(d.queued.take().map(Key::Char));
+    }
+    out
 }
 
 // --- controller helpers (with timeouts so a missing controller can't hang us) ---

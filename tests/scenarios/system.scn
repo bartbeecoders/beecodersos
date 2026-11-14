@@ -1,0 +1,18 @@
+# System information commands and the self-tests from the shell.
+$ version
+~ ^BeeCodersOs \d+\.\d+\.\d+ b\d+ - x86_64 kernel in Rust$
+filesystem: BeeFS on RAM disk
+$ mem
+~ ^heap: \d+ KiB used of \d+ KiB$
+$ df
+~ ^ramdisk: \d+ KiB used, \d+ KiB free, 4096 KiB total; \d+ of \d+ inodes free$
+$ selftest
+~ ^selftest: \d+ passed, 0 failed$
+!~ FAIL
+$ history
+~ ^\s+1\s+version$
+~ ^\s+5\s+history$
+$ ask hello
+no AI bridge: this machine has no second serial port (COM2)
+$ ai
+bridge:      none (no COM2 port in this machine)

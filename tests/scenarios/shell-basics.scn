@@ -1,0 +1,19 @@
+# BeeShell basics on the RAM disk: echo, quoting, help, errors.
+$ echo hello bee
+hello bee
+$ echo "two  spaces"   kept
+two  spaces kept
+$ echo "unclosed
+missing closing quote
+$ help
+~ ^\s+help\s+show this help
+~ ^\s+selftest\s+run the kernel self-tests
+~ ^\s+reboot, shutdown
+$ frobnicate
+frobnicate: command not found (type 'help')
+$ cat
+cat: wrong arguments (see 'help')
+$ exit
+BeeShell is the system console; use 'shutdown' or 'reboot'.
+$ pwd
+/

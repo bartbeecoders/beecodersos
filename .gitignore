@@ -1,2 +1,4 @@
 /build/
 target/
+/.evolve/
+__pycache__/

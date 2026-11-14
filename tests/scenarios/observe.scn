@@ -1,0 +1,35 @@
+# Phase 5: the OS records what happens (clock, event log, missed commands,
+# wishes, crash reports that survive a reboot).
+@disk
+$ date
+~ ^20\d\d-\d\d-\d\dT\d\d:\d\d:\d\dZ$
+$ uptime
+~ ^up \d+m \d\ds$
+$ frobnicate
+frobnicate: command not found (type 'help')
+$ mkdri /x
+mkdri: command not found (type 'help')
+did you mean 'mkdir'?
+$ cat /nope
+$ wish a text editor
+Thanks! Saved to /system/inbox/signals.jsonl.
+$ feedback "ls could use colors"
+Thanks! Saved to /system/inbox/signals.jsonl.
+$ cat /system/inbox/signals.jsonl
+~ "kind":"wish","text":"a text editor","build":"\d+"
+~ "kind":"feedback","text":"ls could use colors"
+$ log 20
+~ "ev":"boot",.*"boot":1,"disk":"ata"
+~ "ev":"cmd","cmd":"date","status":"ok"
+~ "ev":"cmd","cmd":"frobnicate","status":"notfound"
+~ "ev":"cmd","cmd":"cat","status":"error"
+~ "ev":"wish","text":"a text editor"
+!~ /nope
+$! crash
+~ \[crash\] the previous boot crashed \(b\d+, panic\): .*deliberate kernel panic
+~ type 'explain' to ask the AI
+$ cat /system/crash/history.jsonl
+~ "kind":"panic","build":"\d+","cmd":"crash","msg":".*deliberate kernel panic
+$ log 30
+~ "ev":"crash","kind":"panic"
+~ "ev":"boot",.*"boot":2

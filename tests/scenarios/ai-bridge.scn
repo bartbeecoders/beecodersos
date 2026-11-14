@@ -1,0 +1,32 @@
+# Phase 6: the AI bridge on COM2 with beehive's fake backend (no LLM needed).
+@ai
+$ ai
+AI features: on
+bridge:      COM2, beehive online (fake fake)
+$ ask "how do I copy a file?"
+BeeHive fake backend (no LLM).
+Current directory: /
+Question: how do I copy a file?
+~ ^This last line is deliberately long, so that it has to be wrapped onto more$
+~ ^than one line on the 80-column console of BeeCodersOs\.$
+$ explain
+Nothing to explain: no failed command or crash yet.
+$ frobnicate
+$ explain
+Explaining: frobnicate
+~ ^  frobnicate$
+~ ^  frobnicate: command not found \(type 'help'\)$
+$ wish a text editor
+Thanks! Saved to /system/inbox/signals.jsonl and sent to the AI host.
+$^C ask something slow
+(cancelled)
+$ ai off
+AI features switched off.
+$ ask hello
+AI is switched off ('ai on' to enable)
+$ ai on
+AI features switched on.
+$ log 15
+~ "ev":"ai","kind":"ask","result":"done"
+@signal "kind": "wish", "text": "a text editor"
+@signal "kind": "missed", "text": "frobnicate"

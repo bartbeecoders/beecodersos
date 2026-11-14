@@ -25,6 +25,19 @@ pub enum Key {
     PowerButton,
 }
 
+/// The next key if one is waiting, without blocking.
+pub fn poll_key() -> Option<Key> {
+    if acpi::take_power_button() {
+        return Some(Key::PowerButton);
+    }
+    keyboard::poll().or_else(serial::poll_key)
+}
+
+/// True when a key (or the power button) is waiting.
+pub fn pending() -> bool {
+    keyboard::pending() || serial::pending() || acpi::power_button_pending()
+}
+
 /// Block (sleeping with `hlt`) until a key arrives from any input source.
 pub fn read_key() -> Key {
     loop {

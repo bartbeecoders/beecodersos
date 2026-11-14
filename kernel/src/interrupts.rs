@@ -1,11 +1,12 @@
 //! IDT, legacy 8259 PIC and interrupt dispatch.
 //!
 //! CPU exceptions (vectors 0-31) print a diagnostic and halt. Hardware IRQs are
-//! remapped to vectors 32-47; only IRQ1 (keyboard) and IRQ4 (COM1) are unmasked.
+//! remapped to vectors 32-47; unmasked: IRQ0 (timer), IRQ1 (keyboard),
+//! IRQ3 (COM2, AI bridge) and IRQ4 (COM1).
 
 use crate::port::{inb, outb};
 use crate::vga::Color;
-use crate::{acpi, console, keyboard, serial};
+use crate::{acpi, aibridge, console, crash, keyboard, serial, time};
 use core::arch::asm;
 use core::cell::UnsafeCell;
 
@@ -16,8 +17,10 @@ extern "C" {
 }
 
 pub const IRQ_BASE: u8 = 32;
+const IRQ_TIMER: u8 = 0;
 const IRQ_KEYBOARD: u8 = 1;
 const IRQ_CASCADE: u8 = 2;
+const IRQ_COM2: u8 = 3;
 const IRQ_COM1: u8 = 4;
 
 const PIC1_CMD: u16 = 0x20;
@@ -100,7 +103,7 @@ unsafe fn init_pic() {
     outb(PIC2_DATA, 2); io_wait();
     outb(PIC1_DATA, 0x01); io_wait(); // ICW4: 8086 mode
     outb(PIC2_DATA, 0x01); io_wait();
-    let enabled = (1 << IRQ_KEYBOARD) | (1 << IRQ_CASCADE) | (1 << IRQ_COM1);
+    let enabled = (1 << IRQ_TIMER) | (1 << IRQ_KEYBOARD) | (1 << IRQ_CASCADE) | (1 << IRQ_COM2) | (1 << IRQ_COM1);
     outb(PIC1_DATA, !enabled);
     outb(PIC2_DATA, 0xFF);
 }
@@ -156,7 +159,9 @@ extern "C" fn interrupt_dispatch(frame: &mut InterruptFrame) {
             acpi::on_interrupt(); // may share its line with another device
         }
         match irq {
+            IRQ_TIMER => time::on_tick(),
             IRQ_KEYBOARD => keyboard::on_interrupt(),
+            IRQ_COM2 => aibridge::on_interrupt(),
             IRQ_COM1 => serial::on_interrupt(),
             _ => {}
         }
@@ -189,5 +194,8 @@ fn exception(f: &InterruptFrame) -> ! {
     }
     println!("  rax={:#x} rcx={:#x} rdx={:#x} rsi={:#x} rdi={:#x}", f.rax, f.rcx, f.rdx, f.rsi, f.rdi);
     let _ = (f.r8, f.r9, f.r10, f.r11, f.cs, f.ss);
+    let name = EXCEPTIONS[f.vector as usize];
+    crash::record("exception", format_args!("CPU exception {}: {} at rip={:#x}", f.vector, name, f.rip));
+    crate::testmode::on_fatal_error();
     crate::halt_forever()
 }

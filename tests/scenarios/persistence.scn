@@ -1,0 +1,20 @@
+# BeeFS disk: files and settings survive a reboot; boot counter goes up.
+@disk
+$ about
+filesystem: BeeFS on ATA disk
+$ cat /system/boot_count
+1
+$ mkdir /home/bee
+$ echo "remember me" > /home/bee/note.txt
+$ layout us
+keyboard layout: English (US) (saved)
+@reboot
+$ cat /system/boot_count
+2
+$ cat /system/boot.log
+boot #1
+boot #2
+$ cat /home/bee/note.txt
+remember me
+$ layout
+~ ^ \* us\s+English \(US\)

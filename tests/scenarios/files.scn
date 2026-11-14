@@ -1,0 +1,39 @@
+# File and directory commands on the RAM disk.
+$ ls
+~ welcome\.txt
+$ mkdir /a/b
+!~ .
+$ cd /a/b
+$ pwd
+/a/b
+$ echo "one  two" > f.txt
+$ echo three >> f.txt
+$ cat f.txt
+one  two
+three
+$ cp f.txt g.txt
+$ mv g.txt ..
+$ cd ..
+$ ls
+~ <dir>\s+b/
+~ ^\s+15\s+g\.txt$
+$ tree /a
+/a
+  b/
+    f.txt (15 B)
+  g.txt (15 B)
+$ touch empty
+$ cat empty
+!~ .
+$ rm /a
+directory not empty
+$ rm g.txt
+$ cat g.txt
+g.txt: no such file or directory
+$ cd /nope
+/nope: no such file or directory
+$ cd /a/b/f.txt
+/a/b/f.txt: not a directory
+$ cd
+$ pwd
+/

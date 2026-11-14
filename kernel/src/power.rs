@@ -53,7 +53,7 @@ fn spin() {
 }
 
 /// CPUID leaf 1, ECX bit 31: "running under a hypervisor".
-fn running_in_vm() -> bool {
+pub fn running_in_vm() -> bool {
     let ecx: u32;
     unsafe {
         asm!(
