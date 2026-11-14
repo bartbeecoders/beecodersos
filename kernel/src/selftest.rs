@@ -60,6 +60,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("json: parse", json_parse),
     ("time: calendar conversion", time_calendar),
     ("shell: did-you-mean distance", shell_edit_distance),
+    ("shell: calc expressions", shell_calc),
 ];
 
 /// Run every test and print the results. Returns true when all passed.
@@ -261,6 +262,42 @@ fn time_calendar() -> TestResult {
     }
     check_eq!(time::format_duration(65_000), "1m 05s");
     check_eq!(time::format_duration(90_061_000), "1d 1h 01m 01s");
+    Ok(())
+}
+
+fn shell_calc() -> TestResult {
+    use shell::calc;
+    // precedence and parentheses; spacing does not matter
+    check_eq!(calc("2 + 3"), Ok(5));
+    check_eq!(calc("2+3*4"), Ok(14));
+    check_eq!(calc("(2 + 3) * 4"), Ok(20));
+    check_eq!(calc("10 - 4 - 3"), Ok(3));
+    check_eq!(calc("100 / 10 / 5"), Ok(2));
+    check_eq!(calc(" ((7)) "), Ok(7));
+    // unary minus; / and % truncate toward zero
+    check_eq!(calc("-7 / 2"), Ok(-3));
+    check_eq!(calc("7 % 3"), Ok(1));
+    check_eq!(calc("-7 % 3"), Ok(-1));
+    check_eq!(calc("2 * -3"), Ok(-6));
+    check_eq!(calc("-(2 + 3)"), Ok(-5));
+    check_eq!(calc("--4"), Ok(4));
+    check_eq!(calc("-9223372036854775808"), Ok(i64::MIN));
+    // errors, never panics
+    check_eq!(calc("1 / 0"), Err("division by zero"));
+    check_eq!(calc("1 % 0"), Err("division by zero"));
+    check_eq!(calc("9223372036854775807 + 1"), Err("overflow"));
+    check_eq!(calc("99999999999999999999"), Err("overflow"));
+    check_eq!(calc("-9223372036854775808 / -1"), Err("overflow"));
+    check_eq!(calc("-9223372036854775808 % -1"), Err("overflow"));
+    check_eq!(calc("-(-9223372036854775808)"), Err("overflow"));
+    check_eq!(calc("4294967296 * 4294967296"), Err("overflow"));
+    check_eq!(calc("2 +"), Err("parse error"));
+    check_eq!(calc("abc"), Err("parse error"));
+    check_eq!(calc(""), Err("parse error"));
+    check_eq!(calc("2 3"), Err("parse error"));
+    check_eq!(calc("(2 + 3"), Err("missing ')'"));
+    check!(calc(&"(".repeat(1000)).is_err());
+    check!(calc(&"-".repeat(1000)).is_err());
     Ok(())
 }
 

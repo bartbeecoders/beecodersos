@@ -220,6 +220,11 @@ impl Shell {
             ("selftest", []) => {
                 selftest::run();
             }
+            ("calc", []) => error("usage: calc EXPR (e.g. calc (2 + 3) * 4)"),
+            ("calc", words) => match calc(&words.join(" ")) {
+                Ok(v) => println!("{v}"),
+                Err(e) => error(&format!("calc: {e}")),
+            },
             ("date", []) => match time::now_unix() {
                 Some(t) => println!("{}", time::iso8601(t)),
                 None => error("no real-time clock"),
@@ -583,6 +588,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("layout [us|be]", "show / change the keyboard layout"),
     ("history", "previous commands (Up/Down to recall)"),
     ("mem, about", "memory usage, system info"),
+    ("calc EXPR", "integer arithmetic: + - * / % ( )"),
     ("date, uptime", "current date and time (UTC), time since boot"),
     ("log [N]", "last N events from the event log"),
     ("wish TEXT", "tell the OS what you'd like it to do"),
@@ -679,4 +685,108 @@ pub(crate) fn tokenize(line: &str) -> Result<Vec<String>, &'static str> {
         out.push(cur);
     }
     Ok(out)
+}
+
+/// Evaluate an integer expression: + - * / % with the usual precedence,
+/// parentheses and unary minus. i64 arithmetic; `/` and `%` truncate toward
+/// zero (so -7 / 2 = -3 and -7 % 2 = -1). Overflow and division by zero are
+/// errors, never panics.
+pub(crate) fn calc(expr: &str) -> Result<i64, &'static str> {
+    let mut p = Calc { s: expr.as_bytes(), pos: 0, depth: 0 };
+    let v = p.expr()?;
+    if p.peek().is_some() {
+        return Err("parse error");
+    }
+    Ok(v)
+}
+
+struct Calc<'a> {
+    s: &'a [u8],
+    pos: usize,
+    depth: u32,
+}
+
+impl Calc<'_> {
+    fn peek(&mut self) -> Option<u8> {
+        while self.s.get(self.pos).is_some_and(|c| c.is_ascii_whitespace()) {
+            self.pos += 1;
+        }
+        self.s.get(self.pos).copied()
+    }
+
+    fn expr(&mut self) -> Result<i64, &'static str> {
+        let mut v = self.term()?;
+        while let Some(op @ (b'+' | b'-')) = self.peek() {
+            self.pos += 1;
+            let r = self.term()?;
+            v = if op == b'+' { v.checked_add(r) } else { v.checked_sub(r) }.ok_or("overflow")?;
+        }
+        Ok(v)
+    }
+
+    fn term(&mut self) -> Result<i64, &'static str> {
+        let mut v = self.unary()?;
+        while let Some(op @ (b'*' | b'/' | b'%')) = self.peek() {
+            self.pos += 1;
+            let r = self.unary()?;
+            if op != b'*' && r == 0 {
+                return Err("division by zero");
+            }
+            v = match op {
+                b'*' => v.checked_mul(r),
+                b'/' => v.checked_div(r),
+                _ => v.checked_rem(r),
+            }
+            .ok_or("overflow")?;
+        }
+        Ok(v)
+    }
+
+    fn unary(&mut self) -> Result<i64, &'static str> {
+        // Bounded recursion: the kernel stack is small.
+        if self.depth >= 64 {
+            return Err("expression too deeply nested");
+        }
+        self.depth += 1;
+        let r = self.unary_inner();
+        self.depth -= 1;
+        r
+    }
+
+    fn unary_inner(&mut self) -> Result<i64, &'static str> {
+        match self.peek() {
+            Some(b'-') => {
+                self.pos += 1;
+                // A negative literal can reach i64::MIN: -9223372036854775808.
+                if self.peek().is_some_and(|c| c.is_ascii_digit()) {
+                    return self.number(true);
+                }
+                self.unary()?.checked_neg().ok_or("overflow")
+            }
+            Some(b'(') => {
+                self.pos += 1;
+                let v = self.expr()?;
+                if self.peek() != Some(b')') {
+                    return Err("missing ')'");
+                }
+                self.pos += 1;
+                Ok(v)
+            }
+            Some(c) if c.is_ascii_digit() => self.number(false),
+            _ => Err("parse error"),
+        }
+    }
+
+    fn number(&mut self, negative: bool) -> Result<i64, &'static str> {
+        let mut v: i64 = 0;
+        while let Some(&c) = self.s.get(self.pos).filter(|c| c.is_ascii_digit()) {
+            self.pos += 1;
+            let d = (c - b'0') as i64;
+            v = v
+                .checked_mul(10)
+                .and_then(|v| if negative { v.checked_sub(d) } else { v.checked_add(d) })
+                .ok_or("overflow")?;
+        }
+        Ok(v)
+    }
 }
