@@ -6,7 +6,8 @@
 #   make iso        bootable hybrid BIOS/UEFI ISO -> build/beecoders.iso
 #   make run-iso    boot the ISO in QEMU (BIOS)
 #   make run-iso-uefi boot the ISO in QEMU (UEFI via OVMF; serial output only)
-#   make run-vm     rebuild the ISO and power-cycle the libvirt VM ($(VM)) with it
+#   make run-vm     rebuild the ISO and power-cycle an ISO-booted libvirt VM ($(VM))
+#                   (vm1 boots from the A/B boot disk now: use make deploy)
 #   make disk       create the BeeFS data disk build/disk.img (kept between runs)
 #   make test       run the BeeFS unit tests on the host
 #   make beehive    run the AI bridge daemon on the host (Claude; see tools/beehive/)
@@ -15,9 +16,9 @@
 #   make bootdisk   A/B boot disk build/beecoders.img (kept: it holds the VM's data)
 #   make run-disk   boot the boot disk in QEMU
 #   make deploy     put the new kernel in vm1's spare slot, watch it, roll back if needed
-#   make check      all automated tests: unit tests, in-kernel self-tests, shell
-#                   scenarios and ISO boots (BIOS + UEFI) in headless QEMU
-#   make clean
+#   make check      all automated tests: unit tests (BeeFS, host tools), in-kernel
+#                   self-tests, shell scenarios, A/B slots and ISO boots (BIOS + UEFI)
+#   make clean      remove build output; keeps the disk images (they hold files)
 #
 # Versioning: OS_VERSION is set by hand below. The build number lives in the
 # BUILD_NUMBER file and is bumped automatically whenever a build sees changed
@@ -152,9 +153,11 @@ BEEHIVE_ARGS ?=
 beehive:
 	uv run tools/beehive/beehive.py $(BEEHIVE_ARGS)
 
-# Reads build/disk.img (VM must be off) and beehive's signals.
+# Reads the VM's disk (the boot disk if there is one, else build/disk.img;
+# the VM should be off) and beehive's signals. Other disk: make report REPORT_DISK=...
+REPORT_DISK ?= $(if $(wildcard $(BOOTDISK)),$(BOOTDISK),$(DISK))
 report: tool
-	python3 tools/bee_report.py --disk $(DISK) --beehive
+	python3 tools/bee_report.py --disk $(REPORT_DISK) --beehive
 
 # --- A/B boot disk (phase 8) ---------------------------------------------------------
 # Partition 1: FAT16 with Limine and kernel-a.elf / kernel-b.elf; partition 2: BeeFS.
@@ -198,4 +201,5 @@ clean:
 	cd $(KERNEL_DIR) && cargo clean
 	cd tools/beefs-tool && cargo clean
 	cd beefs && cargo clean
-	rm -rf build
+	@# Keep the disk images: they hold the VMs' files (delete them by hand if you mean it).
+	find build -mindepth 1 -maxdepth 1 ! -name beecoders.img ! -name disk.img -exec rm -rf {} + 2>/dev/null || true

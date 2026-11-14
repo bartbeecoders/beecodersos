@@ -1,22 +1,83 @@
 # BeeCodersOs
 
-A from-scratch operating system for amd64 (x86_64), written in Rust and assembly.
+A from-scratch operating system for amd64 (x86_64), written in Rust and
+assembly, that helps improve itself. It records what goes wrong and what
+people miss, an AI turns that into small tested changes that a person
+approves, and each new kernel is tried in a spare slot and rolled back
+automatically if it fails.
+
+Current version: **0.0.2** (see [Versioning](#versioning)).
+
+## At a glance
+
+| Phase | What it added | Status |
+|---|---|---|
+| 1 | 64-bit kernel, boots via Multiboot / Limine (BIOS + UEFI) | ✅ |
+| 2 | BeeFS file system (RAM disk, ATA disk, host tool) | ✅ |
+| 3 | BeeShell terminal, keyboard layouts, ACPI power | ✅ |
+| 4 | Automated tests: `make check` | ✅ |
+| 5 | The OS observes itself: clock, event log, crash reports, `wish` | ✅ |
+| 6 | AI bridge: `ask` / `explain` through beehive on the host | ✅ |
+| 7 | Improvement loop: signals → backlog → coding agent → review → ship | ✅ |
+| 8 | A/B kernel slots with automatic rollback | ✅ |
+| 9 | AI-written apps in a WebAssembly sandbox | planned |
+
+The roadmap is `Docs/self-improving-os-plan.html`; each phase is described below.
+
+## Quick start
+
+```sh
+make run-serial              # build and boot in this terminal (quit: Ctrl-A then X)
+make check                   # all tests, headless (~25 s)
+make beehive                 # AI bridge on the host; then `ask ...` in the OS
+make evolve                  # turn collected signals into a change for you to review
+python3 tools/evolve/evolve.py approve N --deploy   # ship it to the VM (rollback if it fails)
+```
+
+**Requirements** (Arch package names in brackets):
+- Rust with the `x86_64-unknown-none` target (`kernel/rust-toolchain.toml`
+  requests it), `make`, `qemu-system-x86_64` [qemu-full], `objcopy` [binutils]
+- `limine` and `xorriso` [libisoburn] for the ISO and the boot disk;
+  `edk2-ovmf` for UEFI boots
+- Python 3.11+ for the tests and host tools; `uv` to run beehive with Claude
+  (it installs the Anthropic SDK); optional: the `claude` / `grok` CLIs,
+  Ollama, `dosfstools` (`fsck.fat` in the tests)
+- libvirt / virt-manager for the VM (`vm1`), optional
+
+No NASM or GCC cross-compiler needed: the assembly is built by Rust's LLVM
+assembler and linked with the bundled `rust-lld`.
+
+**Where things are documented**
+
+| What | Where |
+|---|---|
+| Design and every phase | this README |
+| Rules for AI agents (and humans) changing the code | `CLAUDE.md` |
+| Roadmap | `Docs/self-improving-os-plan.html` |
+| Backlog and review reports | `Docs/backlog/` (see its README) |
+| Tool options | `--help` of `tools/beehive/beehive.py`, `tools/evolve/evolve.py`, `tools/bootdisk.py`, `tools/deploy.py`, `tools/bee_report.py`, `tests/boot_test.py` |
+| Shell commands | `help` in the OS |
+
+## Troubleshooting
+
+- **The VM window keeps the keyboard and mouse:** press **Left Ctrl + Left Alt**
+  to release them (virt-manager). While the VM has focus, Hyprland's own
+  shortcuts go to the VM too.
+- **virt-manager: "network 'default' is not active":**
+  `virsh -c qemu:///system net-start default` and, to start it at every boot,
+  `virsh -c qemu:///system net-autostart default`.
+- **`ask` says "AI offline":** start `make beehive` on the host. `ai` in the OS
+  shows the bridge status; `ai off` / `ai on` switches AI features.
+- **`evolve work` refuses to start:** the coding agent only sees committed
+  code; commit your changes first (it lists them).
+- **A deploy was rolled back:** `slots` in the OS shows which slot runs and the
+  last trial; `make report` lists the crash; `python3 tools/bootdisk.py status build/beecoders.img`
+  shows the slot state from the host (VM off).
 
 ## Phase 1 — Hello World kernel ✅
 
 Boots in QEMU/KVM and shows `Hello World, from BeeCodersOs` on screen (VGA text
 mode) and on the serial port (COM1).
-
-### Requirements
-
-- Rust (stable) with the bare-metal target: `rustup target add x86_64-unknown-none`
-  (`kernel/rust-toolchain.toml` requests it automatically)
-- `qemu-system-x86_64`, `make`, `objcopy` (binutils)
-- For the ISO: `limine` and `xorriso` (Arch: `sudo pacman -S --needed limine libisoburn`),
-  and `edk2-ovmf` for UEFI testing in QEMU
-
-No NASM or GCC cross-compiler needed: the assembly is built by Rust's LLVM
-assembler and linked with the bundled `rust-lld`.
 
 ### Build & run
 
@@ -25,14 +86,8 @@ make             # -> build/beecoders.elf
 make run         # QEMU + KVM: VGA window, plus the terminal on this console
 make run-nokvm   # pure emulation
 make run-serial  # headless, serial only (quit: Ctrl-A then X)
+make run-disk    # boot the A/B boot disk (phase 8) instead of the kernel file
 ```
-
-### Versioning
-
-The OS version is set by hand as `OS_VERSION` at the top of the `Makefile`.
-The build number lives in `BUILD_NUMBER` and goes up by one on every build
-that has changed sources. The version shows on the boot banner and with the
-`version` shell command, for example `BeeCodersOs 0.0.1 b1`.
 
 ### Bootable ISO
 
@@ -60,9 +115,11 @@ boot/limine.conf       Limine boot menu entry (ISO)
 beefs/                 BeeFS filesystem library (no_std + alloc, shared by kernel and host)
   src/device.rs        BlockDevice trait + RamDisk
   src/fs.rs            superblock, bitmap, inodes, directories, path ops (+ unit tests)
-tools/beefs-tool/      host CLI to create/inspect/edit BeeFS disk images
+  src/partition.rs     MBR partitions: BeeFS inside partition 2 of the boot disk
+tools/beefs-tool/      host CLI to create/inspect/edit BeeFS images (and boot disks)
 tests/boot_test.py     boot tests: drives the kernel in headless QEMU over serial
 tests/scenarios/       shell scenario tests (*.scn)
+tests/test_*.py        unit tests of the host tools (beehive, evolve, bootdisk)
 tools/beehive/         beehive: host daemon for the AI bridge (Claude / local models)
 tools/bee_report.py    report of what the OS recorded (crashes, missing commands, wishes)
 tools/evolve/          improvement loop: signals -> backlog -> coding agent -> review
@@ -78,7 +135,7 @@ kernel/
   src/main.rs          kernel_main, panic handler
   src/bootargs.rs      kernel command line (Multiboot cmdline): `test`, `selftest` flags
   src/testmode.rs      test mode: pass/fail exit codes for QEMU (isa-debug-exit)
-  src/selftest.rs      in-kernel self-tests (`selftest` command / boot flag)
+  src/selftest.rs      in-kernel self-tests (`selftest` command / boot flag, health check)
   src/time.rs          PIT timer (IRQ0, 100 Hz) + CMOS real-time clock
   src/eventlog.rs      event log /system/log/events.jsonl
   src/crash.rs         crash reports saved to disk, shown on the next boot
@@ -92,7 +149,7 @@ kernel/
   src/serial.rs        16550 UART (COM1) output + interrupt-driven input
   src/input.rs         unified key events, sleeps (hlt) until input arrives
   src/editor.rs        line editor with history
-  src/shell.rs         BeeShell commands
+  src/shell.rs         BeeShell commands (incl. `calc`, the first change made by the improvement loop)
   src/storage.rs       mount BeeFS disk or fall back to a RAM disk
   src/ata.rs           ATA/IDE disk driver (PIO, LBA28, polling)
   src/acpi.rs          ACPI tables (FADT/DSDT), power button (SCI), S5 power-off, reset
@@ -104,12 +161,19 @@ kernel/
 
 ### Boot flow
 
-1. QEMU (Multiboot v1 loader) loads the kernel at 1 MiB, enters `_start` in 32-bit protected mode.
+1. Limine (ISO or boot disk) or QEMU's own Multiboot v1 loader (`-kernel`) loads the
+   kernel at 1 MiB and enters `_start` in 32-bit protected mode.
 2. `boot.s` checks the Multiboot magic, CPUID and long-mode support (prints `ERR: M/C/L` on failure).
 3. It identity-maps the first 4 GiB using 2 MiB pages, enables PAE + EFER.LME + paging,
    loads a 64-bit GDT and far-jumps into 64-bit mode.
-4. `kernel_main(magic, multiboot_info)` prints the greeting, puts the heap in free RAM,
-   sets up interrupts and the keyboard, mounts storage and starts the terminal.
+4. `kernel_main(magic, multiboot_info)` prints the greeting, saves the kernel
+   command line, puts the heap in free RAM and, on a trial kernel, arms the A/B
+   rollback (phase 8).
+5. It sets up interrupts, the timer and clock, the keyboard, COM1 and the COM2
+   AI bridge, reads ACPI, and mounts BeeFS (a disk, the boot disk's partition 2,
+   or a RAM disk).
+6. It reports a crash from the previous boot, logs the boot, runs a trial
+   kernel's health check, and starts the terminal.
 
 ## Phase 2 — BeeFS filesystem ✅
 
@@ -126,8 +190,9 @@ disk **image file** on the host.
 → data. Directories hold 32-byte entries; names up to 26 bytes.
 
 At boot the kernel mounts an attached ATA disk containing BeeFS (incrementing
-`/system/boot_count` and appending to `/system/boot.log`); without one it uses a
-4 MiB RAM disk. Disks without BeeFS are **never** formatted automatically.
+`/system/boot_count` and appending to `/system/boot.log`); on a partitioned
+boot disk (phase 8) it uses the BeeFS partition. Without one it uses a 4 MiB
+RAM disk. Disks without BeeFS are **never** formatted automatically.
 
 ```sh
 make disk     # (re)create build/disk.img: 16 MiB BeeFS (run targets create it if missing)
@@ -140,6 +205,7 @@ $T build/disk.img tree
 $T build/disk.img cat /system/boot.log
 $T build/disk.img put notes.txt /home/bee/notes.txt
 $T build/disk.img info          # also: ls, mkdir, get, write, rm, mv
+$T build/beecoders.img tree     # the boot disk: its BeeFS partition is found by itself
 ```
 
 Attach a disk manually: `-drive file=build/disk.img,format=raw,if=ide,index=0,media=disk`
@@ -165,16 +231,23 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `ai`,
-`selftest`, `crash`, `reboot`, `shutdown`. Paths can be relative; `"quotes"` group words.
+`slots`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
-**Under the hood:** interrupts are enabled (IDT + remapped PIC; IRQ1 keyboard,
-IRQ4 serial). Handlers queue raw bytes; the shell decodes them and sleeps with
+**Under the hood:** interrupts are enabled (IDT + remapped PIC; IRQ0 timer,
+IRQ1 keyboard, IRQ3 COM2 AI bridge, IRQ4 COM1 serial). Handlers queue raw bytes; the shell decodes them and sleeps with
 `hlt` while waiting, so the VM uses no CPU when idle. CPU exceptions print a
 register dump instead of silently rebooting.
 
 ### Running in virt-manager (libvirt)
 
-Create a VM from `build/beecoders.iso` (OS type: "Generic" / other, BIOS firmware,
+**`vm1` boots from the A/B boot disk** (phase 8): `build/beecoders.img` is its
+first disk, with the kernels and its files (BeeFS). New kernels go to it with
+`make deploy`, not `make run-vm`. To set up a VM like that:
+`make bootdisk`, then `python3 tools/deploy.py setup-vm [--vm NAME]` (backs up
+the old config; the old disk is detached, not deleted). The VM also needs the
+COM2 port for the AI bridge (phase 6).
+
+**From the ISO** (a new VM, or without the boot disk): create a VM from `build/beecoders.iso` (OS type: "Generic" / other, BIOS firmware,
 i440fx or Q35). The virt-manager **Shut Down** and **Reboot** buttons work: they
 press the ACPI power button, which BeeCodersOs handles by powering off (libvirt
 then restarts it for Reboot). `shutdown` and `reboot` work inside the VM too.
@@ -186,15 +259,17 @@ then restarts it for Reboot). `shutdown` and `reboot` work inside the VM too.
 - With UEFI firmware the screen stays blank (serial only) and the power button is
   not detected yet (`shutdown`/`reboot` commands still work).
 - `make iso` replaces the ISO file, so rebuilding works while libvirt has it attached;
-  restart the VM to pick up the new build.
+  `make run-vm` restarts an ISO-booted VM with the new build.
 
 ## Phase 4 — Automated tests ✅
 
 One command checks the whole OS without anyone watching a screen:
 
 ```sh
-make check    # BeeFS unit tests + kernel self-tests + shell scenarios + ISO boots
+make check    # unit tests (BeeFS, host tools) + kernel self-tests + shell scenarios + ISO boots
 ```
+
+Example output (from when this phase was added; there are more tests now):
 
 ```
 Running 7 boot tests (KVM)
@@ -226,6 +301,14 @@ person or an AI (this is the first step of `Docs/self-improving-os-plan.html`).
   remember me                    # exact output line
   ~ ^remember                    # or a regex; `!~ REGEX` = must not appear
   ```
+
+  Later phases added `@ai` / `@ai-offline` (COM2 with or without beehive),
+  `$! CMD` (the command must crash the kernel), `$^C CMD` (Ctrl+C after 1 s),
+  `@signal REGEX` (beehive must have received it), and `@bootdisk` /
+  `@deploy` / `@deploy-crash` (A/B slots). The full format is at the top of
+  `tests/boot_test.py`.
+- **Host tool tests:** `tests/test_beehive.py`, `tests/test_evolve.py` and
+  `tests/test_bootdisk.py` (Python `unittest`, no LLM or login needed).
 - **ISO boots:** the Limine ISO boots under BIOS and UEFI (OVMF), answers
   `version` and powers off cleanly.
 
@@ -253,8 +336,9 @@ found and fixed (by a person or, later, an AI):
   `history.jsonl` and offers `explain`. Safety rule: the report is only written
   when no filesystem operation was in progress, so a crash can't corrupt files.
   `crash` crashes the kernel on purpose (to test this).
-- **Host report:** `make report` (or `tools/bee_report.py --disk build/disk.img --beehive`)
-  reads the disk (VM off) and beehive's signals:
+- **Host report:** `make report` reads the VM's disk (`build/beecoders.img` if
+  it exists, else `build/disk.img`; the VM should be off) and beehive's
+  signals. By hand: `tools/bee_report.py --disk IMAGE --beehive [--json]`.
 
 ```
 == Crashes (1) ==================================================
@@ -335,17 +419,21 @@ approving them:
 make evolve                                   # harvest + work on the top item
 python3 tools/evolve/evolve.py status         # the backlog
 python3 tools/evolve/evolve.py review 1       # report + diff
-python3 tools/evolve/evolve.py approve 1 --deploy   # merge, bump the build, rebuild ISO, restart vm1
+python3 tools/evolve/evolve.py approve 1 --deploy   # merge, bump the build, rebuild ISO, deploy to vm1
 python3 tools/evolve/evolve.py reject 1 --reason "..." [--retry]
 ```
 
-1. **Harvest:** wishes, feedback, missing commands and crash reports are read
-   from beehive (live, `~/.local/state/beehive`) and/or a BeeFS disk
-   (`--disk build/disk.img`). Signals already seen are skipped.
+1. **Harvest:** wishes, feedback, missing commands and crash reports (including
+   failed A/B trials) are read from beehive (live, `~/.local/state/beehive`)
+   and/or a disk (`--disk build/beecoders.img`, VM off). Signals already seen
+   are skipped.
 2. **Triage:** Claude Code (no tools, structured JSON output) groups them into
    small, testable backlog items with priorities and acceptance criteria:
    `Docs/backlog/NNN-title.md`. `--triage rules` does it without an LLM.
-3. **Implement:** the top open item goes to a Claude Code agent in its own git
+3. **Implement:** first a pre-flight check: the agent only sees committed code,
+   so evolve refuses to start while `CLAUDE.md` or the `check` target are not
+   committed, or other changes are uncommitted (`--allow-dirty` overrides the
+   latter). Then the top open item goes to a Claude Code agent in its own git
    worktree (`.evolve/worktrees/NNN`, branch `evolve/NNN-...`). The agent
    reads `CLAUDE.md`, may only edit files and run `make` / `cargo` / the test
    scripts (`--permission-mode dontAsk` + an allow-list), and is told that
@@ -357,11 +445,13 @@ python3 tools/evolve/evolve.py reject 1 --reason "..." [--retry]
    size change, agent summary, `make check` output.
 5. **Approve:** you read the review and the diff, then `approve` merges into
    `main`, builds the new ISO (the build number goes up), marks the item done
-   with that build, and commits the backlog. `--deploy` restarts `vm1` with
-   it. A review that needs attention can only be approved with `--force`.
+   with that build, and commits the backlog. `--deploy` runs `make deploy`:
+   the new kernel is tried in `vm1`'s spare slot and rolled back if it fails
+   (phase 8). A review that needs attention can only be approved with `--force`.
 
 Tests: `tests/test_evolve.py` runs the whole loop in a throwaway repository
-with a fake agent (merging, the gates, refusing to merge into a dirty tree).
+with a fake agent (merging, the gates, the pre-flight check, refusing to merge
+into a dirty tree).
 
 ## Phase 8 — A/B kernels with automatic rollback ✅
 
@@ -420,11 +510,16 @@ state changes and the watchdog's verdicts.
 
 ## Versioning
 
-`OS_VERSION` in the `Makefile` is the release (now **0.0.2**). `BUILD_NUMBER`
-counts builds within it; when you raise `OS_VERSION`, reset `BUILD_NUMBER` to 1.
+`OS_VERSION` at the top of the `Makefile` is the release, set by hand (now
+**0.0.2**). `BUILD_NUMBER` goes up by one on every build that has changed
+sources; when you raise `OS_VERSION`, reset `BUILD_NUMBER` to 1. Both show on
+the boot banner and with `version`, e.g. `BeeCodersOs 0.0.2 b6`. A/B slots and
+backlog items record the build they shipped in.
 
 ## Next phases
 
 Following `Docs/self-improving-os-plan.html`: phase 9, AI-written apps in a
-WebAssembly sandbox (new commands without touching the kernel). Other candidates: framebuffer console (on-screen text on UEFI), a text editor, tab completion, more layouts
-(Belgian Comma, French, …), physical memory manager / paging, user programs.
+WebAssembly sandbox (new commands without touching the kernel). Other
+candidates: framebuffer console (on-screen text on UEFI), a text editor, tab
+completion, more layouts (Belgian Comma, French, …), physical memory manager /
+paging, user programs.
