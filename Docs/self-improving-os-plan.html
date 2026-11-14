@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Self-Improving BeeCodersOs</title>
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #ffffff; --surface-2: #f3f1ec; --text: #1d1b16; --muted: #6b665c;
+  --border: #e3dfd6; --accent: #b7791f; --accent-soft: #fdf3e1; --ok: #2f855a; --ok-soft: #e6f4ec;
+  --warn: #c05621; --warn-soft: #fdecdf; --risk: #c53030; --risk-soft: #fde8e8; --code: #f3f1ec;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15140f; --surface: #1d1b16; --surface-2: #26241d; --text: #ece8de; --muted: #a39d8f;
+    --border: #36332a; --accent: #e9b04f; --accent-soft: #2e2617; --ok: #68d391; --ok-soft: #1a2b21;
+    --warn: #f6ad55; --warn-soft: #2f2216; --risk: #fc8181; --risk-soft: #301c1c; --code: #26241d;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #15140f; --surface: #1d1b16; --surface-2: #26241d; --text: #ece8de; --muted: #a39d8f;
+  --border: #36332a; --accent: #e9b04f; --accent-soft: #2e2617; --ok: #68d391; --ok-soft: #1a2b21;
+  --warn: #f6ad55; --warn-soft: #2f2216; --risk: #fc8181; --risk-soft: #301c1c; --code: #26241d;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 920px; margin: 0 auto; padding: 48px 16px 96px; }
+h1 { font-size: 2.1rem; line-height: 1.2; margin: 0 0 8px; letter-spacing: -0.01em; }
+h2 { font-size: 1.45rem; margin: 56px 0 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+h3 { font-size: 1.1rem; margin: 28px 0 8px; }
+p, li { color: var(--text); }
+.lede { font-size: 1.12rem; color: var(--muted); margin: 0 0 24px; }
+.meta { font-size: .9rem; color: var(--muted); }
+code { font-family: ui-monospace, "JetBrains Mono", Menlo, monospace; font-size: .88em;
+  background: var(--code); padding: 1px 5px; border-radius: 4px; }
+pre { background: var(--code); padding: 14px 16px; border-radius: 8px; overflow-x: auto;
+  font-size: .85rem; line-height: 1.5; border: 1px solid var(--border); }
+pre code { background: none; padding: 0; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; margin: 16px 0; }
+.callout { background: var(--accent-soft); border-left: 4px solid var(--accent); border-radius: 6px; padding: 14px 18px; margin: 20px 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.phase { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px 22px; margin: 18px 0; }
+.phase h3 { margin-top: 0; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.tag { font-size: .75rem; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.t-now { background: var(--ok-soft); color: var(--ok); }
+.t-next { background: var(--accent-soft); color: var(--accent); }
+.t-later { background: var(--surface-2); color: var(--muted); }
+.done { font-size: .92rem; background: var(--surface-2); border-radius: 6px; padding: 10px 14px; margin-top: 12px; }
+.done b { color: var(--ok); }
+table { width: 100%; border-collapse: collapse; font-size: .93rem; margin: 12px 0; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: .82rem; text-transform: uppercase; letter-spacing: .04em; }
+.table-wrap { overflow-x: auto; }
+.lvl { font-weight: 700; white-space: nowrap; }
+.l0 { color: var(--ok); } .l1 { color: var(--ok); } .l2 { color: var(--warn); } .l3 { color: var(--risk); }
+.diagram { width: 100%; height: auto; display: block; margin: 8px 0; }
+.diagram text { font-family: system-ui, sans-serif; fill: var(--text); }
+.diagram .muted { fill: var(--muted); }
+.diagram .box { fill: var(--surface); stroke: var(--border); stroke-width: 1.5; }
+.diagram .box-a { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+.diagram .zone { fill: var(--surface-2); stroke: var(--border); stroke-dasharray: 5 4; }
+.diagram .line { stroke: var(--muted); stroke-width: 1.6; fill: none; }
+.diagram .line-a { stroke: var(--accent); stroke-width: 2; fill: none; }
+.loop { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 14px 0; }
+.loop span.step { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; font-weight: 600; font-size: .92rem; }
+.loop span.arrow { color: var(--muted); }
+ol.steps li { margin-bottom: 6px; }
+nav.toc { font-size: .93rem; }
+nav.toc a { color: var(--accent); text-decoration: none; }
+nav.toc a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Making BeeCodersOs self-improving</h1>
+<p class="lede">A phased plan to turn BeeCodersOs into an OS that notices what it is missing, asks an AI to fix it, tests the change on itself and keeps it only when it works.</p>
+<p class="meta">Plan v1 · 14 November 2026 · Starting point: BeeCodersOs 0.0.1, phases 1–3 done (kernel, BeeFS, BeeShell)</p>
+
+<nav class="toc card">
+<b>Contents</b>
+<ol>
+<li><a href="#idea">The idea in one loop</a></li>
+<li><a href="#reality">Where we are, and what that means</a></li>
+<li><a href="#arch">Target architecture</a></li>
+<li><a href="#phases">Phases 4–10</a></li>
+<li><a href="#autonomy">Autonomy levels and guardrails</a></li>
+<li><a href="#metrics">How we know it is improving</a></li>
+<li><a href="#start">First steps</a></li>
+</ol>
+</nav>
+
+<h2 id="idea">1. The idea in one loop</h2>
+<p>"Self-improving" here means a closed loop that runs again and again, with every step automated and checked:</p>
+<div class="loop">
+  <span class="step">Observe</span><span class="arrow">→</span>
+  <span class="step">Propose</span><span class="arrow">→</span>
+  <span class="step">Build</span><span class="arrow">→</span>
+  <span class="step">Test</span><span class="arrow">→</span>
+  <span class="step">Deploy</span><span class="arrow">→</span>
+  <span class="step">Verify</span><span class="arrow">→</span>
+  <span class="step">Keep or roll back</span><span class="arrow">↺</span>
+</div>
+<ul>
+<li><b>Observe:</b> the OS records crashes, slow paths, commands that don't exist yet and wishes typed by the user.</li>
+<li><b>Propose:</b> an LLM turns those signals into small, concrete code changes.</li>
+<li><b>Build and test:</b> the change is compiled and booted in a throwaway QEMU, where automated tests run against it.</li>
+<li><b>Deploy and verify:</b> the new kernel boots in a spare slot. If it doesn't come up healthy, the OS goes back to the last good kernel by itself.</li>
+</ul>
+<div class="callout">
+<b>Key principle:</b> the AI is only as safe as the tests and the rollback. Phases 4 and 8 (tests and A/B boot) matter more than the AI parts. Without them, "self-improving" turns into "self-breaking".
+</div>
+
+<h2 id="reality">2. Where we are, and what that means</h2>
+<div class="grid">
+<div class="card"><b>What we have</b>
+<ul>
+<li>64-bit Rust kernel, ~4,200 lines</li>
+<li>BeeFS on an ATA disk, with a host tool (<code>beefs-tool</code>)</li>
+<li>BeeShell with history, layouts, file commands</li>
+<li>Serial console (COM1) and ACPI power</li>
+<li><code>/system/boot_count</code> and <code>boot.log</code></li>
+<li><code>make iso</code>, <code>make run-vm</code>, BeeFS unit tests</li>
+</ul></div>
+<div class="card"><b>What we don't have yet</b>
+<ul>
+<li>Version control (the project is not a repository)</li>
+<li>Automated boot tests (pass/fail without a human)</li>
+<li>Timer or clock, so no timestamps</li>
+<li>Network stack, processes, user programs</li>
+<li>Enough RAM or compute to run an LLM in the guest</li>
+</ul></div>
+</div>
+<p><b>Consequence:</b> the LLM runs <b>on the host</b> at first. The OS talks to it over a serial link, which needs no network stack. Over time the boundary moves inward: the OS first reports, then asks, then requests changes, and finally installs and checks them itself.</p>
+
+<h2 id="arch">3. Target architecture</h2>
+<div class="card">
+<svg class="diagram" viewBox="0 0 860 430" role="img" aria-label="Guest OS talks over COM2 to the host daemon beehive, which uses an LLM and the evolve pipeline to build, test and deliver new kernels back to the guest">
+  <rect class="zone" x="10" y="20" width="330" height="390" rx="12"/>
+  <text x="26" y="46" font-weight="700" font-size="15">BeeCodersOs (guest VM)</text>
+  <rect class="box" x="30" y="64" width="290" height="50" rx="8"/>
+  <text x="44" y="86" font-weight="600" font-size="13">BeeShell</text>
+  <text x="44" y="104" class="muted" font-size="12">ask · wish · feedback · improve</text>
+  <rect class="box" x="30" y="126" width="290" height="50" rx="8"/>
+  <text x="44" y="148" font-weight="600" font-size="13">Telemetry</text>
+  <text x="44" y="166" class="muted" font-size="12">/system/log/*.jsonl · panics · unknown cmds</text>
+  <rect class="box" x="30" y="188" width="290" height="50" rx="8"/>
+  <text x="44" y="210" font-weight="600" font-size="13">WASM app sandbox</text>
+  <text x="44" y="228" class="muted" font-size="12">AI-written commands in /apps</text>
+  <rect class="box" x="30" y="250" width="290" height="50" rx="8"/>
+  <text x="44" y="272" font-weight="600" font-size="13">A/B kernel slots + health check</text>
+  <text x="44" y="290" class="muted" font-size="12">auto-rollback to last good kernel</text>
+  <rect class="box-a" x="30" y="330" width="290" height="56" rx="8"/>
+  <text x="44" y="354" font-weight="700" font-size="13">AI bridge driver (COM2)</text>
+  <text x="44" y="372" class="muted" font-size="12">line-based JSON messages</text>
+
+  <rect class="zone" x="520" y="20" width="330" height="390" rx="12"/>
+  <text x="536" y="46" font-weight="700" font-size="15">Host (your Omarchy PC)</text>
+  <rect class="box-a" x="540" y="330" width="290" height="56" rx="8"/>
+  <text x="554" y="354" font-weight="700" font-size="13">beehive daemon</text>
+  <text x="554" y="372" class="muted" font-size="12">holds API key, budgets, audit log</text>
+  <rect class="box" x="540" y="64" width="290" height="50" rx="8"/>
+  <text x="554" y="86" font-weight="600" font-size="13">LLM</text>
+  <text x="554" y="104" class="muted" font-size="12">Claude API (or a local model)</text>
+  <rect class="box" x="540" y="126" width="290" height="112" rx="8"/>
+  <text x="554" y="148" font-weight="600" font-size="13">evolve pipeline</text>
+  <text x="554" y="168" class="muted" font-size="12">1. triage signals → backlog</text>
+  <text x="554" y="186" class="muted" font-size="12">2. coding agent in a branch/worktree</text>
+  <text x="554" y="204" class="muted" font-size="12">3. make test + make check (QEMU)</text>
+  <text x="554" y="222" class="muted" font-size="12">4. approval gate → merge → ISO</text>
+  <rect class="box" x="540" y="250" width="290" height="50" rx="8"/>
+  <text x="554" y="272" font-weight="600" font-size="13">Source repo</text>
+  <text x="554" y="290" class="muted" font-size="12">git or BeeGit · every change reviewable</text>
+
+  <path class="line-a" d="M320 350 L540 350" marker-end="url(#ah)"/>
+  <path class="line-a" d="M540 368 L320 368" marker-end="url(#ah)"/>
+  <text x="430" y="340" text-anchor="middle" font-size="12" font-weight="600">signals, questions, wishes</text>
+  <text x="430" y="390" text-anchor="middle" font-size="12" font-weight="600">answers, apps, new kernels</text>
+  <path class="line" d="M685 330 L685 300" marker-end="url(#am)"/>
+  <path class="line" d="M685 250 L685 238" marker-end="url(#am)"/>
+  <path class="line" d="M685 126 L685 114" marker-end="url(#am)"/>
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="var(--accent)"/></marker>
+    <marker id="am" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="var(--muted)"/></marker>
+  </defs>
+</svg>
+</div>
+<p><b>Why a serial bridge instead of networking:</b> COM2 (or virtio-serial later) is about 200 lines of driver code. It is easy to test and works in QEMU and libvirt today. The API key stays on the host, so the guest never holds secrets. A real TCP/IP stack can come later (phase 10) for real hardware.</p>
+
+<h2 id="phases">4. Phases</h2>
+<p>Numbering continues from the README (phases 1–3 are done). Each phase ends with a clear test for "done".</p>
+
+<div class="phase">
+<h3>Phase 4 — Safety net: version control and automated tests <span class="tag t-now">Start here</span></h3>
+<p>An AI can't improve what can't be checked automatically, so this comes first.</p>
+<ul>
+<li><b>Version control:</b> put the project in git (or BeeGit) with a protected <code>main</code>. Every AI change becomes a branch and a reviewable diff.</li>
+<li><b>Exit codes from QEMU:</b> add QEMU's <code>isa-debug-exit</code> device and a kernel <code>qemu_exit(code)</code>. A test run can then end with a pass/fail code instead of a window someone has to look at.</li>
+<li><b>Kernel test mode:</b> a <code>selftest</code> build/boot flag that runs in-kernel tests (allocator, BeeFS on RAM disk, keyboard decoder, ring buffer), prints results on serial and exits.</li>
+<li><b>Shell scenario tests:</b> a host-side runner (Rust or Python <code>pexpect</code>) that boots <code>make run-serial</code>, types commands and compares the output with expected text, for example <code>mkdir a; cd a; pwd → /a</code>.</li>
+<li><b><code>make check</code>:</b> one command that runs unit tests, the selftest boot, the shell scenarios, a BIOS and a UEFI ISO boot, all with timeouts.</li>
+<li><b>Agent instructions:</b> a <code>CLAUDE.md</code>/<code>AGENTS.md</code> with the build commands, coding rules (<code>no_std</code>, no new dependencies without approval) and a list of protected files.</li>
+</ul>
+<div class="done"><b>Done when:</b> <code>make check</code> runs headless in under 2 minutes, returns 0 or non-zero, and catches a deliberately broken kernel.</div>
+</div>
+
+<div class="phase">
+<h3>Phase 5 — The OS observes itself <span class="tag t-now">Soon</span></h3>
+<ul>
+<li><b>Time:</b> PIT/HPET timer and RTC clock. This gives timestamps, plus <code>date</code> and <code>uptime</code>.</li>
+<li><b>Structured event log:</b> <code>/system/log/events.jsonl</code> on BeeFS, recording boot time, memory use, mount results, and the commands run with their exit status.</li>
+<li><b>Crash records:</b> the panic and exception handlers write a crash report (registers, message, build number) to a reserved area, which is saved to BeeFS on the next boot.</li>
+<li><b>Missed-command log:</b> every <code>command not found</code> is recorded. This is the best signal for what users expect the OS to do.</li>
+<li><b>Shell commands:</b> <code>feedback "the ls output is hard to read"</code> and <code>wish "a text editor"</code> write to <code>/system/inbox/</code>.</li>
+<li><b>Host harvest:</b> <code>beefs-tool</code> reads <code>/system/log</code> and <code>/system/inbox</code> from <code>disk.img</code> while the VM is off. This works before the bridge exists.</li>
+</ul>
+<div class="done"><b>Done when:</b> after a session in the VM, one host command prints a summary of the crashes, missed commands, wishes and boot-time trend.</div>
+</div>
+
+<div class="phase">
+<h3>Phase 6 — AI bridge: the OS can talk to an LLM <span class="tag t-next">Next</span></h3>
+<ul>
+<li><b>Guest side:</b> a COM2 driver (reusing the 16550 code) and a small protocol of one JSON object per line: <code>{"id":7,"type":"ask","text":"..."}</code>. It gets replies with the same <code>id</code>, streamed in chunks, plus timeouts and a clear "AI offline" message.</li>
+<li><b>Host side: the <code>beehive</code> daemon</b> (Rust, using tokio) attaches to the VM's second serial port through a socket chardev in QEMU or libvirt. It calls the LLM, enforces token and cost budgets, and logs every exchange.</li>
+<li><b>First AI features in the shell:</b>
+  <ul>
+  <li><code>ask "how do I copy a folder?"</code> answers using the OS's own <code>help</code> text and README as context.</li>
+  <li><code>explain</code> explains the last error or crash report.</li>
+  <li>Missed-command suggestions: <i>"<code>dir</code> not found, did you mean <code>ls</code>?"</i></li>
+  </ul></li>
+<li><b>Model choice:</b> a fast, cheap model (Claude Haiku 5.5) for <code>ask</code> and triage, and a strong model (Claude Opus 5.5) for code changes. A local model through the same daemon is possible when working offline.</li>
+</ul>
+<div class="done"><b>Done when:</b> in virt-manager, <code>ask</code> answers within a few seconds, and stopping <code>beehive</code> leaves the OS fully usable.</div>
+</div>
+
+<div class="phase">
+<h3>Phase 7 — The improvement loop (host-driven, human-approved) <span class="tag t-next">Next</span></h3>
+<p>This is where the OS starts to improve itself. A host-side <code>evolve</code> pipeline:</p>
+<ol class="steps">
+<li><b>Triage:</b> the LLM groups the harvested signals (crashes, missed commands, wishes) into a ranked backlog in <code>Docs/backlog/</code>, with one small item per file.</li>
+<li><b>Implement:</b> a coding agent (Claude Code in headless mode, or the Agent SDK) takes the top item. It works in its own branch or worktree, must add or update tests, and keeps the diff small (for example, at most ~300 lines changed).</li>
+<li><b>Verify:</b> <code>make check</code> must pass. Then the pipeline re-boots and replays the scenario that produced the signal. For example, if the user typed <code>date</code>, the test now expects a date.</li>
+<li><b>Review:</b> you get a short report with the diff, test results, binary size and boot-time delta, and you approve or reject.</li>
+<li><b>Ship:</b> merge, bump <code>BUILD_NUMBER</code>, <code>make iso</code>, <code>make run-vm</code>. The item is marked done and linked to the signal that caused it.</li>
+</ol>
+<p>Crash reports go first: a reproducible panic plus a regression test is the safest kind of AI fix.</p>
+<div class="done"><b>Done when:</b> a wish typed in the VM (for example <code>wish "uptime command"</code>) turns into a tested, merged feature, and the only human step is the approval click.</div>
+</div>
+
+<div class="phase">
+<h3>Phase 8 — Safe deployment inside the OS: A/B kernels and auto-rollback <span class="tag t-later">Later</span></h3>
+<ul>
+<li><b>Two kernel slots</b> on the boot disk (<code>/boot/kernel-a.elf</code>, <code>/boot/kernel-b.elf</code>) and a Limine menu that boots the slot named in a small state file. This needs the kernel and Limine on the BeeFS disk, or on a small FAT boot partition next to it.</li>
+<li><b>Trial boots:</b> a new kernel gets e.g. 3 tries. The existing <code>boot_count</code> idea becomes a <code>tries_left</code> counter.</li>
+<li><b>Health check:</b> the kernel boots, runs a short <code>selftest</code>, mounts BeeFS and reaches the shell. Only then does it mark itself <code>good</code>. Otherwise the next boot falls back to the last good slot and files a crash report.</li>
+<li><b>Data safety:</b> kernels may only change the BeeFS on-disk format with a versioned migration that is tested on a copy of the disk first. Disks are still never auto-formatted.</li>
+</ul>
+<div class="done"><b>Done when:</b> deploying a kernel that panics at boot ends, without any human help, with the old kernel running and a crash report in the inbox.</div>
+</div>
+
+<div class="phase">
+<h3>Phase 9 — AI-written apps without touching the kernel <span class="tag t-later">Later</span></h3>
+<p>Most improvements don't need kernel changes. A sandbox lets the AI add features at low risk:</p>
+<ul>
+<li><b>WASM runtime</b> in the kernel (<code>wasmi</code> works in <code>no_std</code>). Programs are <code>.wasm</code> files in <code>/apps</code>, and the shell runs them like built-in commands.</li>
+<li><b>Capability-based host API:</b> print, read a line, read and write files under <code>/home</code> only, and time. Apps get no direct hardware access, so a buggy app can't crash the kernel.</li>
+<li><b>Fast loop:</b> the AI writes the app, it is compiled to WASM on the host, sent over the bridge into <code>/apps</code>, and is usable straight away with no reboot. Example apps: a text editor, <code>grep</code>, <code>calc</code>, small games.</li>
+<li>This is also where <b>more autonomy</b> is safe: apps can be installed without approval, because removing one is just <code>rm</code>.</li>
+</ul>
+<div class="done"><b>Done when:</b> <code>wish "a calculator"</code> leads to a working <code>calc</code> command within minutes, without a reboot.</div>
+</div>
+
+<div class="phase">
+<h3>Phase 10 — The OS drives its own improvement <span class="tag t-later">Long term</span></h3>
+<ul>
+<li><b><code>improve</code> command:</b> the user describes a change inside the OS. The OS sends the request over the bridge, follows progress, receives the new kernel or app, installs it into slot B, reboots, checks itself and reports back.</li>
+<li><b>Scheduled self-review:</b> when idle, the OS sends its weekly statistics and asks for a backlog update.</li>
+<li><b>Networking:</b> a virtio-net driver plus <code>smoltcp</code>, so the bridge also works on real hardware. TLS is handled by the host or a proxy at first.</li>
+<li><b>Running a model on the device:</b> this is a long-term research goal. It needs paging, SMP, SIMD (AVX2) support and far more RAM. A tiny model (well under 1B parameters) could handle simple tasks like routing or completion. Real coding stays with a larger model elsewhere.</li>
+</ul>
+</div>
+
+<h2 id="autonomy">5. Autonomy levels and guardrails</h2>
+<p>Each kind of change gets the most autonomy its rollback story allows. A level only goes up after the one below has run cleanly for a while.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Level</th><th>What the AI may do</th><th>Applies to</th><th>Approval</th></tr></thead>
+<tbody>
+<tr><td class="lvl l0">L0 Advise</td><td>Answer questions, explain errors, propose backlog items</td><td>Everything</td><td>None needed</td></tr>
+<tr><td class="lvl l1">L1 Auto-apply</td><td>Install or update WASM apps, docs, help text, tests</td><td><code>/apps</code>, <code>Docs/</code>, test files</td><td>Automatic, logged, easy to undo</td></tr>
+<tr><td class="lvl l2">L2 Gated</td><td>Change kernel code: shell, drivers, commands</td><td><code>kernel/src</code> (most files)</td><td>Human approves the diff (later: automatic if tests and A/B health pass)</td></tr>
+<tr><td class="lvl l3">L3 Protected</td><td>Only propose; a human writes or approves each line</td><td><code>boot.s</code>, <code>interrupts</code>, <code>allocator</code>, BeeFS on-disk format, <code>acpi</code>/<code>power</code>, the guardrails themselves</td><td>Always human</td></tr>
+</tbody>
+</table>
+</div>
+<h3>Hard rules</h3>
+<ul>
+<li><b>The AI never changes its own judge:</b> the test runner, <code>make check</code>, the guardrail config and this list are L3.</li>
+<li><b>No secrets in the guest:</b> API keys live only in <code>beehive</code> on the host.</li>
+<li><b>Budgets:</b> per-cycle and per-day limits on tokens, cost and number of attempts. After 3 failed attempts on an item, it goes back to a human.</li>
+<li><b>Small steps:</b> one backlog item per change, and diffs above a set size are rejected automatically.</li>
+<li><b>Everything is traceable:</b> each change links to the signal that caused it, the prompt, the model used, the test results and who approved it.</li>
+<li><b>Kill switch:</b> one setting (<code>/system/ai = off</code>, or stopping <code>beehive</code>) disables all AI actions. The OS must then still work normally.</li>
+<li><b>User data is sacred:</b> no automated change may delete or reformat anything outside <code>/apps</code> or a temporary directory.</li>
+</ul>
+
+<h2 id="metrics">6. How we know it is improving</h2>
+<p>"Self-improving" needs numbers that go the right way. The OS reports them through telemetry, and the pipeline tracks them per build:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Metric</th><th>Direction</th><th>Source</th></tr></thead>
+<tbody>
+<tr><td>Panics / exceptions per 100 boots</td><td>↓</td><td>Crash records</td></tr>
+<tr><td>Missed-command rate (not found ÷ all commands)</td><td>↓</td><td>Shell log</td></tr>
+<tr><td>Open wishes and their median time to delivery</td><td>↓</td><td><code>/system/inbox</code> + backlog</td></tr>
+<tr><td>Test count and <code>make check</code> pass rate</td><td>↑</td><td>Pipeline</td></tr>
+<tr><td>Boot time to shell</td><td>↓ (or stable)</td><td>Event log</td></tr>
+<tr><td>Kernel binary size and heap use at idle</td><td>Stable</td><td>Build + <code>mem</code></td></tr>
+<tr><td>AI change acceptance rate and rollbacks</td><td>Acceptance ↑, rollbacks ↓</td><td>Pipeline audit log</td></tr>
+<tr><td>Cost per merged improvement</td><td>↓</td><td><code>beehive</code> budget log</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="start">7. First steps</h2>
+<div class="card">
+<ol class="steps">
+<li>Put the project under version control (git or BeeGit) and add <code>CLAUDE.md</code> with build and test rules.</li>
+<li>Add <code>isa-debug-exit</code> and a <code>qemu_exit()</code> function to the kernel.</li>
+<li>Write the first shell scenario test (boot, <code>echo hi</code>, expect <code>hi</code>, <code>shutdown</code>) and a <code>make check</code> target.</li>
+<li>Add the PIT timer and RTC, then <code>date</code> and <code>uptime</code>, the first timestamps.</li>
+<li>Log missed commands and add <code>wish</code> / <code>feedback</code>, written to <code>/system/inbox</code>.</li>
+<li>Add a <code>beefs-tool</code> summary command to harvest the logs on the host.</li>
+<li>Run the first improvement cycle by hand with Claude Code. Use it to shape the automated <code>evolve</code> pipeline.</li>
+</ol>
+</div>
+<p class="meta">Open questions for later: git or BeeGit as the source of truth · Claude API only, or a local model too · how much autonomy kernel changes get after A/B rollback works.</p>
+
+</main>
+</body>
+</html>

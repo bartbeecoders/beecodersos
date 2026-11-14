@@ -1,0 +1,284 @@
+//! PS/2 keyboard driver (i8042 controller, scancode set 1, IRQ1).
+//!
+//! The interrupt handler only queues raw scancodes; decoding (modifiers,
+//! layouts, dead keys) happens in the main flow via `poll()`.
+
+use crate::input::Key;
+use crate::layouts::{compose, Layout, Mapped};
+use crate::port::{inb, outb};
+use crate::ring::{Global, Ring};
+
+const DATA: u16 = 0x60;
+const STATUS: u16 = 0x64; // read
+const COMMAND: u16 = 0x64; // write
+
+const ST_OUTPUT_FULL: u8 = 0x01;
+const ST_INPUT_FULL: u8 = 0x02;
+const ST_AUX_DATA: u8 = 0x20; // byte came from the mouse port
+
+static SCANCODES: Ring<128> = Ring::new();
+static STATE: Global<Decoder> = Global::new(Decoder::new());
+
+/// Configure the controller (IRQ1 on, scancode translation on) and set LEDs.
+pub fn init() {
+    unsafe {
+        while inb(STATUS) & ST_OUTPUT_FULL != 0 {
+            inb(DATA);
+        }
+        if write_cmd(0x20).is_some() {
+            if let Some(cfg) = read_data() {
+                let cfg = (cfg | 0x01 | 0x40) & !0x10; // IRQ1, translation, clock on
+                if write_cmd(0x60).is_some() {
+                    write_data(cfg);
+                }
+            }
+        }
+        write_cmd(0xAE); // enable first PS/2 port
+    }
+    STATE.get().update_leds();
+}
+
+pub fn set_layout(layout: Layout) {
+    let s = STATE.get();
+    s.layout = layout;
+    s.dead = None;
+}
+
+pub fn layout() -> Layout {
+    STATE.get().layout
+}
+
+/// Called from the IRQ1 handler.
+pub fn on_interrupt() {
+    unsafe {
+        let st = inb(STATUS);
+        if st & ST_OUTPUT_FULL != 0 {
+            let b = inb(DATA);
+            if st & ST_AUX_DATA == 0 {
+                SCANCODES.push(b);
+            }
+        }
+    }
+}
+
+pub fn pending() -> bool {
+    !SCANCODES.is_empty() || STATE.get().queued.is_some()
+}
+
+/// Decode queued scancodes into the next key event, if any.
+pub fn poll() -> Option<Key> {
+    let s = STATE.get();
+    if let Some(c) = s.queued.take() {
+        return Some(Key::Char(c));
+    }
+    while let Some(sc) = SCANCODES.pop() {
+        if let Some(k) = s.feed(sc) {
+            return Some(k);
+        }
+    }
+    None
+}
+
+// --- controller helpers (with timeouts so a missing controller can't hang us) ---
+
+unsafe fn wait_input_empty() -> Option<()> {
+    (0..100_000).find(|_| inb(STATUS) & ST_INPUT_FULL == 0).map(|_| ())
+}
+
+unsafe fn write_cmd(cmd: u8) -> Option<()> {
+    wait_input_empty()?;
+    outb(COMMAND, cmd);
+    Some(())
+}
+
+unsafe fn write_data(b: u8) -> Option<()> {
+    wait_input_empty()?;
+    outb(DATA, b);
+    Some(())
+}
+
+unsafe fn read_data() -> Option<u8> {
+    (0..100_000).find(|_| inb(STATUS) & ST_OUTPUT_FULL != 0).map(|_| inb(DATA))
+}
+
+// --- scancode decoder --------------------------------------------------------
+
+struct Decoder {
+    layout: Layout,
+    e0: bool,
+    e1: u8,
+    lshift: bool,
+    rshift: bool,
+    lctrl: bool,
+    rctrl: bool,
+    alt: bool,
+    altgr: bool,
+    caps: bool,
+    num: bool,
+    dead: Option<char>,
+    queued: Option<char>,
+}
+
+impl Decoder {
+    const fn new() -> Self {
+        Decoder {
+            layout: Layout::BelgianPeriod,
+            e0: false,
+            e1: 0,
+            lshift: false,
+            rshift: false,
+            lctrl: false,
+            rctrl: false,
+            alt: false,
+            altgr: false,
+            caps: false,
+            num: true,
+            dead: None,
+            queued: None,
+        }
+    }
+
+    fn update_leds(&self) {
+        let leds = (self.num as u8) << 1 | (self.caps as u8) << 2;
+        unsafe {
+            // The keyboard's ACK bytes (0xFA) are ignored by `feed`.
+            if write_data(0xED).is_some() {
+                write_data(leds);
+            }
+        }
+    }
+
+    fn feed(&mut self, sc: u8) -> Option<Key> {
+        match sc {
+            0xE0 => {
+                self.e0 = true;
+                return None;
+            }
+            0xE1 => {
+                self.e1 = 2; // Pause key: skip the next two bytes
+                return None;
+            }
+            0x00 | 0xEE | 0xFA | 0xFE | 0xFF if !self.e0 => return None, // ACK, echo, errors
+            _ => {}
+        }
+        if self.e1 > 0 {
+            self.e1 -= 1;
+            return None;
+        }
+        let e0 = core::mem::take(&mut self.e0);
+        let pressed = sc & 0x80 == 0;
+        let code = sc & 0x7F;
+
+        // Modifier keys track both press and release.
+        match (e0, code) {
+            (false, 0x2A) => self.lshift = pressed,
+            (false, 0x36) => self.rshift = pressed,
+            (false, 0x1D) => self.lctrl = pressed,
+            (true, 0x1D) => self.rctrl = pressed,
+            (false, 0x38) => self.alt = pressed,
+            (true, 0x38) => self.altgr = pressed,
+            (true, 0x2A) | (true, 0x36) => {} // fake shifts around PrtSc etc.
+            _ if pressed => return self.press(e0, code),
+            _ => {}
+        }
+        None
+    }
+
+    fn press(&mut self, e0: bool, code: u8) -> Option<Key> {
+        let nav = |code| match code {
+            0x47 => Some(Key::Home),
+            0x48 => Some(Key::Up),
+            0x49 => Some(Key::PageUp),
+            0x4B => Some(Key::Left),
+            0x4D => Some(Key::Right),
+            0x4F => Some(Key::End),
+            0x50 => Some(Key::Down),
+            0x51 => Some(Key::PageDown),
+            0x52 => Some(Key::Insert),
+            0x53 => Some(Key::Delete),
+            _ => None,
+        };
+        if e0 {
+            return match code {
+                0x1C => Some(Key::Enter),       // keypad Enter
+                0x35 => self.char_key('/'),     // keypad /
+                _ => nav(code),
+            };
+        }
+        match code {
+            0x01 => Some(Key::Escape),
+            0x0E => Some(Key::Backspace),
+            0x0F => Some(Key::Tab),
+            0x1C => Some(Key::Enter),
+            0x3A => {
+                self.caps = !self.caps;
+                self.update_leds();
+                None
+            }
+            0x45 => {
+                self.num = !self.num;
+                self.update_leds();
+                None
+            }
+            0x37 => self.char_key('*'),
+            0x4A => self.char_key('-'),
+            0x4E => self.char_key('+'),
+            0x47..=0x53 => {
+                if !self.num || self.shift() {
+                    return nav(code);
+                }
+                let c = match code {
+                    0x47 => '7', 0x48 => '8', 0x49 => '9',
+                    0x4B => '4', 0x4C => '5', 0x4D => '6',
+                    0x4F => '1', 0x50 => '2', 0x51 => '3',
+                    0x52 => '0', 0x53 => self.layout.keypad_decimal(),
+                    _ => return None,
+                };
+                self.char_key(c)
+            }
+            _ => {
+                let altgr = self.altgr || (self.ctrl() && self.alt); // Ctrl+Alt acts as AltGr
+                match self.layout.map(code, self.shift(), altgr)? {
+                    Mapped::Dead(accent) => self.dead_key(accent),
+                    Mapped::Char(mut c) => {
+                        if self.caps && c.is_ascii_alphabetic() {
+                            c = if c.is_ascii_uppercase() { c.to_ascii_lowercase() } else { c.to_ascii_uppercase() };
+                        }
+                        if self.ctrl() && !altgr && c.is_ascii_alphabetic() {
+                            self.dead = None;
+                            return Some(Key::Ctrl(c.to_ascii_lowercase()));
+                        }
+                        self.char_key(c)
+                    }
+                }
+            }
+        }
+    }
+
+    fn shift(&self) -> bool {
+        self.lshift || self.rshift
+    }
+
+    fn ctrl(&self) -> bool {
+        self.lctrl || self.rctrl
+    }
+
+    fn dead_key(&mut self, accent: char) -> Option<Key> {
+        // A second dead key releases the first one as a plain character.
+        let prev = self.dead.replace(accent);
+        prev.map(Key::Char)
+    }
+
+    /// Emit a character, combining it with a pending dead key.
+    fn char_key(&mut self, c: char) -> Option<Key> {
+        let Some(accent) = self.dead.take() else { return Some(Key::Char(c)) };
+        if let Some(composed) = compose(accent, c) {
+            return Some(Key::Char(composed));
+        }
+        if c == ' ' {
+            return Some(Key::Char(accent)); // dead key + space = the accent itself
+        }
+        self.queued = Some(c); // no combination: accent, then the character
+        Some(Key::Char(accent))
+    }
+}

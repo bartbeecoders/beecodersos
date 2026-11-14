@@ -1,0 +1,8 @@
+[package]
+name = "beefs-tool"
+version = "0.1.0"
+edition = "2021"
+description = "Create and edit BeeFS disk images from the host"
+
+[dependencies]
+beefs = { path = "../../beefs" }

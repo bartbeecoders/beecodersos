@@ -1,0 +1,7 @@
+[package]
+name = "beefs"
+version = "0.1.0"
+edition = "2021"
+description = "BeeFS - the BeeCodersOs filesystem (no_std + alloc)"
+
+[dependencies]

@@ -1,0 +1,118 @@
+//! Line editor: cursor movement, insert/delete and command history.
+
+use crate::console;
+use crate::input::{read_key, Key};
+use alloc::string::String;
+use alloc::vec::Vec;
+
+const MAX_LINE: usize = 512;
+const MAX_HISTORY: usize = 64;
+
+pub struct Editor {
+    history: Vec<String>,
+}
+
+pub enum Line {
+    Text(String),
+    /// Ctrl+C: discard the line.
+    Cancelled,
+    /// Ctrl+L: the caller should clear the screen and prompt again.
+    ClearScreen,
+    /// The power button was pressed.
+    PowerButton,
+}
+
+impl Editor {
+    pub const fn new() -> Self {
+        Editor { history: Vec::new() }
+    }
+
+    pub fn history(&self) -> &[String] {
+        &self.history
+    }
+
+    /// Read one line. The prompt must already be printed.
+    pub fn read_line(&mut self) -> Line {
+        let mark = console::mark();
+        let mut buf: Vec<char> = Vec::new();
+        let mut cur = 0;
+        let mut hist_pos = self.history.len();
+        let mut draft: Vec<char> = Vec::new();
+
+        loop {
+            let (old_len, old_cur) = (buf.len(), cur);
+            let key = read_key();
+            let tail_edit = matches!(key, Key::Char(_) | Key::Backspace);
+            match key {
+                Key::Enter => {
+                    console::end_line(buf.len(), cur);
+                    let line: String = buf.iter().collect();
+                    if !line.trim().is_empty() && self.history.last() != Some(&line) {
+                        if self.history.len() == MAX_HISTORY {
+                            self.history.remove(0);
+                        }
+                        self.history.push(line.clone());
+                    }
+                    return Line::Text(line);
+                }
+                Key::Ctrl('c') => {
+                    console::end_line(buf.len(), cur);
+                    return Line::Cancelled;
+                }
+                Key::Ctrl('l') => return Line::ClearScreen,
+                Key::PowerButton => {
+                    console::end_line(buf.len(), cur);
+                    return Line::PowerButton;
+                }
+                Key::Char(c) if buf.len() < MAX_LINE => {
+                    buf.insert(cur, c);
+                    cur += 1;
+                }
+                Key::Tab if buf.len() + 4 <= MAX_LINE => {
+                    for _ in 0..4 {
+                        buf.insert(cur, ' ');
+                        cur += 1;
+                    }
+                }
+                Key::Backspace if cur > 0 => {
+                    cur -= 1;
+                    buf.remove(cur);
+                }
+                Key::Delete | Key::Ctrl('d') if cur < buf.len() => {
+                    buf.remove(cur);
+                }
+                Key::Left | Key::Ctrl('b') => cur = cur.saturating_sub(1),
+                Key::Right | Key::Ctrl('f') => cur = (cur + 1).min(buf.len()),
+                Key::Home | Key::Ctrl('a') => cur = 0,
+                Key::End | Key::Ctrl('e') => cur = buf.len(),
+                Key::Ctrl('u') => {
+                    buf.drain(..cur);
+                    cur = 0;
+                }
+                Key::Ctrl('k') => buf.truncate(cur),
+                Key::Escape => {
+                    buf.clear();
+                    cur = 0;
+                }
+                Key::Up if hist_pos > 0 => {
+                    if hist_pos == self.history.len() {
+                        draft = buf.clone();
+                    }
+                    hist_pos -= 1;
+                    buf = self.history[hist_pos].chars().collect();
+                    cur = buf.len();
+                }
+                Key::Down if hist_pos < self.history.len() => {
+                    hist_pos += 1;
+                    buf = match self.history.get(hist_pos) {
+                        Some(h) => h.chars().collect(),
+                        None => draft.clone(),
+                    };
+                    cur = buf.len();
+                }
+                _ => continue,
+            }
+            console::redraw_line(&mark, &buf, old_len, cur, old_cur, tail_edit);
+        }
+    }
+}

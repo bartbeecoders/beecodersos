@@ -1,0 +1,21 @@
+[package]
+name = "beecoders_kernel"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "beecoders_kernel"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+beefs = { path = "../beefs" }
+linked_list_allocator = "0.10"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = 2
