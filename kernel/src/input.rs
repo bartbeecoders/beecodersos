@@ -1,6 +1,6 @@
 //! Unified input: key events from the PS/2 keyboard and the serial port.
 
-use crate::{acpi, interrupts, keyboard, serial};
+use crate::{acpi, aibridge, interrupts, keyboard, serial};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
@@ -50,6 +50,10 @@ pub fn read_key() -> Key {
         if let Some(k) = serial::poll_key() {
             return k;
         }
-        interrupts::wait_until(|| keyboard::pending() || serial::pending() || acpi::power_button_pending());
+        // Handle messages from beehive while idle (welcome after it connects).
+        aibridge::drain();
+        interrupts::wait_until(|| {
+            keyboard::pending() || serial::pending() || acpi::power_button_pending() || aibridge::pending()
+        });
     }
 }

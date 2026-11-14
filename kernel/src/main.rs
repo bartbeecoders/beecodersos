@@ -16,6 +16,8 @@ mod ata;
 mod bootargs;
 #[macro_use]
 mod console;
+// After `console`: uses println!.
+mod bootslots;
 mod crash;
 mod editor;
 mod eventlog;
@@ -64,6 +66,8 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info: u32) -> ! {
         Ok((start, size)) => println!("[mem]  {} MiB kernel heap at {:#x}", size >> 20, start),
         Err(e) => panic!("heap: {}", e),
     }
+    // A/B slots: a trial kernel arms the rollback before anything risky.
+    let slot_report = bootslots::on_boot();
     interrupts::init();
     time::init();
     keyboard::init();
@@ -98,9 +102,36 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info: u32) -> ! {
         println!("[ai]   AI bridge on COM2 ('ai' for status)");
     }
     shell.boot_report();
+    match slot_report {
+        Some(bootslots::Report::RolledBack(msg)) => shell.note("rollback", "crash", &msg),
+        Some(bootslots::Report::Trial) => trial_health_check(&mut shell),
+        None => {}
+    }
     println!();
     println!("Type 'help' for a list of commands.");
     shell.run()
+}
+
+/// A trial kernel becomes the good slot once the shell is up and the
+/// self-tests pass; otherwise the good slot boots again.
+fn trial_health_check(shell: &mut shell::Shell) {
+    if bootargs::has("failboot") {
+        panic!("failboot: simulated broken build (tests the rollback)");
+    }
+    let slot = bootslots::booted_slot().map(|s| s as char).unwrap_or('?');
+    match bootslots::health_check(selftest::passes()) {
+        Some(true) => {
+            println!("[slots] slot {slot} passed its health check: it is now the good slot");
+            shell.note("slot-ok", "health", &alloc::format!("slot {slot} b{} passed its health check", OS_BUILD));
+        }
+        Some(false) => {
+            let msg = alloc::format!("trial of build b{} in slot {slot} failed its health check", OS_BUILD);
+            println!("[slots] {msg}; rebooting into the good slot");
+            shell.note("rollback", "crash", &msg);
+            power::reboot();
+        }
+        None => {}
+    }
 }
 
 fn halt_forever() -> ! {

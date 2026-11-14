@@ -15,6 +15,8 @@ Scenario files (tests/scenarios/*.scn):
     @disk                      (first lines) boot with a fresh BeeFS disk instead of the RAM disk
     @ai                        (first lines) attach COM2 and run beehive with its fake backend
     @ai-offline                (first lines) attach COM2 but run no beehive
+    @bootdisk                  (first lines) boot from an A/B boot disk (tools/bootdisk.py)
+                               with the kernel in both slots, BeeFS in partition 2
     $ COMMAND                  type a command, wait for the next prompt
     $! COMMAND                 the command must crash the kernel; boots again (same disk)
     $^C COMMAND                type the command, press Ctrl+C after 1 s, wait for the prompt
@@ -23,6 +25,9 @@ Scenario files (tests/scenarios/*.scn):
     !~ REGEX                   no output line may match REGEX
     @reboot                    shut down, boot again with the same disk
     @signal REGEX              (with @ai) beehive must have received a signal matching REGEX
+    @deploy [ARGS]             (with @bootdisk) shut down, deploy the kernel to the spare
+                               slot (ARGS: extra kernel arguments for it), boot again
+    @deploy-crash ARGS         like @deploy, but the trial kernel must crash; boots again
 Expected lines must appear in order; other output lines in between are allowed.
 Expectations after `$!` or `@reboot` apply to the boot messages of the new boot.
 After the last command the runner types `shutdown` and expects a clean power-off.
@@ -44,6 +49,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 KERNEL = ROOT / "build" / "beecoders.elf"
 ISO = ROOT / "build" / "beecoders.iso"
+BOOTDISK = ROOT / "tools" / "bootdisk.py"
 BEEHIVE = ROOT / "tools" / "beehive" / "beehive.py"
 BEEFS_TOOL = ROOT / "tools" / "beefs-tool" / "target" / "release" / "beefs-tool"
 SCENARIO_DIR = ROOT / "tests" / "scenarios"
@@ -76,7 +82,7 @@ def clean(text: str) -> str:
 class Vm:
     """One QEMU run with the serial port on stdin/stdout."""
 
-    def __init__(self, *, kernel_args=None, cdrom=None, disk=None, uefi=False, ai_port=None):
+    def __init__(self, *, kernel_args=None, cdrom=None, disk=None, uefi=False, ai_port=None, bootdisk=None):
         cmd = ["qemu-system-x86_64", "-m", "128M", "-display", "none", "-serial", "stdio",
                "-monitor", "none", "-no-reboot",
                "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04"]
@@ -84,6 +90,8 @@ class Vm:
             cmd += ["-enable-kvm", "-cpu", "host"]
         if cdrom:
             cmd += ["-cdrom", str(cdrom)]
+        elif bootdisk:  # Limine on the disk picks the kernel slot
+            cmd += ["-drive", f"file={bootdisk},format=raw,if=ide,index=0,media=disk"]
         else:
             cmd += ["-kernel", str(KERNEL), "-append", kernel_args or "test"]
         if disk:
@@ -206,6 +214,12 @@ def test_selftest():
         vm.kill()
 
 
+def run_tool(cmd: list):
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise TestFailure(f"{' '.join(map(str, cmd[1:3]))} failed:\n{r.stdout}{r.stderr}")
+
+
 def make_disk(path: Path):
     if not BEEFS_TOOL.exists():
         raise TestFailure(f"{BEEFS_TOOL} missing: run `make tool`")
@@ -220,8 +234,11 @@ def parse_scenario(path: Path):
         line = raw.rstrip()
         if not line or line.startswith("#"):
             continue
-        if line in ("@disk", "@ai", "@ai-offline"):
+        if line in ("@disk", "@ai", "@ai-offline", "@bootdisk"):
             opts.add(line[1:])
+        elif line.startswith("@deploy"):
+            kind, _, extra = line[1:].partition(" ")
+            steps.append((kind, extra.strip(), []))
         elif line == "@reboot":
             steps.append(("reboot", "(reboot)", []))
         elif line.startswith("@signal "):
@@ -294,6 +311,10 @@ def test_scenario(path: Path):
         disk = Path(tmp) / "disk.img" if "disk" in opts else None
         if disk:
             make_disk(disk)
+        bootdisk = Path(tmp) / "boot.img" if "bootdisk" in opts else None
+        if bootdisk:
+            run_tool([sys.executable, str(BOOTDISK), "create", str(bootdisk), "--kernel", str(KERNEL),
+                      "--cmdline", "test", "--size-mb", "40"])
         ai_port = free_port() if opts & {"ai", "ai-offline"} else None
         hive = None
         if "ai" in opts:
@@ -301,7 +322,7 @@ def test_scenario(path: Path):
                 [sys.executable, str(BEEHIVE), "--no-config", "--backend", "fake", "--retry", "0.1",
                  "--connect", f"127.0.0.1:{ai_port}", "--state-dir", str(Path(tmp) / "beehive")],
                 stdout=subprocess.PIPE if not VERBOSE else None, stderr=subprocess.STDOUT)
-        boot = lambda: Vm(disk=disk, ai_port=ai_port)
+        boot = lambda: Vm(disk=disk, ai_port=ai_port, bootdisk=bootdisk)
         vm = boot()
         try:
             boot_to_prompt(vm)
@@ -310,6 +331,18 @@ def test_scenario(path: Path):
                 if kind == "reboot":
                     vm.shutdown()
                     vm = boot()
+                    out = boot_to_prompt(vm)
+                elif kind in ("deploy", "deploy-crash"):
+                    vm.shutdown()
+                    deploy = [sys.executable, str(BOOTDISK), "deploy", str(bootdisk), "--kernel", str(KERNEL)]
+                    run_tool(deploy + (["--cmdline-extra", cmd] if cmd else []))
+                    vm = boot()
+                    if kind == "deploy-crash":
+                        status = vm.wait_exit(BOOT_TIMEOUT)
+                        if status != EXIT_FAILURE:
+                            raise TestFailure(f"{path.name}: the trial kernel should crash (exit {EXIT_FAILURE}), "
+                                              f"QEMU exit status {status}\n{tail(vm.text())}")
+                        vm = boot()
                     out = boot_to_prompt(vm)
                 elif kind == "crash":
                     vm.send(cmd)

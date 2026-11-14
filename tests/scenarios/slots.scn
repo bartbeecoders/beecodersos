@@ -1,0 +1,37 @@
+# Phase 8: A/B kernel slots on the boot disk, with automatic rollback.
+@bootdisk
+@ai
+$ slots
+booted slot: a
+good slot:   a
+next boot:   slot a
+$ about
+filesystem: BeeFS on ATA disk
+$ echo "survives deploys" > /home/bee/note.txt
+# A good build: tried in slot b, passes its health check, becomes the good slot.
+@deploy
+~ \[slots\] trying slot b \(b\d+\): rollback armed, slot a boots next
+~ \[disk\] .*partition: BeeFS mounted \(boot #2\)
+~ \[slots\] slot b passed its health check: it is now the good slot
+$ slots
+booted slot: b
+good slot:   b
+~ ^last trial:  b \(ok, build b\d+\)$
+next boot:   slot b
+$ log 30
+~ "ev":"slot-ok","text":"slot b b\d+ passed its health check"
+# A broken build: crashes after arming, so the next boot is slot b again.
+@deploy-crash failboot
+~ \[slots\] trial of build b\d+ in slot a failed \(crashed or hung\); rolled back to slot b
+~ \[crash\] the previous boot crashed .*failboot: simulated broken build
+$ slots
+booted slot: b
+good slot:   b
+~ ^last trial:  a \(failed, build b\d+\)$
+next boot:   slot b
+$ cat /home/bee/note.txt
+survives deploys
+$ log 40
+~ "ev":"rollback","text":"trial of build b\d+ in slot a failed
+@signal "kind": "health", "text": "slot b b\d+ passed its health check"
+@signal "kind": "crash", "text": "trial of build b\d+ in slot a failed

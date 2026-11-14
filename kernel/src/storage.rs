@@ -7,7 +7,7 @@ use core::ops::{Deref, DerefMut};
 use core::sync::atomic::Ordering;
 use alloc::boxed::Box;
 use alloc::format;
-use beefs::{BlockDevice, FileSystem, FsError, RamDisk};
+use beefs::{BlockDevice, FileSystem, FsError, Partition, RamDisk};
 
 pub type Fs = FileSystem<Box<dyn BlockDevice>>;
 
@@ -54,8 +54,19 @@ impl DerefMut for FsGuard<'_> {
 pub fn mount() -> Storage {
     match AtaDisk::find() {
         Some(disk) => {
-            let desc = format!("{} \"{}\", {} MiB", disk.position(), disk.model(), disk.sectors() / 2048);
-            match mount_disk(disk) {
+            let mut desc = format!("{} \"{}\", {} MiB", disk.position(), disk.model(), disk.sectors() / 2048);
+            let dev = match open_beefs_device(disk) {
+                Ok((dev, true)) => {
+                    desc.push_str(", partition");
+                    dev
+                }
+                Ok((dev, false)) => dev,
+                Err(e) => {
+                    println!("[disk] {desc}: error: {e}");
+                    return ram_disk();
+                }
+            };
+            match mount_disk(dev) {
                 Ok(Some((fs, boot))) => {
                     println!("[disk] {desc}: BeeFS mounted (boot #{boot})");
                     crash::PERSISTENT.store(true, Ordering::SeqCst);
@@ -67,6 +78,17 @@ pub fn mount() -> Storage {
         }
         None => println!("[disk] no ATA disk attached"),
     }
+    ram_disk()
+}
+
+/// The device BeeFS lives on: the BeeFS partition of a boot disk
+/// (tools/bootdisk.py), or the whole disk. True when partitioned.
+pub fn open_beefs_device(disk: AtaDisk) -> Result<(Box<dyn BlockDevice>, bool), FsError> {
+    let (part, partitioned) = Partition::beefs_or_whole(disk)?;
+    Ok((Box::new(part), partitioned))
+}
+
+fn ram_disk() -> Storage {
     let mut fs: Fs = FileSystem::format(Box::new(RamDisk::new(RAM_DISK_SIZE)) as Box<dyn BlockDevice>)
         .expect("RAM disk format");
     let _ = fs.write_file("/welcome.txt", b"This is a RAM disk: changes are lost when you reboot.\n");
@@ -74,12 +96,12 @@ pub fn mount() -> Storage {
     Storage { fs, persistent: false, boot: 0 }
 }
 
-fn mount_disk(mut disk: AtaDisk) -> Result<Option<(Fs, u32)>, FsError> {
+fn mount_disk(mut disk: Box<dyn BlockDevice>) -> Result<Option<(Fs, u32)>, FsError> {
     // Never format an unknown disk automatically: it could hold someone's data.
     if !FileSystem::probe(&mut disk)? {
         return Ok(None);
     }
-    let mut fs: Fs = FileSystem::mount(Box::new(disk) as Box<dyn BlockDevice>)?;
+    let mut fs: Fs = FileSystem::mount(disk)?;
     let boot = match fs.read_file("/system/boot_count") {
         Ok(d) => core::str::from_utf8(&d).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0),
         Err(FsError::NotFound) => 0u32,

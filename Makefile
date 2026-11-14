@@ -12,6 +12,9 @@
 #   make beehive    run the AI bridge daemon on the host (Claude; see tools/beehive/)
 #   make report     what the OS recorded: crashes, missing commands, wishes, ...
 #   make evolve     improvement loop: signals -> backlog -> coding agent -> review
+#   make bootdisk   A/B boot disk build/beecoders.img (kept: it holds the VM's data)
+#   make run-disk   boot the boot disk in QEMU
+#   make deploy     put the new kernel in vm1's spare slot, watch it, roll back if needed
 #   make check      all automated tests: unit tests, in-kernel self-tests, shell
 #                   scenarios and ISO boots (BIOS + UEFI) in headless QEMU
 #   make clean
@@ -42,7 +45,7 @@ AI_PORT    := 4556
 AI_SERIAL  := -chardev socket,id=ai,host=127.0.0.1,port=$(AI_PORT),server=on,wait=off -serial chardev:ai
 QEMU_FLAGS := -kernel $(IMAGE) -m 128M $(SERIAL) $(AI_SERIAL) $(DISK_FLAGS)
 
-.PHONY: all kernel tool run run-nokvm run-serial iso run-iso run-iso-uefi run-vm disk test check beehive report evolve clean
+.PHONY: all kernel tool run run-nokvm run-serial iso run-iso run-iso-uefi run-vm disk test check beehive report evolve bootdisk new-bootdisk run-disk deploy clean
 
 all: $(IMAGE)
 
@@ -153,6 +156,28 @@ beehive:
 report: tool
 	python3 tools/bee_report.py --disk $(DISK) --beehive
 
+# --- A/B boot disk (phase 8) ---------------------------------------------------------
+# Partition 1: FAT16 with Limine and kernel-a.elf / kernel-b.elf; partition 2: BeeFS.
+# A new kernel goes into the spare slot and only becomes the default after it
+# booted and passed its health check; otherwise the good slot boots again.
+BOOTDISK := build/beecoders.img
+
+# Created only when missing: it holds the VM's files. `make new-bootdisk` replaces it.
+bootdisk: $(IMAGE) tool
+	@[ -f $(BOOTDISK) ] || python3 tools/bootdisk.py create $(BOOTDISK) --kernel $(IMAGE)
+	@python3 tools/bootdisk.py status $(BOOTDISK)
+
+new-bootdisk: $(IMAGE) tool
+	python3 tools/bootdisk.py create $(BOOTDISK) --kernel $(IMAGE)
+
+run-disk: bootdisk
+	$(QEMU) -m 128M $(SERIAL) $(AI_SERIAL) -enable-kvm -cpu host \
+	   -drive file=$(BOOTDISK),format=raw,if=ide,index=0,media=disk
+
+# Deploy to the libvirt VM (first time: python3 tools/deploy.py setup-vm).
+deploy: $(IMAGE) bootdisk
+	python3 tools/deploy.py
+
 # --- Improvement loop (phase 7) ----------------------------------------------------
 # Signals -> Docs/backlog -> coding agent (own worktree) -> make check -> review -> approve.
 #   make evolve                       harvest signals, let the agent work on the top item
@@ -166,6 +191,7 @@ check: $(IMAGE) $(ISO) tool
 	cd beefs && cargo test --quiet
 	python3 tests/test_beehive.py
 	python3 tests/test_evolve.py
+	python3 tests/test_bootdisk.py
 	python3 tests/boot_test.py all
 
 clean:

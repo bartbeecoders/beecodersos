@@ -68,6 +68,8 @@ ISO boots (BIOS and UEFI), all in headless QEMU. It needs `qemu-system-x86_64`,
   off and keep the tool-call watchdog: VM input must never run host commands
 - The test system itself: `tests/boot_test.py`, `tests/test_*.py`,
   `kernel/src/testmode.rs`, the `Makefile`, and this file
+- A/B slots and rollback: `kernel/src/bootslots.rs`, `tools/bootdisk.py`,
+  `tools/deploy.py` (a broken rollback means a bricked VM)
 - The improvement loop: `tools/evolve/evolve.py` (its `PROTECTED` list
   enforces this section for the agent)
 

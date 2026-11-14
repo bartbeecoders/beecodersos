@@ -10,10 +10,9 @@ use crate::ata::AtaDisk;
 use crate::json::{self, Obj};
 use crate::ring::Global;
 use crate::storage::Fs;
-use crate::{eventlog, time};
-use alloc::boxed::Box;
+use crate::{eventlog, storage, time};
 use alloc::string::String;
-use beefs::{BlockDevice, FileSystem};
+use beefs::FileSystem;
 use core::fmt::{self, Write};
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -61,7 +60,8 @@ pub fn record(kind: &str, msg: fmt::Arguments) {
         .finish();
     let saved = AtaDisk::find()
         .ok_or("no disk")
-        .and_then(|d| FileSystem::mount(Box::new(d) as Box<dyn BlockDevice>).map_err(|_| "mount failed"))
+        .and_then(|d| storage::open_beefs_device(d).map_err(|_| "no BeeFS device"))
+        .and_then(|(dev, _)| FileSystem::mount(dev).map_err(|_| "mount failed"))
         .and_then(|mut fs: Fs| {
             eventlog::append(&mut fs, PENDING, "/system/crash/pending.old.jsonl", &line).map_err(|_| "write failed")?;
             let ev = eventlog::event("crash").str("kind", kind).str("msg", &text).finish();

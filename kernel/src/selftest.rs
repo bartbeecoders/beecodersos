@@ -12,6 +12,7 @@ use crate::layouts::{compose, Layout};
 use crate::ring::Ring;
 use crate::vga::Color;
 use crate::json::{self, Obj, Value};
+use crate::bootslots::{self, Phase};
 use crate::{allocator, console, keyboard, serial, shell, time};
 use alloc::boxed::Box;
 use alloc::format;
@@ -61,7 +62,13 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("time: calendar conversion", time_calendar),
     ("shell: did-you-mean distance", shell_edit_distance),
     ("shell: calc expressions", shell_calc),
+    ("slots: parse and patch limine.conf", slots_state),
 ];
+
+/// Run every test silently (the health check of a trial kernel).
+pub fn passes() -> bool {
+    TESTS.iter().all(|(_, test)| test().is_ok())
+}
 
 /// Run every test and print the results. Returns true when all passed.
 pub fn run() -> bool {
@@ -307,5 +314,26 @@ fn shell_edit_distance() -> TestResult {
     check_eq!(shell::edit_distance("mkdri", "mkdir"), 2);
     check_eq!(shell::edit_distance("cat", "cart"), 1);
     check_eq!(shell::edit_distance("", "abc"), 3);
+    Ok(())
+}
+
+fn slots_state() -> TestResult {
+    // The first lines of limine.conf as tools/bootdisk.py writes them.
+    let conf = b"#slots good=a trial=b state=pending build=000012\ndefault_entry: 2\n# rest\ntimeout: 0\n";
+    let mut sector = [0u8; 512];
+    sector[..conf.len()].copy_from_slice(conf);
+    let st = bootslots::parse(&sector).ok_or("parse failed")?;
+    check_eq!((st.good, st.trial, st.phase, st.build, st.default), (b'a', b'b', Phase::Pending, 12, b'b'));
+    let armed = bootslots::State { phase: Phase::Armed, default: b'a', ..st };
+    let before = sector;
+    bootslots::render(&mut sector, &armed);
+    check_eq!(&sector[..65], &b"#slots good=a trial=b state=armed   build=000012\ndefault_entry: 1"[..]);
+    check_eq!(&sector[66..], &before[66..]); // nothing else changes
+    check_eq!(bootslots::parse(&sector), Some(armed));
+    let ok = bootslots::State { good: b'b', trial: b'-', phase: Phase::Ok, build: 7, default: b'b' };
+    bootslots::render(&mut sector, &ok);
+    check_eq!(bootslots::parse(&sector), Some(ok));
+    sector[0] = b'x';
+    check!(bootslots::parse(&sector).is_none());
     Ok(())
 }

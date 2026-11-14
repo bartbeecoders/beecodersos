@@ -23,9 +23,11 @@ extern crate alloc;
 
 mod device;
 mod fs;
+mod partition;
 
 pub use device::{Block, BlockDevice, RamDisk};
 pub use fs::{normalize, DirEntry, FileKind, FileSystem, FsStats, Metadata, MAX_FILE_SIZE};
+pub use partition::{find_beefs_partition, mbr_partitions, Partition, BEEFS_PARTITION_TYPE};
 
 use core::fmt;
 

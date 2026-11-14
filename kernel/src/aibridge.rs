@@ -29,13 +29,15 @@ const MAX_LINE: usize = 8192;
 
 static RX: Ring<4096> = Ring::new();
 static PRESENT: AtomicBool = AtomicBool::new(false);
-static STATE: Global<State> = Global::new(State { line: Vec::new(), peer: None, next_id: 1 });
+static STATE: Global<State> = Global::new(State { line: Vec::new(), peer: None, next_id: 1, status: None });
 
 struct State {
     line: Vec<u8>,
     /// "backend model" from the last welcome message.
     peer: Option<String>,
     next_id: i64,
+    /// Sent again whenever beehive (re)connects, so it is never lost.
+    status: Option<String>,
 }
 
 /// Detect and set up COM2. Returns true when the port exists.
@@ -111,6 +113,9 @@ fn poll_message() -> Option<Object> {
             let backend = msg.str("backend").unwrap_or("?");
             let model = msg.str("model").unwrap_or("");
             st.peer = Some(alloc::format!("{backend} {model}").trim_end().into());
+            if let Some(s) = st.status.clone() {
+                send(&s);
+            }
             continue;
         }
         return Some(msg);
@@ -127,6 +132,13 @@ pub fn drain() {
 pub fn peer() -> Option<String> {
     drain();
     STATE.get().peer.clone()
+}
+
+/// Send a message now and again each time beehive connects (e.g. the health
+/// result of a trial kernel, which the host's deploy watchdog waits for).
+pub fn set_status(msg: String) {
+    send(&msg);
+    STATE.get().status = Some(msg);
 }
 
 pub fn hello() {

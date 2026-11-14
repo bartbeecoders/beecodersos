@@ -7,7 +7,7 @@ use crate::vga::Color;
 use crate::aibridge::{self, Outcome};
 use crate::json::Obj;
 use crate::ring::Global;
-use crate::{allocator, console, crash, eventlog, keyboard, power, selftest, time};
+use crate::{allocator, bootslots, console, crash, eventlog, keyboard, power, selftest, time};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -242,6 +242,10 @@ impl Shell {
             ("explain", []) => self.explain(),
             ("ai", []) => self.ai_status(),
             ("ai", [s @ ("on" | "off")]) => self.ai_switch(s),
+            ("slots", []) => match bootslots::describe() {
+                Some(text) => println!("{text}"),
+                None => println!("not booted from a boot disk with A/B slots (see tools/bootdisk.py)"),
+            },
             ("crash", []) => panic!("'crash' command: deliberate kernel panic (tests crash reports)"),
             ("reboot", []) => {
                 self.log_power("reboot");
@@ -257,6 +261,13 @@ impl Shell {
             (c, _) if is_command(c) => error(&format!("{c}: wrong arguments (see 'help')")),
             (c, _) => self.not_found(c),
         }
+    }
+
+    /// Log an event and send it to beehive as a signal (A/B slot results).
+    pub fn note(&mut self, event: &str, signal: &str, text: &str) {
+        let ev = eventlog::event(event).str("text", text).finish();
+        eventlog::write(&mut self.storage.fs(), ev);
+        self.forward_signal(signal, text);
     }
 
     fn not_found(&mut self, c: &str) {
@@ -314,15 +325,18 @@ impl Shell {
         if !aibridge::present() || !self.ai_enabled() {
             return false;
         }
-        aibridge::send(
-            &Obj::new()
-                .str("type", "signal")
-                .str("kind", kind)
-                .str("text", text)
-                .str("build", crate::OS_BUILD)
-                .str("t", &time::timestamp())
-                .finish(),
-        );
+        let msg = Obj::new()
+            .str("type", "signal")
+            .str("kind", kind)
+            .str("text", text)
+            .str("build", crate::OS_BUILD)
+            .str("t", &time::timestamp())
+            .finish();
+        if kind == "health" {
+            aibridge::set_status(msg); // must reach the deploy watchdog
+        } else {
+            aibridge::send(&msg);
+        }
         aibridge::peer().is_some()
     }
 
@@ -597,6 +611,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("explain", "ask the AI about the last error or crash"),
     ("ai [on|off]", "AI bridge status; switch AI features on/off"),
     ("selftest", "run the kernel self-tests"),
+    ("slots", "A/B kernel slots: which one runs, last trial"),
     ("crash", "deliberately crash the kernel (tests crash reports)"),
     ("reboot, shutdown", "restart / power off"),
 ];

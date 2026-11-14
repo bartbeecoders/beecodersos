@@ -1,6 +1,6 @@
 //! beefs-tool — create and edit BeeFS disk images on the host.
 
-use beefs::{Block, BlockDevice, FileKind, FileSystem, FsError, BLOCK_SIZE};
+use beefs::{Block, BlockDevice, FileKind, FileSystem, FsError, Partition, BLOCK_SIZE};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::process::ExitCode;
@@ -55,6 +55,8 @@ beefs-tool — manage BeeFS disk images
 
 usage: beefs-tool <image> <command> [args]
 
+<image> is a BeeFS image, or a boot disk image whose BeeFS partition is used.
+
 commands:
   mkfs <size-MiB>          create/overwrite the image with an empty BeeFS
   info                     show filesystem usage
@@ -97,6 +99,8 @@ fn run(args: &[String]) -> Result<(), String> {
     }
 
     let dev = ImageFile::open(image).map_err(|e| format!("{image}: {e}"))?;
+    // A boot disk (tools/bootdisk.py) keeps BeeFS in its second partition.
+    let (dev, _) = Partition::beefs_or_whole(dev).map_err(|e| format!("{image}: {e}"))?;
     let mut fs = FileSystem::mount(dev).map_err(|e| format!("{image}: {e}"))?;
 
     match cmd {
@@ -142,7 +146,7 @@ fn run(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn tree(fs: &mut FileSystem<ImageFile>, path: &str, depth: usize) -> Result<(), String> {
+fn tree(fs: &mut FileSystem<Partition<ImageFile>>, path: &str, depth: usize) -> Result<(), String> {
     for e in fs.read_dir(path).map_err(|e| e.to_string())? {
         let indent = "  ".repeat(depth);
         let child = format!("{}/{}", path.trim_end_matches('/'), e.name);

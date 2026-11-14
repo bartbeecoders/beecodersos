@@ -49,6 +49,7 @@ PROTECTED = [
     "kernel/src/crash.rs", "kernel/src/storage.rs", "kernel/src/testmode.rs",
     "tests/boot_test.py", "tests/test_beehive.py", "tests/test_evolve.py", "Makefile", "CLAUDE.md",
     "tools/beehive/beehive.py", "tools/evolve/evolve.py",
+    "kernel/src/bootslots.rs", "tools/bootdisk.py", "tools/deploy.py", "tests/test_bootdisk.py",
 ]
 TEST_PATHS = ("tests/scenarios/", "kernel/src/selftest.rs", "beefs/src/")
 MAX_DIFF_LINES = 300
@@ -641,8 +642,12 @@ def cmd_approve(args, repo: Path):
     git(repo, "commit", "-q", "-m", f"evolve: #{item['id']} done" + (f" (b{build})" if build else ""), check=False)
     say(f"#{item['id']} done" + (f", build b{build}" if build else ""))
     if args.deploy:
-        say("deploying: make run-vm")
-        subprocess.run(["make", "run-vm"], cwd=repo, check=False)
+        say("deploying: make deploy (trial in the spare slot, rollback if it fails)")
+        r = subprocess.run(["make", "deploy"], cwd=repo, check=False)
+        if r.returncode != 0:
+            log(item, f"deploy of b{build} failed its trial and was rolled back")
+            backlog.save(item)
+            say("the new build failed on the VM and was rolled back: see the crash signal (make report)")
 
 
 def cmd_reject(args, repo: Path):
@@ -701,7 +706,8 @@ def main():
     p = sub.add_parser("approve", help="merge an item and ship it")
     p.add_argument("id", type=int)
     p.add_argument("--force", action="store_true", help="approve even if the review needs attention")
-    p.add_argument("--deploy", action="store_true", help="restart the libvirt VM with the new ISO")
+    p.add_argument("--deploy", action="store_true",
+                   help="deploy to the libvirt VM's spare slot and watch it boot (make deploy)")
     p.add_argument("--ship-cmd", default="make iso", help="build after merging (default: make iso)")
     p = sub.add_parser("reject", help="throw an attempt away")
     p.add_argument("id", type=int)

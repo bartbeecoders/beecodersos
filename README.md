@@ -66,6 +66,8 @@ tests/scenarios/       shell scenario tests (*.scn)
 tools/beehive/         beehive: host daemon for the AI bridge (Claude / local models)
 tools/bee_report.py    report of what the OS recorded (crashes, missing commands, wishes)
 tools/evolve/          improvement loop: signals -> backlog -> coding agent -> review
+tools/bootdisk.py      A/B boot disk: FAT16 boot partition (Limine, two kernels) + BeeFS
+tools/deploy.py        deploy to the libvirt VM's spare slot, with a watchdog
 Docs/backlog/          the backlog (one file per item) and review reports
 Docs/                  plans (self-improving OS roadmap)
 CLAUDE.md              rules for AI agents working on the code
@@ -82,6 +84,7 @@ kernel/
   src/crash.rs         crash reports saved to disk, shown on the next boot
   src/json.rs          minimal JSON (event log, crash reports, AI protocol)
   src/aibridge.rs      AI bridge: JSON lines on COM2 to beehive on the host
+  src/bootslots.rs     A/B kernel slots: arm the rollback, health check, report failed trials
   src/allocator.rs     kernel heap in free RAM from the Multiboot memory map
   src/console.rs       print!/println! to VGA + serial, line redraw helpers
   src/keyboard.rs      PS/2 keyboard driver + scancode decoder (modifiers, dead keys)
@@ -360,6 +363,61 @@ python3 tools/evolve/evolve.py reject 1 --reason "..." [--retry]
 Tests: `tests/test_evolve.py` runs the whole loop in a throwaway repository
 with a fake agent (merging, the gates, refusing to merge into a dirty tree).
 
+## Phase 8 — A/B kernels with automatic rollback ✅
+
+A new build can no longer leave the OS unbootable. The boot disk has two
+kernel slots; a new kernel is *tried* in the spare one and only becomes the
+default after it proves itself:
+
+```
+ boot disk (build/beecoders.img, MBR)
+ ┌───────────────────────────────────────────────┬──────────────────────┐
+ │ 1: FAT16  Limine, limine.conf,                │ 2: BeeFS  your files │
+ │           kernel-a.elf, kernel-b.elf          │    (survive deploys) │
+ └───────────────────────────────────────────────┴──────────────────────┘
+ limine.conf line 1:  #slots good=a trial=b state=pending build=000012
+```
+
+1. **Deploy** (host, VM off): the new kernel goes into the spare slot,
+   `state=pending`, and the next boot goes to it.
+2. **Arm:** the trial kernel's first act (right after setting up its heap) is to
+   point the boot back at the good slot (`state=armed`). If it crashes or hangs
+   from here on, the next boot runs the good kernel.
+3. **Health check:** once the disk is mounted, the shell is ready and the
+   self-tests pass, the trial becomes the good slot (`state=ok`) and sends a
+   `health` signal to beehive (again whenever beehive reconnects).
+4. **Rollback report:** a good kernel that finds `state=armed` knows the trial
+   failed: it marks it `failed`, logs it, and sends a `crash` signal, so the
+   improvement loop turns it into a bug to fix.
+5. **Host watchdog** (`make deploy`): waits for the health signal; if none
+   comes (a kernel that dies before it can arm the rollback, or a file Limine
+   can't load), it stops the VM, points the disk at the good slot and restarts.
+
+The kernel only rewrites those first two lines of `limine.conf`, in place and at
+the same length (one sector), so the FAT file system never changes shape.
+`slots` in the shell shows the state.
+
+```sh
+make bootdisk                      # create build/beecoders.img (once; it holds the VM's files)
+python3 tools/deploy.py setup-vm   # once: vm1 boots from it (old config backed up)
+make beehive                       # so the watchdog can hear the VM
+make deploy                        # new kernel -> spare slot -> trial -> good, or rollback
+python3 tools/bootdisk.py status build/beecoders.img
+make run-disk                      # boot the boot disk in plain QEMU
+```
+
+`evolve approve N --deploy` uses `make deploy`, so an approved change that
+fails on the VM is rolled back automatically and reported. The FAT16 file
+system is written by `tools/bootdisk.py` itself (with long file names, which
+Limine needs), so no mtools or root rights are needed; BIOS and UEFI both boot it.
+`beefs-tool` and `make report` find BeeFS in partition 2 by themselves.
+
+Tests: `slots.scn` boots a boot disk, deploys a good build (becomes the good
+slot) and a broken one (`failboot`: crashes after arming; the good slot
+boots again and reports it), checks that files survive and that beehive gets
+both signals. `tests/test_bootdisk.py` covers the FAT16 writer/reader, the
+state changes and the watchdog's verdicts.
+
 ## Versioning
 
 `OS_VERSION` in the `Makefile` is the release (now **0.0.2**). `BUILD_NUMBER`
@@ -367,7 +425,6 @@ counts builds within it; when you raise `OS_VERSION`, reset `BUILD_NUMBER` to 1.
 
 ## Next phases
 
-Following `Docs/self-improving-os-plan.html`: phase 8, A/B kernel slots with
-automatic rollback, so approved changes can be deployed inside the OS safely.
-Other candidates: framebuffer console (on-screen text on UEFI), a text editor, tab completion, more layouts
+Following `Docs/self-improving-os-plan.html`: phase 9, AI-written apps in a
+WebAssembly sandbox (new commands without touching the kernel). Other candidates: framebuffer console (on-screen text on UEFI), a text editor, tab completion, more layouts
 (Belgian Comma, French, …), physical memory manager / paging, user programs.
