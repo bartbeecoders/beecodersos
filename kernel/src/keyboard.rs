@@ -23,7 +23,12 @@ static STATE: Global<Decoder> = Global::new(Decoder::new());
 /// Configure the controller (IRQ1 on, scancode translation on) and set LEDs.
 pub fn init() {
     unsafe {
-        while inb(STATUS) & ST_OUTPUT_FULL != 0 {
+        // Drop what is waiting. With a limit: where there is no controller
+        // the status reads as "always full".
+        for _ in 0..256 {
+            if inb(STATUS) & ST_OUTPUT_FULL == 0 {
+                break;
+            }
             inb(DATA);
         }
         if write_cmd(0x20).is_some() {

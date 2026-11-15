@@ -367,7 +367,7 @@ impl Shell {
             }
             ("net" | "ifconfig", []) => match net::describe() {
                 Some(text) => println!("{text}"),
-                None => println!("no network card (supported: Intel e1000; see lspci)"),
+                None => println!("no network card (supported: Intel e1000, e1000e, I217; see lspci)"),
             },
             ("net", ["static", config @ ..]) if !config.is_empty() => self.net_static(&config.join(" ")),
             ("net", ["off"]) => self.net_off(),

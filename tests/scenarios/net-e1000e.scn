@@ -1,0 +1,22 @@
+# The e1000e card with real traffic: an address from DHCP, pings, and a TCP
+# transfer larger than both rings (drivers todo, item N1).
+@net
+@tcp
+@e1000e
+$ net dhcp
+~ ^address 10\.0\.2\.15/24 \(DHCP\)
+$ ping -c 3 10.0.2.2
+~ ^32 bytes from 10\.0\.2\.2: seq=1 ttl=\d+ time=[\d.]+ ms$
+~ ^32 bytes from 10\.0\.2\.2: seq=3 ttl=\d+ time=[\d.]+ ms$
+3 sent, 3 received, 0% loss
+$ nc {once} hello over e1000e
+you said: hello over e1000e
+$ nc {lines} go
+line 001 of 300 ==============================
+line 150 of 300 ==============================
+line 300 of 300 ==============================
+(the other side closed the connection)
+$ net
+card:    e1000e (Intel 82574L)
+link:    up
+chip:    1000 Mb/s, full duplex

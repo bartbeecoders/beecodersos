@@ -85,7 +85,7 @@ ul.items { list-style: none; padding: 0; margin: 12px 0; }
 <p class="lede">What BeeCodersOs needs before it is usable on a real PC, in the order to build it, with the state of each item.</p>
 <p class="meta">Target machine: HP EliteDesk 800 G1 (Intel Haswell, Q87 chipset) · started 15 November 2026 · BeeCodersOs 0.0.3</p>
 
-<div class="callout"><b>Where we are:</b> the USB stick (<code>tools/usbstick.py</code>) boots on the HP in legacy BIOS mode; build 0.0.2 printed its hello line and stopped. Version 0.0.3 b1 removes the most likely cause (the serial port, items S1 to S3). <b>Next: boot 0.0.3 on the HP</b> and note below what the screen shows.</div>
+<div class="callout"><b>Where we are:</b> on the HP the OS boots from the USB stick (legacy BIOS mode) to its prompt, the keyboard types, the internal SATA disk is found and left untouched, and the network works: the I217-LM gets an address from the router and answers a ping from another machine. It still runs from a RAM disk. <b>Next: decide where BeeFS lives on the HP</b> (D2, D3), so files, settings and crash reports survive a restart.</div>
 
 <h2 id="progress">Progress</h2>
 <div class="card">
@@ -109,10 +109,15 @@ ul.items { list-style: none; padding: 0; margin: 12px 0; }
 <div class="table-wrap"><table>
 <tr><th>Date</th><th>Build</th><th>What happened</th></tr>
 <tr><td>15 Nov 2026</td><td>0.0.2</td><td>Legacy boot from the USB stick: hello line, then nothing.</td></tr>
-<tr><td></td><td>0.0.3 b1</td><td><i>to do: boot it and write down the last line on the screen</i></td></tr>
+<tr><td>15 Nov 2026</td><td>0.0.3 b1</td><td>Boots to the prompt. (Typing, <code>lspci</code> output: not noted yet.)</td></tr>
+<tr><td>15 Nov 2026</td><td>0.0.3 b3</td><td>SATA driver works: <code>[disk] SATA port 0 "OCZ-AGILITY3", 114473 MiB: not BeeFS, left untouched</code>. Keyboard types. ACPI found (power button on IRQ 9, power off S5, reset register). No supported network card. <code>lspci</code>: see the device table below.</td></tr>
+<tr><td>15 Nov 2026</td><td>0.0.3 b5</td><td>Network card found: <code>Intel I217-LM</code>, link up at 1000 Mb/s full duplex, PHY answers (<code>015400a4</code>), 85 frames received from the network. But no DHCP answer after 8 requests: either our frames do not reach the wire, or the answers are not accepted.</td></tr>
+<tr><td>15 Nov 2026</td><td>0.0.3 b6</td><td>With a fixed address: <code>on the wire: 0 sent (16 stuck), 4120 received</code>. The card receives but takes no frame from the transmit queue.</td></tr>
+<tr><td>15 Nov 2026</td><td>0.0.3 b7</td><td>Network works: DHCP gives an address, and the HP answers a ping from another machine (4 of 4, about 9 ms). b7 tells the management firmware that a driver has taken over, keeps the chip's own bits in the transmit control register, and sets the usual queue thresholds; which of the three was needed is not known.</td></tr>
+<tr><td></td><td>next build</td><td><i>to do: the output of <code>net</code>, above all the line <code>on the wire: N sent (N stuck), ...</code>; if there is still no address, try <code>net static</code> with a free address of your network and <code>ping</code> the router</i></td></tr>
 </table></div>
 
-<h2 id="hang">Why 0.0.2 stopped after the hello line</h2>
+<h2 id="hang">Why 0.0.2 stopped after the hello line (solved)</h2>
 <p>The hello line is the first thing the kernel prints; the next line (<code>[mem] ...</code>) never appeared. So the stop is in what runs in between (<code>kernel/src/main.rs</code>):</p>
 <div class="table-wrap"><table>
 <tr><th>Suspect</th><th>Why</th><th>Likelihood</th></tr>
@@ -120,20 +125,39 @@ ul.items { list-style: none; padding: 0; margin: 12px 0; }
 <tr><td>Reading the boot arguments, setting up the heap</td><td>Both read the bootloader's memory information. A fault here comes before the interrupt table exists, so the machine freezes or resets without a message.</td><td>Lower. B1 would show it.</td></tr>
 <tr><td>The bootloader check</td><td>Prints a message when it fails, unless that message was itself stuck in the serial wait.</td><td>Low.</td></tr>
 </table></div>
-<p>This is from reading the code, not from the machine: only a boot of 0.0.3 on the HP confirms it.</p>
+<p>Confirmed on the machine: 0.0.3 b1, which changes only the serial port code, reaches the prompt.</p>
+
+<h2 id="devices">The HP's devices</h2>
+<p>From <code>lspci</code> on the machine (15 November 2026). All Intel (vendor <code>8086</code>).</p>
+<div class="table-wrap"><table>
+<tr><th>Address</th><th>Device</th><th>What it is</th><th>Driver</th></tr>
+<tr><td><code>00:00.0</code></td><td><code>0c00</code></td><td>Host bridge (Haswell)</td><td>none needed</td></tr>
+<tr><td><code>00:02.0</code></td><td><code>0412</code></td><td>Graphics: HD Graphics 4600</td><td>VGA text now; A2 later</td></tr>
+<tr><td><code>00:03.0</code></td><td><code>0c0c</code></td><td>Sound over DisplayPort / HDMI</td><td>X2, not planned</td></tr>
+<tr><td><code>00:14.0</code></td><td><code>8c31</code></td><td>USB 3 controller (xHCI)</td><td>U1</td></tr>
+<tr><td><code>00:16.0</code></td><td><code>8c3a</code></td><td>Management engine interface</td><td>none planned</td></tr>
+<tr><td><code>00:16.3</code></td><td><code>8c3d</code></td><td>Management engine serial port</td><td>none planned</td></tr>
+<tr><td><code>00:19.0</code></td><td><code>153a</code></td><td>Network: I217-LM</td><td>N1, works</td></tr>
+<tr><td><code>00:1a.0</code>, <code>00:1d.0</code></td><td><code>8c2d</code>, <code>8c26</code></td><td>USB 2 controllers (EHCI)</td><td>U4, not planned</td></tr>
+<tr><td><code>00:1b.0</code></td><td><code>8c20</code></td><td>Sound: HD Audio</td><td>X2, not planned</td></tr>
+<tr><td><code>00:1f.0</code></td><td><code>8c4e</code></td><td>ISA bridge (Q87 chipset)</td><td>none needed</td></tr>
+<tr><td><code>00:1f.2</code></td><td><code>8c02</code></td><td>SATA controller (AHCI)</td><td>D1, works</td></tr>
+<tr><td><code>00:1f.3</code></td><td><code>8c22</code></td><td>SMBus controller</td><td>none planned</td></tr>
+</table></div>
 
 <h2 id="today">What exists today</h2>
-<p>The hardware column for the HP is from the model's specifications. Once the OS reaches its prompt there, <code>lspci</code> gives the real device numbers: put them here.</p>
+<p>The last column is what was seen on the HP, or what is expected where it has not been tried.</p>
 <div class="table-wrap"><table>
 <tr><th>Hardware</th><th>Driver</th><th>On the HP</th></tr>
-<tr><td>Screen: VGA text mode, 80x25</td><td><code>vga.rs</code></td><td><span class="maybe">Legacy BIOS boot only</span></td></tr>
-<tr><td>Keyboard: PS/2 controller</td><td><code>keyboard.rs</code></td><td><span class="maybe">PS/2 keyboard; USB only if the BIOS imitates PS/2</span></td></tr>
-<tr><td>Serial ports COM1, COM2</td><td><code>uart.rs</code>, <code>serial.rs</code>, <code>aibridge.rs</code></td><td><span class="maybe">If the machine has the port; works without since 0.0.3</span></td></tr>
+<tr><td>Screen: VGA text mode, 80x25</td><td><code>vga.rs</code></td><td><span class="yes">Works</span>, in legacy BIOS boot only (A2)</td></tr>
+<tr><td>Keyboard: PS/2 controller</td><td><code>keyboard.rs</code></td><td><span class="yes">Works</span> (a USB keyboard only as long as the BIOS imitates PS/2)</td></tr>
+<tr><td>Serial ports COM1, COM2</td><td><code>uart.rs</code>, <code>serial.rs</code>, <code>aibridge.rs</code></td><td><span class="yes">Works with or without the port since 0.0.3</span></td></tr>
 <tr><td>Interrupt controller (PIC), timer (PIT), clock (RTC)</td><td><code>interrupts.rs</code>, <code>time.rs</code></td><td><span class="yes">Expected to work</span></td></tr>
-<tr><td>ACPI: power button, power off</td><td><code>acpi.rs</code>, <code>power.rs</code></td><td><span class="maybe">To be seen (P5)</span></td></tr>
-<tr><td>PCI: device list</td><td><code>pci.rs</code></td><td><span class="maybe">Devices behind bridges: to be checked (P3)</span></td></tr>
-<tr><td>Disk: ATA on the legacy IDE ports</td><td><code>ata.rs</code></td><td><span class="no">No: the SATA controller is in AHCI mode (D1)</span></td></tr>
-<tr><td>Network: Intel e1000 (82540EM)</td><td><code>e1000.rs</code></td><td><span class="no">No: the machine has an I217-LM (N1)</span></td></tr>
+<tr><td>ACPI: power button, power off</td><td><code>acpi.rs</code>, <code>power.rs</code></td><td><span class="maybe">Tables found; power off and reset not tried yet (P5)</span></td></tr>
+<tr><td>PCI: device list</td><td><code>pci.rs</code></td><td><span class="yes">Works</span>: 13 devices listed</td></tr>
+<tr><td>Disk: ATA on the legacy IDE ports</td><td><code>ata.rs</code></td><td><span class="no">No: the SATA controller is in AHCI mode</span></td></tr>
+<tr><td>Disk: SATA on an AHCI controller</td><td><code>ahci.rs</code></td><td><span class="yes">Works</span>: finds the internal disk and leaves it alone</td></tr>
+<tr><td>Network: Intel e1000, e1000e, I217</td><td><code>e1000.rs</code></td><td>works on the HP (N1)</td></tr>
 <tr><td>Memory: first 4 GiB mapped, 64 MiB heap</td><td><code>boot.s</code>, <code>allocator.rs</code></td><td><span class="yes">Works</span>, most RAM unused (P2)</td></tr>
 </table></div>
 
@@ -142,44 +166,44 @@ ul.items { list-style: none; padding: 0; margin: 12px 0; }
 <h3 id="tier-0" data-tier="Tier 0: get past the hello line">Tier 0: get past the hello line</h3>
 <p>The kernel waited on hardware without a time limit. On a PC where that hardware is missing or behaves differently, the boot hangs without a word.</p>
 <ul class="items" data-tier="Tier 0: get past the hello line">
-<li class="item" data-status="check" id="S1">
+<li class="item" data-status="done" id="S1">
 <h4><span class="id">S1</span> Serial port: detect it, never wait forever <span class="size">S</span> <span class="st"></span></h4>
 <p>Every printed character also goes to COM1. The old code waited for the port to be ready with no limit, which is the most likely reason the HP stops right after the hello line. Now the port is detected at start (COM1 and COM2), output to a missing port is skipped, and a port that does not become ready costs one short wait and is then left alone until it works again.</p>
 <p class="facts">Code: <code>kernel/src/uart.rs</code> (new, shared), <code>serial.rs</code>, <code>aibridge.rs</code>. Tests: self-test "serial port: missing or stuck hardware never hangs"; a boot in QEMU with <code>-serial none</code>. Shipped in 0.0.3 b1.</p>
 </li>
-<li class="item" data-status="check" id="S2">
+<li class="item" data-status="done" id="S2">
 <h4><span class="id">S2</span> Serial port: reading never loops forever <span class="size">S</span> <span class="st"></span></h4>
 <p>The interrupt handlers and the start-up emptied the receive buffer in a loop that only ended when the port said "empty". They now stop after 256 bytes per call.</p>
 <p class="facts">Code: <code>kernel/src/uart.rs</code>. Test: same self-test. Shipped in 0.0.3 b1.</p>
 </li>
-<li class="item" data-status="check" id="S3">
+<li class="item" data-status="done" id="S3">
 <h4><span class="id">S3</span> Say so when there is no serial port <span class="size">S</span> <span class="st"></span></h4>
 <p>The boot prints <code>[com1] no serial port found: screen and keyboard only</code>, so the screen shows which case the machine is in.</p>
 <p class="facts">Code: <code>kernel/src/main.rs</code>. Shipped in 0.0.3 b1.</p>
 </li>
-<li class="item" data-status="todo" id="B1">
+<li class="item" data-status="skip" id="B1">
 <h4><span class="id">B1</span> Boot progress on the screen <span class="size">S</span> <span class="st"></span></h4>
 <p>Print a short marker before each step of the boot (<code>[boot] heap</code>, <code>[boot] interrupts</code>, ...). If the HP still stops, the last line names the step.</p>
-<p class="facts">Code: <code>kernel/src/main.rs</code>. Do this next if S1 does not get the HP to its prompt.</p>
+<p class="facts">Not needed now that the HP reaches its prompt; worth doing if a later driver hangs the boot.</p>
 </li>
-<li class="item" data-status="todo" id="B2">
+<li class="item" data-status="done" id="B2">
 <h4><span class="id">B2</span> Keyboard controller: waits with a limit <span class="size">S</span> <span class="st"></span></h4>
-<p><code>keyboard::init</code> empties the PS/2 controller in a loop; a controller that is missing reads as "always full".</p>
-<p class="facts">Code: <code>kernel/src/keyboard.rs</code>. Test: a self-test with made-up ports, as for the serial port.</p>
+<p><code>keyboard::init</code> emptied the PS/2 controller in a loop; a controller that is missing reads as "always full". The loop now stops after 256 bytes; the other waits in that file already had limits.</p>
+<p class="facts">Code: <code>kernel/src/keyboard.rs</code>. No test of its own: it needs a machine without the controller.</p>
 </li>
-<li class="item" data-status="todo" id="B3">
+<li class="item" data-status="done" id="B3">
 <h4><span class="id">B3</span> IDE disk probe: give up when there is no controller <span class="size">S</span> <span class="st"></span></h4>
-<p><code>ata.rs</code> waits while the disk says "busy"; an empty port address reads as "always busy". Check that the probe gives up, and add a limit where it does not.</p>
-<p class="facts">Code: <code>kernel/src/ata.rs</code>. Test: QEMU <code>-machine q35</code> has no legacy IDE ports.</p>
+<p>Checked: <code>ata.rs</code> already recognises an empty port address and limits every wait. Nothing to change.</p>
+<p class="facts">Seen working: the HP has no IDE disk and passes this step; so does QEMU's <code>-machine q35</code>.</p>
 </li>
 </ul>
 
 <h3 id="tier-A" data-tier="Tier A: a usable prompt">Tier A: a usable prompt</h3>
 <ul class="items" data-tier="Tier A: a usable prompt">
-<li class="item" data-status="todo" id="A1">
+<li class="item" data-status="done" id="A1">
 <h4><span class="id">A1</span> PS/2 keyboard on the real controller <span class="size">S</span> <span class="st"></span></h4>
-<p>Check that a PS/2 keyboard types at the prompt, and that a USB keyboard works through the BIOS's PS/2 imitation ("USB legacy support"). Fix what the real controller does differently from QEMU's.</p>
-<p class="facts">Code: <code>kernel/src/keyboard.rs</code>. Can only be confirmed on the HP.</p>
+<p>Seen working on the HP: commands can be typed at the prompt.</p>
+<p class="facts">Which kind of keyboard (PS/2, or USB through the BIOS) was not noted. Under UEFI a USB keyboard will need U1 and U2.</p>
 </li>
 <li class="item" data-status="todo" id="A2">
 <h4><span class="id">A2</span> Framebuffer console <span class="size">M</span> <span class="st"></span></h4>
@@ -191,10 +215,20 @@ ul.items { list-style: none; padding: 0; margin: 12px 0; }
 <h3 id="tier-B" data-tier="Tier B: storage">Tier B: storage</h3>
 <p>Until this tier is done the OS runs from a RAM disk on the HP: nothing survives a reboot.</p>
 <ul class="items" data-tier="Tier B: storage">
-<li class="item" data-status="todo" id="D1">
+<li class="item" data-status="done" id="D1">
 <h4><span class="id">D1</span> AHCI (SATA) driver <span class="size">L</span> <span class="st"></span></h4>
-<p>The machine's disks hang on an Intel AHCI controller. Read and write sectors on one port, and offer BeeFS the same block interface <code>ata.rs</code> gives it. The rule stays: never write to a disk that is not BeeFS.</p>
-<p class="facts">Test: QEMU <code>-device ahci</code>; the existing disk scenarios run on it. Fully testable without the HP.</p>
+<p>The machine's disks hang on an Intel AHCI controller. The driver finds every SATA disk on every AHCI controller, and BeeFS mounts from the first disk that holds it (IDE disks are still tried first). Polling, one sector per command. The rule stays: a disk that is not BeeFS is only read, never written; the boot says <code>not BeeFS, left untouched</code>.</p>
+<p class="facts">Code: <code>kernel/src/ahci.rs</code> (new), <code>storage.rs</code>. Tests: <code>sata.scn</code> (files and settings across reboots on an AHCI disk), a self-test for the command bytes and the disk's self-description, and a boot on QEMU's Q35 machine with a foreign disk (left bit for bit unchanged) next to a BeeFS disk. To confirm on the HP: the internal disk is listed and left untouched.</p>
+</li>
+<li class="item" data-status="todo" id="D4">
+<h4><span class="id">D4</span> Crash reports on a SATA disk <span class="size">S</span> <span class="st"></span></h4>
+<p>After a crash the kernel looks for the disk again to save its report, and only knows the IDE driver there. On a SATA disk the report is not saved.</p>
+<p class="facts">Protected: <code>crash.rs</code>.</p>
+</li>
+<li class="item" data-status="todo" id="D5">
+<h4><span class="id">D5</span> A/B kernel slots on a SATA disk <span class="size">M</span> <span class="st"></span></h4>
+<p>The slot code reads and patches the boot partition through the IDE driver only. Needed before a real machine can try a new kernel and roll back.</p>
+<p class="facts">Protected: <code>bootslots.rs</code>. Goes with D2 and D3.</p>
 </li>
 <li class="item" data-status="todo" id="D2">
 <h4><span class="id">D2</span> Where BeeFS lives on the real machine <span class="size">S</span> <span class="st"></span></h4>
@@ -210,10 +244,10 @@ ul.items { list-style: none; padding: 0; margin: 12px 0; }
 
 <h3 id="tier-C" data-tier="Tier C: network">Tier C: network</h3>
 <ul class="items" data-tier="Tier C: network">
-<li class="item" data-status="todo" id="N1">
+<li class="item" data-status="done" id="N1">
 <h4><span class="id">N1</span> Intel I217-LM network card (e1000e family) <span class="size">L</span> <span class="st"></span></h4>
-<p>Close to our e1000 driver in its send and receive rings, but the chip talks to a separate PHY and has its own start-up and power quirks.</p>
-<p class="facts">Test: QEMU <code>-device e1000e</code> emulates a related chip: it covers the rings, not the I217's PHY part, which can only be tried on the HP.</p>
+<p>The HP's card (<code>8086:153a</code>). The e1000 driver now handles three families: the original e1000, the e1000e (82574L), and the cards built into the chipset (I217-LM and I217-V). For the chipset cards the start-up differs: a careful reset, the address from the registers the firmware filled in, no forced speed. <code>net</code> has a new <code>chip:</code> line with the link speed and, for the I217, the register values we need if the link does not come up. After the first try on the HP (link up, frames received, no DHCP answer) the start-up also applies the transmit settings these cards are documented to need, and <code>net</code> shows the card's own counters: how many frames it really put on the wire. Build b7 made it transmit on the HP (see the log above). Not done: the PHY workarounds other drivers carry (waking the PHY when the management firmware left it in its own mode); we add those only if the HP shows it needs them.</p>
+<p class="facts">Code: <code>kernel/src/e1000.rs</code>. Tests: <code>net-e1000e-wire.scn</code> (frames and both rings on a test wire) and <code>net-e1000e.scn</code> (DHCP, ping, a TCP transfer) on QEMU's e1000e; the I217 start-up path run by hand on that card (boot flag <code>nic=chipset</code>) to show it cannot hang. No emulator has an I217: the real test is the HP.</p>
 </li>
 <li class="item" data-status="todo" id="N2">
 <h4><span class="id">N2</span> Receive by interrupt <span class="size">M</span> <span class="st"></span></h4>
@@ -261,7 +295,7 @@ ul.items { list-style: none; padding: 0; margin: 12px 0; }
 </li>
 <li class="item" data-status="todo" id="P3">
 <h4><span class="id">P3</span> PCI: bridges, PCIe configuration space, capability lists <span class="size">M</span> <span class="st"></span></h4>
-<p><code>pci.rs</code> uses the old port method; real machines put devices behind bridges, and MSI needs the capability list.</p>
+<p><code>pci.rs</code> already follows bridges, with the old port method. Still to do: the PCIe configuration space and the capability list, which MSI needs.</p>
 <p class="facts">Code: <code>kernel/src/pci.rs</code>.</p>
 </li>
 <li class="item" data-status="todo" id="P4">
@@ -310,10 +344,10 @@ ul.items { list-style: none; padding: 0; margin: 12px 0; }
 
 <h2 id="order">Suggested order</h2>
 <ol>
-<li><b>S1 to S3</b> (done in QEMU), then <b>B1 to B3</b>: reach the prompt on the HP and write down what <code>lspci</code> shows.</li>
+<li><b>S1 to S3</b>, <b>B2, B3</b>: reach the prompt on the HP (done). Write down what <code>lspci</code> shows.</li>
 <li><b>A1</b>: type at the prompt.</li>
-<li><b>D1</b>: a disk. The largest gain for the effort, and fully testable in QEMU.</li>
-<li><b>N1</b>: network, which brings back the path to beehive.</li>
+<li><b>D1</b>: a disk (done), then <b>D2</b>: decide where BeeFS lives.</li>
+<li><b>N1</b>: network (done, works on the HP), which brings back the path to beehive.</li>
 <li><b>A2</b>: framebuffer console, then UEFI boot.</li>
 <li><b>P1, P3</b>, then <b>U1 to U3</b>: USB.</li>
 </ol>

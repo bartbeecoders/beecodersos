@@ -1,0 +1,43 @@
+# A disk on an AHCI (SATA) controller, as real PCs have: BeeFS mounts from
+# it, and files and settings survive a reboot (drivers todo, item D1).
+@disk
+@sata
+$ lspci
+~ SATA controller
+$ about
+filesystem: BeeFS on ATA disk
+$ cat /system/boot_count
+1
+$ mkdir /home/bee
+$ echo "kept on a SATA disk" > /home/bee/note.txt
+$ cp /home/bee/note.txt /home/bee/copy.txt
+$ echo "second line" >> /home/bee/copy.txt
+$ layout us
+keyboard layout: English (US) (saved)
+$ df
+~ ^disk: \d+ KiB used, \d+ KiB free, 4096 KiB total
+@reboot
+~ ^\[disk\] SATA port 0 "QEMU HARDDISK", 4 MiB: BeeFS mounted \(boot #2\)$
+$ cat /system/boot_count
+2
+$ cat /system/boot.log
+boot #1
+boot #2
+$ cat /home/bee/note.txt
+kept on a SATA disk
+$ cat /home/bee/copy.txt
+kept on a SATA disk
+second line
+$ layout
+~ ^ \* us\s+English \(US\)
+# The event log was written across both boots.
+$ log 50
+~ boot
+$ rm /home/bee/copy.txt
+$ ls /home/bee
+~ note\.txt$
+!~ copy
+@reboot
+$ ls /home/bee
+~ note\.txt$
+!~ copy

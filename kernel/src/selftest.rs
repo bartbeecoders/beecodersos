@@ -51,6 +51,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("heap: 1 MiB buffer", heap_large_buffer),
     ("ring: order and overflow", ring_buffer),
     ("serial port: missing or stuck hardware never hangs", uart_limits),
+    ("sata: command bytes and what a disk says about itself", sata_formats),
     ("serial: text and control keys", serial_decoder),
     ("serial: escape sequences and UTF-8", serial_escapes),
     ("keyboard: US layout", keyboard_us),
@@ -143,6 +144,49 @@ fn ring_buffer() -> TestResult {
     r.push(5);
     check_eq!([r.pop(), r.pop(), r.pop(), r.pop()], [Some(2), Some(3), Some(5), None]);
     check!(r.is_empty());
+    Ok(())
+}
+
+fn sata_formats() -> TestResult {
+    use crate::ahci::{command_fis, parse_identity, Identity};
+    // Read one sector at a 48-bit address.
+    let fis = command_fis(0x25, 0x1122_3344_5566, 1);
+    check_eq!(fis[..4], [0x27, 0x80, 0x25, 0]);
+    check_eq!(fis[4..7], [0x66, 0x55, 0x44]); // low half of the address
+    check_eq!(fis[7], 0x40);
+    check_eq!(fis[8..11], [0x33, 0x22, 0x11]); // high half
+    check_eq!(fis[12..14], [1, 0]);
+    check!(fis[14..].iter().all(|b| *b == 0));
+    // A command without data (flush): no sector count.
+    check_eq!(command_fis(0xEA, 0, 0)[12..14], [0, 0]);
+
+    // What a disk answers to IDENTIFY: 256 words, text with swapped bytes.
+    let mut id = [0u8; 512];
+    let mut set = |word: usize, value: u16| id[word * 2..word * 2 + 2].copy_from_slice(&value.to_le_bytes());
+    set(83, 1 << 10); // 48-bit addresses
+    set(100, 0x5678);
+    set(101, 0x1234);
+    set(102, 0x0001);
+    for (i, pair) in b"BeeDisk 3000    ".chunks(2).enumerate() {
+        set(27 + i, (pair[0] as u16) << 8 | pair[1] as u16);
+    }
+    check_eq!(parse_identity(&id), Some(Identity { sectors: 0x1_1234_5678, model: String::from("BeeDisk 3000") }));
+    // Not usable: no 48-bit addresses, no size, not a disk, all zeros, all ones.
+    let mut bad = id;
+    bad[83 * 2..83 * 2 + 2].fill(0);
+    check_eq!(parse_identity(&bad), None);
+    let mut bad = id;
+    bad[100 * 2..104 * 2].fill(0);
+    check_eq!(parse_identity(&bad), None);
+    let mut bad = id;
+    bad[1] = 0x80;
+    check_eq!(parse_identity(&bad), None);
+    check_eq!(parse_identity(&[0u8; 512]), None);
+    check_eq!(parse_identity(&[0xFFu8; 512]), None);
+    // Odd bytes in the model text never get through.
+    let mut odd = id;
+    odd[27 * 2..47 * 2].fill(0x07);
+    check_eq!(parse_identity(&odd).map(|i| i.model), Some(String::new()));
     Ok(())
 }
 

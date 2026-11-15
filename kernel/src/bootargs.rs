@@ -8,6 +8,8 @@
 //!   `slot=a|b`  which A/B kernel slot was booted (set by the boot disk)
 //!   `failboot`  tests: a trial kernel panics after arming the rollback
 //!   `nodhcp`    tests: don't request an address automatically at boot
+//!   `nic=chipset` tests: start the network card the way a chipset card
+//!               (Intel I217) is started, whatever card it is
 
 use crate::ring::Global;
 

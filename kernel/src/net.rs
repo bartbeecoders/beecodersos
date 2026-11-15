@@ -50,6 +50,10 @@ pub trait NetDevice {
     fn name(&self) -> &'static str;
     fn mac(&self) -> [u8; 6];
     fn link_up(&self) -> bool;
+    /// More about the card and its link, for the `net` command.
+    fn details(&self) -> Option<String> {
+        None
+    }
     fn send(&mut self, frame: &[u8]) -> Result<(), NetError>;
     /// The next received frame, if any. Never blocks.
     fn receive(&mut self) -> Option<Vec<u8>>;
@@ -628,6 +632,9 @@ pub fn describe() -> Option<String> {
         format_mac(&net.dev.mac()),
         if net.dev.link_up() { "up" } else { "down" }
     );
+    if let Some(details) = net.dev.details() {
+        out += &format!("chip:    {details}\n");
+    }
     match net.stack.config() {
         Some(cfg) => {
             let how = match (net.settings.mode, net.stack.dhcp_lease().and_then(|l| l.expires_ms())) {

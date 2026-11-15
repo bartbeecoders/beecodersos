@@ -128,8 +128,9 @@ checks without writing. Writing needs `sudo`.
 On a real PC, boot the stick in **legacy BIOS mode**: the screen is VGA
 text mode, which UEFI firmware does not provide (a UEFI boot runs, but
 shows nothing; only the serial port talks). The OS knows a PS/2 keyboard
-(or a USB keyboard the firmware presents as one), a disk on the legacy IDE
-ports and an Intel e1000 network card; without those it runs from a RAM
+(or a USB keyboard the firmware presents as one), disks on the legacy IDE
+ports or on a SATA (AHCI) controller, and Intel network cards of the e1000,
+e1000e (82574L) and I217 kinds; without those it runs from a RAM
 disk and without a network. A disk that is not BeeFS is never written to.
 A serial port is not needed: the kernel detects COM1 and COM2 and never
 waits on one that is missing or stuck. What is still to be written for real
@@ -191,9 +192,10 @@ kernel/
   src/aibridge.rs      AI bridge: JSON lines on COM2 to beehive on the host
   src/bootslots.rs     A/B kernel slots: arm the rollback, health check, report failed trials
   src/pci.rs           PCI: find devices, read their configuration (`lspci`)
-  src/e1000.rs         Intel e1000 network card driver (polled descriptor rings)
+  src/e1000.rs         Intel network cards: e1000, e1000e, I217 (polled descriptor rings)
   src/net.rs           card + beenet stack: polling, settings, TCP streams, HTTP / time / TFTP transfers
   src/thread.rs        cooperative kernel threads: stacks, switching, waiting
+  src/ahci.rs          SATA disks on AHCI controllers (real hardware; QEMU `-device ahci`)
   src/httpd.rs         status page for the local network (off by default)
   src/remote.rs        remote shell with a password, Telnet style (off by default)
   src/session.rs       console sessions: a shell that is not on the real screen and keyboard
@@ -246,10 +248,13 @@ disk **image file** on the host.
 (64-byte inodes: 10 direct + single + double indirect pointers, max file ≈ 8 MiB)
 → data. Directories hold 32-byte entries; names up to 26 bytes.
 
-At boot the kernel mounts an attached ATA disk containing BeeFS (incrementing
-`/system/boot_count` and appending to `/system/boot.log`); on a partitioned
-boot disk (phase 8) it uses the BeeFS partition. Without one it uses a 4 MiB
-RAM disk. Disks without BeeFS are **never** formatted automatically.
+At boot the kernel mounts the first disk containing BeeFS (incrementing
+`/system/boot_count` and appending to `/system/boot.log`): a disk on the
+legacy IDE ports, or a SATA disk on an AHCI controller (`kernel/src/ahci.rs`,
+for real hardware). On a partitioned boot disk (phase 8) it uses the BeeFS
+partition. Without one it uses a 4 MiB RAM disk. Disks without BeeFS are only
+read and **never** formatted or written. Crash reports and the A/B kernel
+slots still work on IDE disks only.
 
 ```sh
 make disk     # (re)create build/disk.img: 16 MiB BeeFS (run targets create it if missing)

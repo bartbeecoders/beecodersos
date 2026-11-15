@@ -10,6 +10,7 @@
 extern crate alloc;
 
 mod acpi;
+mod ahci;
 mod aibridge;
 mod allocator;
 mod ata;

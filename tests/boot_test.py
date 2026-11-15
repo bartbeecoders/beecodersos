@@ -13,6 +13,10 @@ Options: -v (print all serial output), --no-kvm (pure emulation).
 Scenario files (tests/scenarios/*.scn):
     # comment                  ignored
     @disk                      (first lines) boot with a fresh BeeFS disk instead of the RAM disk
+    @sata                      (first lines, with @disk) attach the disk to an AHCI (SATA)
+                               controller instead of the legacy IDE ports
+    @e1000e                    (first lines, with @net or @wire) the network card is an
+                               e1000e (Intel 82574L) instead of the e1000
     @ai                        (first lines) attach COM2 and run beehive with its fake backend
     @ai-offline                (first lines) attach COM2 but run no beehive
     @wire                      (first lines) connect the e1000 network card to the test: it
@@ -134,7 +138,7 @@ class Vm:
     """One QEMU run with the serial port on stdin/stdout."""
 
     def __init__(self, *, kernel_args=None, cdrom=None, disk=None, uefi=False, ai_port=None, bootdisk=None,
-                 wire=None, usernet=None, forward=None, forward_shell=None):
+                 wire=None, usernet=None, forward=None, forward_shell=None, sata=False, nic="e1000"):
         cmd = ["qemu-system-x86_64", "-m", "128M", "-display", "none", "-serial", "stdio",
                "-monitor", "none", "-no-reboot",
                "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04"]
@@ -146,19 +150,22 @@ class Vm:
             cmd += ["-drive", f"file={bootdisk},format=raw,if=ide,index=0,media=disk"]
         else:
             cmd += ["-kernel", str(KERNEL), "-append", kernel_args or ("test nodhcp" if wire else "test")]
-        if disk:
+        if disk and sata:
+            cmd += ["-device", "ahci,id=ahci", "-drive", f"file={disk},format=raw,if=none,id=sata0",
+                    "-device", "ide-hd,drive=sata0,bus=ahci.0"]
+        elif disk:
             cmd += ["-drive", f"file={disk},format=raw,if=ide,index=0,media=disk"]
         if uefi:
             cmd += ["-drive", f"if=pflash,format=raw,readonly=on,file={OVMF_CODE}"]
         if wire:  # e1000 on a UDP "wire": each datagram is one Ethernet frame
             ours, theirs = wire
             cmd += ["-netdev", f"socket,id=n0,udp=127.0.0.1:{ours},localaddr=127.0.0.1:{theirs}",
-                    "-device", f"e1000,netdev=n0,mac={WIRE_MAC}"]
+                    "-device", f"{nic},netdev=n0,mac={WIRE_MAC}"]
         if usernet:  # QEMU's user-mode network; "isolated": cut off from the host and beyond
             restrict = "on" if usernet == "isolated" else "off"
             fwd = f",hostfwd=tcp:127.0.0.1:{forward}-:80" if forward else ""
             fwd += f",hostfwd=tcp:127.0.0.1:{forward_shell}-:23" if forward_shell else ""
-            cmd += ["-netdev", f"user,id=n0,restrict={restrict}{fwd}", "-device", f"e1000,netdev=n0,mac={WIRE_MAC}"]
+            cmd += ["-netdev", f"user,id=n0,restrict={restrict}{fwd}", "-device", f"{nic},netdev=n0,mac={WIRE_MAC}"]
             if USE_KVM:
                 # With KVM's in-kernel timer, QEMU's main loop sleeps up to a second, and its
                 # user-mode network only notices new host sockets when that loop wakes up.
@@ -302,7 +309,7 @@ def parse_scenario(path: Path):
         line = raw.rstrip()
         if not line or line.startswith("#"):
             continue
-        if line in ("@disk", "@ai", "@ai-offline", "@bootdisk", "@wire", "@net", "@forward"):
+        if line in ("@disk", "@ai", "@ai-offline", "@bootdisk", "@wire", "@net", "@forward", "@sata", "@e1000e"):
             opts.add(line[1:])
         elif line.startswith("@dns "):
             opts.add("dns:" + line[5:])
@@ -837,7 +844,8 @@ def test_scenario(path: Path):
         forward = free_port() if "forward" in opts else None
         forward_shell = free_port() if "forward" in opts else None
         boot = lambda: Vm(disk=disk, ai_port=ai_port, bootdisk=bootdisk, wire=wire.ports if wire else None,
-                          usernet=usernet, forward=forward, forward_shell=forward_shell)
+                          usernet=usernet, forward=forward, forward_shell=forward_shell, sata="sata" in opts,
+                          nic="e1000e" if "e1000e" in opts else "e1000")
         vm = boot()
         out = []
         try:

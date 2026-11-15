@@ -1,6 +1,8 @@
-//! Boot-time storage: mount a BeeFS ATA disk if one is attached, otherwise
-//! fall back to a freshly formatted RAM disk.
+//! Boot-time storage: mount the first disk (IDE or SATA) that holds BeeFS,
+//! otherwise fall back to a freshly formatted RAM disk. A disk that is not
+//! BeeFS is only read, never written.
 
+use crate::ahci::AhciDisk;
 use crate::ata::AtaDisk;
 use crate::crash;
 use crate::ring::Global;
@@ -8,6 +10,8 @@ use core::ops::{Deref, DerefMut};
 use core::sync::atomic::Ordering;
 use alloc::boxed::Box;
 use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
 use beefs::{BlockDevice, FileSystem, FsError, Partition, RamDisk};
 
 pub type Fs = FileSystem<Box<dyn BlockDevice>>;
@@ -70,39 +74,50 @@ pub fn mount() -> Storage {
 }
 
 fn mount_any() -> Storage {
-    match AtaDisk::find() {
-        Some(disk) => {
-            let mut desc = format!("{} \"{}\", {} MiB", disk.position(), disk.model(), disk.sectors() / 2048);
-            let dev = match open_beefs_device(disk) {
-                Ok((dev, true)) => {
-                    desc.push_str(", partition");
-                    dev
-                }
-                Ok((dev, false)) => dev,
-                Err(e) => {
-                    println!("[disk] {desc}: error: {e}");
-                    return ram_disk();
-                }
-            };
-            match mount_disk(dev) {
-                Ok(Some((fs, boot))) => {
-                    println!("[disk] {desc}: BeeFS mounted (boot #{boot})");
-                    crash::PERSISTENT.store(true, Ordering::SeqCst);
-                    *FS.get() = Some(fs);
-                    return Storage { persistent: true, boot };
-                }
-                Ok(None) => println!("[disk] {desc}: not BeeFS, left untouched (create one: make disk)"),
-                Err(e) => println!("[disk] {desc}: error: {e}"),
+    // Every disk we have a driver for: the legacy IDE ports first (QEMU, old
+    // PCs), then SATA disks on AHCI controllers (real hardware).
+    let mut disks: Vec<(String, Box<dyn BlockDevice>)> = Vec::new();
+    if let Some(disk) = AtaDisk::find() {
+        let desc = format!("{} \"{}\", {} MiB", disk.position(), disk.model(), disk.sectors() / 2048);
+        disks.push((desc, Box::new(disk)));
+    }
+    for disk in AhciDisk::find_all() {
+        let desc = format!("SATA port {} \"{}\", {} MiB", disk.port(), disk.model(), disk.sectors() / 2048);
+        disks.push((desc, Box::new(disk)));
+    }
+    if disks.is_empty() {
+        println!("[disk] no disk found (IDE or SATA)");
+    }
+    // The first one that holds BeeFS is mounted. The others are only read.
+    for (mut desc, disk) in disks {
+        let dev = match open_beefs_device(disk) {
+            Ok((dev, true)) => {
+                desc.push_str(", partition");
+                dev
             }
+            Ok((dev, false)) => dev,
+            Err(e) => {
+                println!("[disk] {desc}: error: {e}");
+                continue;
+            }
+        };
+        match mount_disk(dev) {
+            Ok(Some((fs, boot))) => {
+                println!("[disk] {desc}: BeeFS mounted (boot #{boot})");
+                crash::PERSISTENT.store(true, Ordering::SeqCst);
+                *FS.get() = Some(fs);
+                return Storage { persistent: true, boot };
+            }
+            Ok(None) => println!("[disk] {desc}: not BeeFS, left untouched (create one: make disk)"),
+            Err(e) => println!("[disk] {desc}: error: {e}"),
         }
-        None => println!("[disk] no ATA disk attached"),
     }
     ram_disk()
 }
 
 /// The device BeeFS lives on: the BeeFS partition of a boot disk
 /// (tools/bootdisk.py), or the whole disk. True when partitioned.
-pub fn open_beefs_device(disk: AtaDisk) -> Result<(Box<dyn BlockDevice>, bool), FsError> {
+pub fn open_beefs_device<D: BlockDevice + 'static>(disk: D) -> Result<(Box<dyn BlockDevice>, bool), FsError> {
     let (part, partitioned) = Partition::beefs_or_whole(disk)?;
     Ok((Box::new(part), partitioned))
 }

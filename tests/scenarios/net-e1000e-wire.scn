@@ -1,0 +1,53 @@
+# The e1000e card (Intel 82574L): the newer family the same driver handles,
+# and the stand-in for the cards built into real PCs (drivers todo, item N1).
+# Frames out and in on a test wire, and both rings wrapping around.
+@wire
+@e1000e
+$ lspci
+~ ^00:0\d\.0 8086:10d3 Ethernet controller \(IRQ \d+\)$
+$ net
+card:    e1000e (Intel 82574L)
+mac:     52:54:00:be:e0:01
+link:    up
+chip:    1000 Mb/s, full duplex
+frames:  0 sent, 0 received
+$ net test
+sent a 60-byte broadcast test frame (EtherType 0x88b5)
+@frame ^ffffffffffff525400bee00188b5426565436f646572734f73[0-9a-f]{66}0000$
+@send 52 54 00 be e0 01  02 00 00 00 00 aa  88 b5  68 65 6c 6c 6f 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+$ net
+frames:  1 sent, 1 received
+bytes:   60 sent, 60 received
+last received: 60 bytes from 02:00:00:00:00:aa, type 0x88b5
+# A frame for another machine is not taken.
+@send 02 00 00 00 00 bb  02 00 00 00 00 aa  88 b5  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+$ net
+frames:  1 sent, 1 received
+# More frames than the transmit ring holds (16).
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net test
+$ net
+frames:  21 sent, 1 received
+# More frames than the receive ring holds (32).
+@send 80x ff ff ff ff ff ff  02 00 00 00 00 dd  88 b5  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+$ net
+frames:  21 sent, 81 received
+last received: 60 bytes from 02:00:00:00:00:dd, type 0x88b5
