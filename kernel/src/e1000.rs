@@ -22,6 +22,43 @@ use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ptr::{read_volatile, write_volatile};
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
+
+// Receive by interrupt. The handler runs between any two instructions of
+// the driver, so it touches nothing of the `E1000` value: only the card's
+// "interrupt cause" register and these three.
+/// The card's registers, once its interrupt is in use.
+static IRQ_REGS: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
+/// The card asked for attention since the last `take_interrupt`.
+static IRQ_PENDING: AtomicBool = AtomicBool::new(false);
+static IRQ_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// The interrupt handler (see `interrupts::set_device_handler`). Reading the
+/// cause register also clears it, which makes the card let go of the line.
+fn on_interrupt() -> bool {
+    let regs = IRQ_REGS.load(Ordering::Relaxed);
+    if regs.is_null() {
+        return false;
+    }
+    let cause = unsafe { read_volatile(regs.add(ICR) as *const u32) };
+    if cause == 0 {
+        return false; // another device on the same line
+    }
+    IRQ_PENDING.store(true, Ordering::Release);
+    IRQ_COUNT.fetch_add(1, Ordering::Relaxed);
+    true
+}
+
+/// True once after the card raised its interrupt: there is work in `poll`.
+pub fn interrupt_pending() -> bool {
+    IRQ_PENDING.load(Ordering::Acquire)
+}
+
+/// Forget the request: call before looking at the card, not after, so one
+/// that arrives meanwhile is kept.
+pub fn take_interrupt() {
+    IRQ_PENDING.store(false, Ordering::Release);
+}
 
 const VENDOR_INTEL: u16 = 0x8086;
 
@@ -57,7 +94,12 @@ const MDIC: usize = 0x0020;
 const EXTCNF_CTRL: usize = 0x0F00;
 const RFCTL: usize = 0x5008;
 const FWSM: usize = 0x5B54;
+const ICR: usize = 0x00C0;
+const IMS: usize = 0x00D0;
 const IMC: usize = 0x00D8;
+/// Interrupt causes we ask for: link change, receive ring nearly full,
+/// receive overrun, frame received.
+const INTERRUPT_CAUSES: u32 = 1 << 2 | 1 << 4 | 1 << 6 | 1 << 7;
 const RCTL: usize = 0x0100;
 const TCTL: usize = 0x0400;
 const TIPG: usize = 0x0410;
@@ -166,6 +208,8 @@ pub struct E1000 {
     /// frames it took off it, frames with a bad checksum, frames it had no
     /// room for.
     counted: core::cell::Cell<[u64; 4]>,
+    /// The PIC line the card interrupts on, or why it is only polled.
+    irq: Result<u8, &'static str>,
 }
 
 /// Index after `i` in a ring of `len` slots.
@@ -200,7 +244,7 @@ impl E1000 {
         let tx_buf: &'static mut [Buffer] = Box::leak(vec![Buffer([0; BUFFER_SIZE]); TX_RING].into_boxed_slice());
         let mut card =
             E1000 { name, family, regs, mac: [0; 6], rx, rx_buf, rx_next: 0, tx, tx_buf, tx_next: 0, tx_started: [false; TX_RING], rx_tail_dirty: false,
-                    counted: core::cell::Cell::new([0; 4]) };
+                    counted: core::cell::Cell::new([0; 4]), irq: Err("not set up") };
 
         // Reset, with all interrupts masked before and after (we poll).
         card.write(IMC, 0xFFFF_FFFF);
@@ -309,7 +353,29 @@ impl E1000 {
             }
         }
         card.write_flush();
+        card.irq = card.start_interrupts(dev);
         Ok(card)
+    }
+
+    /// Ask the card to interrupt when a frame arrives. The card is still
+    /// polled on every timer tick as well, so nothing depends on this.
+    fn start_interrupts(&self, dev: &Device) -> Result<u8, &'static str> {
+        if crate::bootargs::has("net=poll") {
+            return Err("switched off with net=poll");
+        }
+        if dev.irq == 0 || dev.irq >= 16 {
+            return Err("the firmware gave the card no interrupt line");
+        }
+        let _ = self.read(ICR); // drop what was asked before
+        IRQ_REGS.store(self.regs, Ordering::Relaxed);
+        if !crate::interrupts::set_device_handler(dev.irq, on_interrupt) {
+            IRQ_REGS.store(core::ptr::null_mut(), Ordering::Relaxed);
+            return Err("its interrupt line is in use by the system");
+        }
+        dev.allow_interrupts();
+        self.write(IMS, INTERRUPT_CAUSES);
+        self.write_flush();
+        Ok(dev.irq)
     }
 
     fn read(&self, reg: usize) -> u32 {
@@ -445,6 +511,16 @@ impl NetDevice for E1000 {
 
     fn mac(&self) -> [u8; 6] {
         self.mac
+    }
+
+    fn receive_mode(&self) -> alloc::string::String {
+        match self.irq {
+            Ok(irq) if crate::interrupts::gave_up(irq) => {
+                alloc::format!("polled every 10 ms (IRQ {irq} was switched off: it kept firing for another device)")
+            }
+            Ok(irq) => alloc::format!("by interrupt (IRQ {irq}, {} so far)", IRQ_COUNT.load(Ordering::Relaxed)),
+            Err(why) => alloc::format!("polled every 10 ms ({why})"),
+        }
     }
 
     fn link_up(&self) -> bool {

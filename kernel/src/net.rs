@@ -54,6 +54,10 @@ pub trait NetDevice {
     fn details(&self) -> Option<String> {
         None
     }
+    /// How frames are noticed, for `net`: by interrupt, or polled (and why).
+    fn receive_mode(&self) -> String {
+        String::from("polled every 10 ms")
+    }
     fn send(&mut self, frame: &[u8]) -> Result<(), NetError>;
     /// The next received frame, if any. Never blocks.
     fn receive(&mut self) -> Option<Vec<u8>>;
@@ -136,6 +140,7 @@ impl Net {
     }
 
     fn poll(&mut self) {
+        crate::e1000::take_interrupt();
         let now = time::uptime_ms();
         // Bounded, so a flood of frames can't hold the shell.
         for _ in 0..64 {
@@ -201,8 +206,9 @@ pub fn take_notice() -> Option<(&'static str, String)> {
     NET.get().as_mut()?.notices.pop_front()
 }
 
-/// Start the thread that keeps the network going: it polls the card on
-/// every timer tick, whatever the other threads are doing.
+/// Start the thread that keeps the network going: it looks at the card when
+/// the card interrupts, and on every timer tick anyway (timeouts, and cards
+/// whose interrupt can't be used), whatever the other threads are doing.
 pub fn start_task() {
     if NET.get().is_none() {
         return;
@@ -210,7 +216,7 @@ pub fn start_task() {
     thread::spawn("net", None, || loop {
         poll();
         let tick = time::uptime_ms();
-        thread::wait_until(|| time::uptime_ms() != tick);
+        thread::wait_until(|| time::uptime_ms() != tick || crate::e1000::interrupt_pending());
     });
 }
 
@@ -635,6 +641,7 @@ pub fn describe() -> Option<String> {
     if let Some(details) = net.dev.details() {
         out += &format!("chip:    {details}\n");
     }
+    out += &format!("receive: {}\n", net.dev.receive_mode());
     match net.stack.config() {
         Some(cfg) => {
             let how = match (net.settings.mode, net.stack.dhcp_lease().and_then(|l| l.expires_ms())) {

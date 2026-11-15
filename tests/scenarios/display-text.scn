@@ -1,0 +1,15 @@
+# `display=text` on the kernel command line keeps the 80x25 VGA text screen,
+# whatever graphics card there is: the way back when graphics go wrong.
+@args display=text
+$ display
+driver: text (VGA text mode, no graphics)
+text: 80x25 characters
+@screenshot 720x400 text
+$ display test
+display test: needs a graphics mode, and this is the text screen
+$ display mode 1280x720
+display mode 1280x720: no graphics driver is in use (this is the text screen)
+$ help
+$ echo the text screen still scrolls
+the text screen still scrolls
+@screenshot 720x400 text

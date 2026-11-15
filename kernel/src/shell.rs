@@ -7,7 +7,7 @@ use crate::vga::Color;
 use crate::aibridge::{self, Outcome};
 use crate::json::Obj;
 use crate::ring::Global;
-use crate::{allocator, bootslots, httpd, remote, session, console, crash, eventlog, keyboard, net, pci, power, selftest, thread, time};
+use crate::{allocator, bootslots, display, httpd, remote, session, console, crash, eventlog, keyboard, net, pci, power, selftest, thread, time};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -440,6 +440,28 @@ impl Shell {
                 Ok(len) => println!("sent a {len}-byte broadcast test frame (EtherType 0x{:04x})", net::ETHERTYPE_TEST),
                 Err(e) => error(e.message()),
             },
+            ("display", []) => println!("{}", console::describe_display()),
+            ("display", ["mode", size]) => match display::parse_mode(size) {
+                Some((width, height)) => match console::set_display_mode(width, height) {
+                    Ok(()) => println!("{}", console::describe_display()),
+                    Err(e) => error(&format!("display mode {size}: {}", e.message())),
+                },
+                None => error(&format!("display mode {size}: {}", display::DisplayError::BadSize.message())),
+            },
+            ("display", ["test"]) if display::current().is_none() => {
+                error("display test: needs a graphics mode, and this is the text screen")
+            }
+            ("display", ["test"]) => {
+                // The text goes out first: the bars then cover the whole screen.
+                println!("color bars on the screen: press Enter to go on");
+                console::show_color_bars();
+                // Ctrl+D is also what a closed remote session gives: never wait for more.
+                use crate::input::Key;
+                while !matches!(crate::input::read_key(), Key::Enter | Key::Ctrl('c' | 'd')) {}
+                let micros = console::redraw();
+                println!("drawing the whole screen again took {}.{} ms", micros / 1000, micros % 1000 / 100);
+            }
+            ("display", _) => error("usage: display [mode WIDTHxHEIGHT | test]"),
             ("slots", []) => match bootslots::describe() {
                 Some(text) => println!("{text}"),
                 None => println!("not booted from a boot disk with A/B slots (see tools/bootdisk.py)"),
@@ -1272,6 +1294,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("arp", "neighbours learned on the local network"),
     ("lspci [-v]", "list PCI devices (-v: what each one can do)"),
     ("threads", "what runs side by side inside the kernel"),
+    ("display [mode WxH]", "screen: driver and resolution; change it; 'display test': color bars"),
     ("slots", "A/B kernel slots: which one runs, last trial"),
     ("crash", "deliberately crash the kernel (tests crash reports)"),
     ("reboot, shutdown", "restart / power off"),

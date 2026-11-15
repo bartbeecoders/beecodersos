@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BeeCodersOs Display Driver</title>
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #ffffff; --surface-2: #f3f1ec; --text: #1d1b16; --muted: #6b665c;
+  --border: #e3dfd6; --accent: #b7791f; --accent-soft: #fdf3e1; --ok: #2f855a; --ok-soft: #e6f4ec;
+  --warn: #c05621; --warn-soft: #fdecdf; --risk: #c53030; --risk-soft: #fde8e8; --code: #f3f1ec;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15140f; --surface: #1d1b16; --surface-2: #26241d; --text: #ece8de; --muted: #a39d8f;
+    --border: #36332a; --accent: #e9b04f; --accent-soft: #2e2617; --ok: #68d391; --ok-soft: #1a2b21;
+    --warn: #f6ad55; --warn-soft: #2f2216; --risk: #fc8181; --risk-soft: #301c1c; --code: #26241d;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #15140f; --surface: #1d1b16; --surface-2: #26241d; --text: #ece8de; --muted: #a39d8f;
+  --border: #36332a; --accent: #e9b04f; --accent-soft: #2e2617; --ok: #68d391; --ok-soft: #1a2b21;
+  --warn: #f6ad55; --warn-soft: #2f2216; --risk: #fc8181; --risk-soft: #301c1c; --code: #26241d;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 920px; margin: 0 auto; padding: 48px 16px 96px; }
+h1 { font-size: 2.1rem; line-height: 1.2; margin: 0 0 8px; letter-spacing: -0.01em; }
+h2 { font-size: 1.45rem; margin: 56px 0 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+h3 { font-size: 1.1rem; margin: 28px 0 8px; }
+p, li { color: var(--text); }
+.lede { font-size: 1.12rem; color: var(--muted); margin: 0 0 24px; }
+.meta { font-size: .9rem; color: var(--muted); }
+code { font-family: ui-monospace, "JetBrains Mono", Menlo, monospace; font-size: .88em;
+  background: var(--code); padding: 1px 5px; border-radius: 4px; }
+pre { background: var(--code); padding: 14px 16px; border-radius: 8px; overflow-x: auto;
+  font-size: .85rem; line-height: 1.5; border: 1px solid var(--border); }
+pre code { background: none; padding: 0; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; margin: 16px 0; }
+.callout { background: var(--accent-soft); border-left: 4px solid var(--accent); border-radius: 6px; padding: 14px 18px; margin: 20px 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.phase { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px 22px; margin: 18px 0; }
+.phase h3 { margin-top: 0; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.tag { font-size: .75rem; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.t-now { background: var(--ok-soft); color: var(--ok); }
+.t-next { background: var(--accent-soft); color: var(--accent); }
+.t-later { background: var(--surface-2); color: var(--muted); }
+.done { font-size: .92rem; background: var(--surface-2); border-radius: 6px; padding: 10px 14px; margin-top: 12px; }
+.done b { color: var(--ok); }
+table { width: 100%; border-collapse: collapse; font-size: .93rem; margin: 12px 0; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: .82rem; text-transform: uppercase; letter-spacing: .04em; }
+.table-wrap { overflow-x: auto; }
+.lvl { font-weight: 700; white-space: nowrap; }
+.l0 { color: var(--ok); } .l1 { color: var(--ok); } .l2 { color: var(--warn); } .l3 { color: var(--risk); }
+.diagram { width: 100%; height: auto; display: block; margin: 8px 0; }
+.diagram text { font-family: system-ui, sans-serif; fill: var(--text); }
+.diagram .muted { fill: var(--muted); }
+.diagram .box { fill: var(--surface); stroke: var(--border); stroke-width: 1.5; }
+.diagram .box-a { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+.diagram .zone { fill: var(--surface-2); stroke: var(--border); stroke-dasharray: 5 4; }
+.diagram .line { stroke: var(--muted); stroke-width: 1.6; fill: none; }
+.diagram .line-a { stroke: var(--accent); stroke-width: 2; fill: none; }
+.loop { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 14px 0; }
+.loop span.step { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; font-weight: 600; font-size: .92rem; }
+.loop span.arrow { color: var(--muted); }
+ol.steps li { margin-bottom: 6px; }
+nav.toc { font-size: .93rem; }
+nav.toc a { color: var(--accent); text-decoration: none; }
+nav.toc a:hover { text-decoration: underline; }
+
+.tier { font-weight: 700; white-space: nowrap; }
+.t1 { color: var(--ok); } .t2 { color: var(--accent); } .t3 { color: var(--warn); } .t4 { color: var(--muted); }
+.rec { background: var(--ok-soft); border-left: 4px solid var(--ok); border-radius: 6px; padding: 12px 16px; margin: 14px 0; }
+.diagram .box-ok { fill: var(--ok-soft); stroke: var(--ok); stroke-width: 1.5; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>A display driver for BeeCodersOs</h1>
+<p class="lede">A plan to move the screen from 80x25 VGA text to a graphics framebuffer at up to 1920x1080, in virtual machines and on real hardware, with display drivers as interchangeable modules.</p>
+<p class="meta">Plan v1 · 15 November 2026 · Starting point: BeeCodersOs 0.0.3 · covers items A2 and X3 of <a href="drivers-todo.html">the drivers todo</a>.</p>
+<div class="callout"><b>Status:</b> G1 is done (0.0.3 b17): in QEMU the OS sets 1920x1080 itself and draws its console with the Spleen font; <code>display</code> shows and changes the mode; the tests take real screenshots. Your answers are in <a href="#need">section 5</a>. <b>Next: G2</b>, but see the note there about the USB keyboard under UEFI.</div>
+
+<nav class="toc card">
+<b>Contents</b>
+<ol>
+<li><a href="#summary">Summary and recommendations</a></li>
+<li><a href="#start">What we have and what is missing</a></li>
+<li><a href="#arch">Architecture: modular drivers</a></li>
+<li><a href="#drivers">The drivers</a></li>
+<li><a href="#need">Real hardware: what I need from you</a></li>
+<li><a href="#phases">Phases G1–G5</a></li>
+<li><a href="#testing">Testing</a></li>
+<li><a href="#risks">Risks and guardrails</a></li>
+<li><a href="#decisions">Decisions for you</a></li>
+</ol>
+</nav>
+
+<h2 id="summary">1. Summary and recommendations</h2>
+<p>A full HD screen does not need a driver for each graphics card. Almost every machine can hand the OS a <b>linear framebuffer</b>: a block of memory where each pixel is a few bytes. Who sets the resolution differs per machine, and that is the part we make modular:</p>
+<div class="loop">
+  <span class="step">shell, editor</span><span class="arrow">→</span>
+  <span class="step">console</span><span class="arrow">→</span>
+  <span class="step">screen (grid of characters)</span><span class="arrow">→</span>
+  <span class="step">font renderer</span><span class="arrow">→</span>
+  <span class="step">display driver</span><span class="arrow">→</span>
+  <span class="step">pixels</span>
+</div>
+<div class="rec">
+<b>Recommended choices</b>
+<ul>
+<li><b>In VMs: a Bochs/QEMU display driver.</b> QEMU's standard graphics card lets the OS pick any resolution with six register writes. This gives 1920x1080 in QEMU on day one, needs no protected file, and runs in every existing test.</li>
+<li><b>On real hardware: the framebuffer the bootloader sets up.</b> Limine asks the firmware for 1920x1080 (VBE in legacy BIOS boot, GOP in UEFI boot) and passes the result to the kernel. It works with any brand of graphics card. It needs a small change to the protected <code>boot.s</code>.</li>
+<li><b>One driver interface, drivers tried in order.</b> A driver that can set modes itself wins; then the bootloader's framebuffer; VGA text stays as the last resort. A boot flag <code>display=text</code> forces the old screen.</li>
+<li><b>No native Intel driver now.</b> Setting modes on the HP's HD Graphics 4600 ourselves is thousands of lines (clocks, DisplayPort link training). We do it only if the firmware cannot give 1080p (phase G5).</li>
+<li><b>Text first.</b> The goal of this plan is the existing console at a higher resolution, drawn with our own font. Drawing commands (pixels, lines, images) can come later on the same interface.</li>
+</ul>
+</div>
+<p>Five phases, G1 to G5. After G1 the OS runs at 1920x1080 in QEMU. After G2 it runs in graphics on the HP and under UEFI. G3 makes it fast and comfortable to read. G4 and G5 are optional extra drivers.</p>
+
+<h2 id="start">2. What we have and what is missing</h2>
+<div class="grid">
+<div class="card"><b>Already there</b>
+<ul>
+<li><code>vga.rs</code>: 80x25 text at 0xB8000, hardware cursor, code page 437</li>
+<li><code>console.rs</code>: the only user of <code>vga.rs</code>; everything else prints through it (and through sessions for the remote shell)</li>
+<li>Every character also goes to the serial port, which is what the tests read</li>
+<li><code>pci.rs</code>: finds devices, reads BARs</li>
+<li>The first 4 GiB are mapped, so a framebuffer below 4 GiB can be written directly</li>
+<li>Limine on the ISO and the A/B boot disk, with a <code>resolution</code> option</li>
+</ul>
+</div>
+<div class="card"><b>Missing</b>
+<ul>
+<li>A font: in graphics mode nobody draws the letters for us</li>
+<li>A screen size that is not fixed at 80x25 (<code>console.rs</code> uses <code>vga::WIDTH</code>)</li>
+<li>A video-mode request in the Multiboot header, and reading the answer</li>
+<li>Any way to choose a driver or a resolution</li>
+<li>A screen under UEFI boot at all (UEFI has no text mode)</li>
+<li>A test that looks at pixels</li>
+</ul>
+</div>
+</div>
+<h3>Facts checked on this machine</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Where</th><th>What happens today</th><th>Consequence</th></tr></thead>
+<tbody>
+<tr><td>QEMU <code>-kernel</code> (<code>make run</code>, most tests)</td><td>QEMU ignores a video-mode request in the Multiboot header (it only prints "multiboot knows VBE. we don't").</td><td>No framebuffer from the bootloader here. The OS must set the mode itself: the Bochs driver.</td></tr>
+<tr><td>Limine, <code>multiboot1</code> protocol (ISO, boot disk, HP)</td><td>Honours the request; <code>resolution: 1920x1080</code> in <code>limine.conf</code> overrides it; if the mode does not exist it picks another one. <code>textmode: yes</code> exists for BIOS boot only.</td><td>The kernel must accept whatever size it gets.</td></tr>
+<tr><td><code>vm1</code> (libvirt)</td><td>Video model QXL with 16 MB of VGA memory, SPICE window, legacy BIOS boot.</td><td>QXL should accept the same Bochs registers (1920x1080x32 needs 8.3 MB). To verify in G1; otherwise change the model to <code>vga</code>.</td></tr>
+<tr><td>HP EliteDesk 800 G1</td><td>HD Graphics 4600 (<code>8086:0412</code>), legacy BIOS boot, VGA text, no serial port.</td><td>Which resolutions its firmware offers is unknown until we try (G2).</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="arch">3. Architecture: modular drivers</h2>
+<div class="card">
+<svg class="diagram" viewBox="0 0 860 400" role="img" aria-label="Layers of the display system: console on top of a screen interface with a text screen and a framebuffer screen; the framebuffer screen draws through a display driver chosen from bochs, boot framebuffer, and later virtio-gpu and intel.">
+  <rect class="box-a" x="10" y="14" width="840" height="46" rx="10"/>
+  <text x="24" y="34" font-weight="700" font-size="14">console.rs</text>
+  <text x="24" y="51" class="muted" font-size="12">print!, colors, line editing, cursor · asks the screen for its size instead of assuming 80x25</text>
+
+  <rect class="zone" x="10" y="74" width="840" height="120" rx="10"/>
+  <text x="24" y="94" font-weight="700" font-size="14">Screen: a grid of characters</text>
+  <rect class="box" x="24" y="106" width="250" height="76" rx="8"/>
+  <text x="38" y="128" font-weight="600" font-size="13">Text screen (vga.rs, as today)</text>
+  <text x="38" y="148" class="muted" font-size="12">80x25, the card draws the letters</text>
+  <text x="38" y="166" class="muted" font-size="12">fallback and display=text</text>
+  <rect class="box-ok" x="288" y="106" width="550" height="76" rx="8"/>
+  <text x="302" y="128" font-weight="600" font-size="13">Framebuffer screen (fbcon.rs)</text>
+  <text x="302" y="148" class="muted" font-size="12">remembers every cell in RAM, draws changed cells with the built-in font,</text>
+  <text x="302" y="166" class="muted" font-size="12">software cursor · 1920x1080 = 240x67 characters, or 120x33 at double size</text>
+
+  <path class="line-a" d="M563 182 V214"/>
+  <rect class="box-a" x="10" y="214" width="840" height="46" rx="10"/>
+  <text x="24" y="234" font-weight="700" font-size="14">display.rs: the driver interface and the list of drivers</text>
+  <text x="24" y="251" class="muted" font-size="12">name · current mode (width, height, bytes per line, pixel format) · framebuffer address · set_mode · flush</text>
+
+  <rect class="zone" x="10" y="274" width="840" height="112" rx="10"/>
+  <text x="24" y="294" font-weight="700" font-size="14">Drivers, tried in this order</text>
+  <rect class="box-ok" x="24" y="306" width="190" height="68" rx="8"/>
+  <text x="38" y="328" font-weight="600" font-size="13">bochs (G1)</text>
+  <text x="38" y="346" class="muted" font-size="12">QEMU, vm1, VirtualBox</text>
+  <text x="38" y="362" class="muted" font-size="12">sets any mode itself</text>
+  <rect class="box-ok" x="228" y="306" width="190" height="68" rx="8"/>
+  <text x="242" y="328" font-weight="600" font-size="13">bootfb (G2)</text>
+  <text x="242" y="346" class="muted" font-size="12">HP, any PC, UEFI</text>
+  <text x="242" y="362" class="muted" font-size="12">mode fixed by the bootloader</text>
+  <rect class="box" x="432" y="306" width="190" height="68" rx="8"/>
+  <text x="446" y="328" font-weight="600" font-size="13">virtio-gpu (G4, optional)</text>
+  <text x="446" y="346" class="muted" font-size="12">VMs without a VGA card</text>
+  <text x="446" y="362" class="muted" font-size="12">needs flush after drawing</text>
+  <rect class="box" x="636" y="306" width="202" height="68" rx="8"/>
+  <text x="650" y="328" font-weight="600" font-size="13">intel (G5, optional)</text>
+  <text x="650" y="346" class="muted" font-size="12">HD Graphics on the HP</text>
+  <text x="650" y="362" class="muted" font-size="12">only if the firmware falls short</text>
+</svg>
+</div>
+
+<h3>The driver interface</h3>
+<p>One small trait in a new <code>kernel/src/display.rs</code>. A driver is a file plus one line in the driver list, the same pattern as <code>NetDevice</code> for network cards.</p>
+<pre><code>pub struct Mode { pub width: u32, pub height: u32, pub pitch: u32, pub format: PixelFormat }
+pub enum PixelFormat { Xrgb8888, Xbgr8888, Rgb888, Rgb565 }   // from the firmware's color masks
+
+pub trait DisplayDriver {
+    fn name(&amp;self) -&gt; &amp;'static str;
+    fn mode(&amp;self) -&gt; Mode;
+    fn framebuffer(&amp;self) -&gt; *mut u8;
+    /// Drivers that cannot change the mode keep the default.
+    fn set_mode(&amp;mut self, _w: u32, _h: u32) -&gt; Result&lt;Mode, DisplayError&gt; { Err(DisplayError::Fixed) }
+    /// For cards that need to be told what changed (virtio-gpu). Others do nothing.
+    fn flush(&amp;mut self, _first_line: u32, _lines: u32) {}
+}
+
+/// Tried from top to bottom; the first that finds its hardware wins.
+static DRIVERS: &amp;[(&amp;str, fn(&amp;BootInfo, &amp;[pci::Device]) -&gt; Option&lt;Box&lt;dyn DisplayDriver&gt;&gt;)] = &amp;[
+    ("bochs",  bochs::probe),
+    ("bootfb", bootfb::probe),
+];   // nothing found: the VGA text screen, as today</code></pre>
+<p>Different graphics setups are then a matter of choice, not code:</p>
+<ul>
+<li>Boot flags (read in <code>bootargs.rs</code>): <code>display=bochs|bootfb|text</code> forces a driver, <code>mode=1920x1080</code> asks for a size.</li>
+<li>A <code>display</code> command: shows driver, mode and pixel format; <code>display mode 1280x720</code> changes it where the driver can; <code>display test</code> draws color bars. The choice is saved in <code>/system/display</code>, like <code>/system/httpd</code>.</li>
+</ul>
+
+<h3>Above the driver</h3>
+<ul>
+<li><b>Screen</b>: what <code>console.rs</code> talks to. It has a size, a write position, colors, <code>write_char</code>, <code>clear</code>, a cursor and a scroll counter: exactly what <code>vga::Writer</code> offers today, minus the fixed 80x25. Two versions: the text screen (today's code) and the framebuffer screen.</li>
+<li><b>Framebuffer screen</b> (<code>fbcon.rs</code>): keeps every character cell in RAM (240x67 cells is 64 KB) and only draws cells that changed. It never reads from the framebuffer: reading video memory is very slow on real hardware. Scrolling moves the cells in RAM and redraws the differences.</li>
+<li><b>Font</b> (<code>font.rs</code>): a table of 8x16 bitmaps built into the kernel, covering the same characters as code page 437 so nothing that prints today changes. Double size (16x32) for readability on a large monitor.</li>
+<li><b>Colors</b>: the 16 <code>vga::Color</code> values stay as they are (so the protected <code>interrupts.rs</code>, which imports them, is not touched) and map to RGB through a table.</li>
+</ul>
+
+<h2 id="drivers">4. The drivers</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Driver</th><th>Where it works</th><th>Full HD?</th><th>How</th><th>Size</th></tr></thead>
+<tbody>
+<tr><td class="tier t1">bochs</td><td>QEMU <code>-vga std</code> (the default), <code>bochs-display</code>, VirtualBox; expected on QXL and virtio-vga</td><td>Yes, any size that fits the video memory</td><td>Find PCI <code>1234:1111</code> (or probe the ID register on ports 0x1CE/0x1CF), write width, height, 32 bits, enable. Framebuffer is BAR 0.</td><td>~150 lines</td></tr>
+<tr><td class="tier t1">bootfb</td><td>Everything Limine boots: the HP, other PCs, UEFI, VMs</td><td>If the firmware offers it. UEFI normally starts in the monitor's own resolution; legacy BIOS depends on the card's mode list.</td><td>Multiboot header asks for 1920x1080x32; the kernel reads address, size, bytes per line and color masks from the Multiboot info.</td><td>~200 lines</td></tr>
+<tr><td class="tier t1">text</td><td>Legacy BIOS boot everywhere</td><td>No (80x25)</td><td>Today's <code>vga.rs</code>. Used when nothing else is found, or with <code>display=text</code>.</td><td>exists</td></tr>
+<tr><td class="tier t3">virtio-gpu</td><td>VMs with <code>virtio-gpu-pci</code> (no VGA part), cloud VMs</td><td>Yes</td><td>Virtio queues, a framebuffer in our own RAM, a "flush" command after drawing. Needs a virtio base layer we do not have yet.</td><td>~700 lines</td></tr>
+<tr><td class="tier t4">intel</td><td>HP EliteDesk (Haswell) only; other Intel generations differ</td><td>Yes, independent of the firmware</td><td>Read the monitor's EDID, program the clock, the pipe and the DisplayPort link ourselves.</td><td>2000+ lines</td></tr>
+</tbody>
+</table>
+</div>
+<p><b>Why bochs before bootfb in the list:</b> a driver that can change the mode is more useful than one that cannot. On the HP there is no Bochs card, so <code>bootfb</code> is chosen there automatically.</p>
+
+<h2 id="need">5. Real hardware: what I need from you</h2>
+<p>On the HP the screen is the only output (no serial port), so a mistake means a black screen and no error message. These are the things I cannot find out or decide from here:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>#</th><th>What</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><b>Approval to edit protected files</b>: <code>kernel/src/boot.s</code> (Multiboot header only: flags <code>3</code> → <code>7</code> plus the eight header fields that follow; no code changes), <code>tools/bootdisk.py</code> (one <code>resolution:</code> line in the generated <code>limine.conf</code>), <code>tests/boot_test.py</code> (screenshot check, see <a href="#testing">testing</a>).</td><td>Without the header change no bootloader gives us a framebuffer, so nothing works outside QEMU.</td></tr>
+<tr><td>2</td><td><b>The monitor on the HP</b>: its native resolution, and the connector used (DisplayPort, VGA, or an adapter to HDMI/DVI).</td><td>The firmware only offers modes the monitor reports. Adapters sometimes hide them.</td></tr>
+<tr><td>3</td><td><b>Legacy BIOS or UEFI on the HP?</b> And is the keyboard PS/2 or USB?</td><td>UEFI is the surest way to the monitor's own resolution, but under UEFI a USB keyboard stops working until we have USB drivers (U1, U2). A PS/2 keyboard works in both. Legacy BIOS keeps today's setup, but its mode list may stop at 1280x1024 or 1600x1200.</td></tr>
+<tr><td>4</td><td><b>One test run on the HP after G2</b>: boot the USB stick, run <code>display</code>, send me the output (a photo is fine). If the screen stays black: boot the "text mode" menu entry and run <code>display</code> there.</td><td>It tells us which modes the firmware offered and which one we got. That decides whether G5 is ever needed.</td></tr>
+<tr><td>5</td><td><b>A font</b>: permission to add a font table to the kernel (see <a href="#decisions">decisions</a>).</td><td>It is data, not a crate, but it has a license.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="callout"><b>Your answers (15 November 2026):</b> 1: approved. 2: the monitor is on the VGA connector (its resolution is still to be noted). 3: UEFI boot, USB keyboard. 5: Spleen. <b>Consequence of 3:</b> under UEFI the HP's USB keyboard does not work until the USB drivers exist (U1 and U2 in the drivers todo). G2 will give the HP a picture under UEFI, but no way to type. Either the USB drivers come before the HP switches to UEFI, or the HP stays on legacy BIOS boot for G2 (the same code gives graphics there, at whatever sizes its firmware lists), or a PS/2 keyboard is used meanwhile.</div>
+<p>Nothing else is needed: no extra hardware, no vendor documentation, no new crates. A serial port card for the HP would make debugging a black screen much easier, but the text-mode menu entry covers the same need.</p>
+
+<h2 id="phases">6. Phases</h2>
+<p>Named G1–G5. Each ends with a test for "done". Sizes are rough estimates of new code.</p>
+
+<div class="phase">
+<h3>G1 — Display core, font, and full HD in QEMU <span class="tag t-now">Done</span></h3>
+<ul>
+<li><code>display.rs</code>: the trait, the driver list, <code>Mode</code>, pixel formats, the <code>display=</code> and <code>mode=</code> boot flags.</li>
+<li><code>bochs.rs</code>: detect the card, check the video memory is large enough, set the mode, read it back.</li>
+<li><code>font.rs</code> and <code>fbcon.rs</code>: the framebuffer screen described above.</li>
+<li><code>console.rs</code>: use the screen interface and its real size; pick the framebuffer screen when a driver is found.</li>
+<li><code>display</code> command (show, <code>mode</code>, <code>test</code>), added to <code>COMMANDS</code> and the README.</li>
+<li>The panic screen keeps working: it only uses <code>console</code>, and drawing a cell needs no heap and no lock.</li>
+</ul>
+<p class="meta">About 800 lines plus the font table. Touches no protected file. Default mode in QEMU: 1920x1080; <code>display=text</code> gives the old screen.</p>
+<div class="done"><b>Done when:</b> <code>make run</code> opens a 1920x1080 window with a readable prompt, <code>display</code> prints <code>bochs 1920x1080</code> in a scenario, the renderer self-tests pass, and <code>make check</code> is green. Checked on <code>vm1</code> after a deploy.</div>
+<p class="meta"><b>How it went:</b> built as planned, with these differences. The cells live in a fixed table (320x100 at most), not in the heap, so drawing works before and during a crash. What the text screen showed before the switch is copied over, so the first boot lines stay visible. <code>display mode</code> works but is not saved yet (G3). The driver also takes QXL, virtio-vga and VirtualBox cards: QXL was tried in QEMU and has its own scenario; <code>vm1</code> itself has not been deployed to yet. The test runner got three directives: <code>@screenshot WxH text|bars</code>, plus <code>@args</code> (extra kernel flags) and <code>@vga</code> (the graphics card), which the display scenarios need.</p>
+</div>
+
+<div class="phase">
+<h3>G2 — The bootloader's framebuffer: the HP and UEFI <span class="tag t-next">Next</span></h3>
+<ul>
+<li><code>boot.s</code> (protected): the Multiboot header asks for a 1920x1080x32 graphics mode.</li>
+<li><code>bootfb.rs</code>: read the framebuffer fields from the Multiboot info and check them before use: non-zero size, bytes per line large enough for the width, 16, 24 or 32 bits, whole area below 4 GiB, no overflow. Anything odd: text screen and a message.</li>
+<li><code>limine.conf</code> (ISO and boot disk): <code>resolution: 1920x1080</code>, and a second menu entry "BeeCodersOs (text mode)" with <code>textmode: yes</code> and <code>display=text</code> as the way back from a black screen. The menu gets a short timeout instead of 0.</li>
+<li>A framebuffer above 4 GiB (possible on some UEFI machines): report it and stay on serial/text. Mapping it is a small follow-up if a real machine needs it.</li>
+</ul>
+<p class="meta">About 250 lines. Protected: <code>boot.s</code>, <code>tools/bootdisk.py</code>. This closes A2 in the drivers todo.</p>
+<div class="done"><b>Done when:</b> the UEFI ISO boot shows the prompt on screen (today it shows nothing), the BIOS ISO boot with <code>display=bootfb</code> does too, and the HP boots from the USB stick into a graphics console and <code>display</code> reports its mode.</div>
+</div>
+
+<div class="phase">
+<h3>G3 — Fast and comfortable <span class="tag t-later">Later</span></h3>
+<ul>
+<li><b>Write-combining</b> for the framebuffer memory. Without it every pixel write on real hardware goes to the card one by one, and a full-screen scroll at 1080p can take a noticeable fraction of a second. Done by marking the framebuffer's pages in the page tables (the tables are data set up by <code>boot.s</code>; the file itself is not changed).</li>
+<li>Double-size font and <code>display font 1|2</code>; pick double automatically at 1080p and above.</li>
+<li>Scroll in jumps when output arrives faster than the screen can draw (the serial log stays complete).</li>
+<li>Save driver, mode and font size in <code>/system/display</code>.</li>
+</ul>
+<p class="meta">About 300 lines. Whether write-combining is needed is measured on the HP first: <code>display test</code> prints how long a full redraw takes.</p>
+<div class="done"><b>Done when:</b> <code>cat</code> of a long file on the HP scrolls without visible stutter, and a full redraw at 1080p takes under 20 ms.</div>
+</div>
+
+<div class="phase">
+<h3>G4 — virtio-gpu <span class="tag t-later">Optional</span></h3>
+<ul>
+<li>A virtio base layer (PCI capabilities, which <code>pci.rs</code> can already walk; queues), then the GPU device: create a 2D resource, attach our RAM as its backing, set the scanout, flush changed lines.</li>
+<li>The first driver that needs <code>flush</code>, which proves the interface.</li>
+</ul>
+<p class="meta">About 700 lines. Worth doing when a VM without a VGA card matters, or when virtio-net or virtio-blk are wanted too (they share the base layer).</p>
+<div class="done"><b>Done when:</b> a scenario boots with <code>-vga none -device virtio-gpu-pci</code> and <code>display</code> prints <code>virtio-gpu 1920x1080</code>.</div>
+</div>
+
+<div class="phase">
+<h3>G5 — Native Intel HD Graphics <span class="tag t-later">Only if needed</span></h3>
+<ul>
+<li>Step 1 (small): an <code>intel</code> driver that only reads the registers and reports what the firmware set up: which output, which mode, the monitor's EDID. Useful for diagnosis.</li>
+<li>Step 2 (very large): set a mode ourselves: clocks, pipe, plane, DisplayPort link training over the AUX channel.</li>
+</ul>
+<p class="meta">Step 2 is 2000+ lines, cannot be tested in QEMU (no emulated Intel graphics), and a mistake gives a black screen. X3 in the drivers todo stays "not planned" unless G2 shows the HP's firmware cannot reach 1920x1080 in either boot mode.</p>
+<div class="done"><b>Done when:</b> the HP shows 1920x1080 in legacy BIOS boot even though the firmware only offered less.</div>
+</div>
+
+<h2 id="testing">7. Testing</h2>
+<p>The tests read the serial port, and that does not change: every character still goes to COM1, so all existing scenarios keep working whatever the screen does. QEMU keeps its graphics card with <code>-display none</code>, so the display code runs in every test boot.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>What</th><th>Where</th><th>Checks</th></tr></thead>
+<tbody>
+<tr><td>Font renderer</td><td><code>selftest.rs</code>, drawing into a buffer in RAM</td><td>A known letter gives the expected pixels in each pixel format; wrap, scroll, clear, colors, cursor; double size; nothing is written outside the buffer for odd sizes (width not a multiple of 8, 1x1, bytes per line larger than the width).</td></tr>
+<tr><td>Bootloader data</td><td><code>selftest.rs</code></td><td>The framebuffer parser with truncated and nonsense input: zero size, 0 or 15 bits per pixel, bytes per line too small, sizes that overflow, addresses above 4 GiB. All must give "no framebuffer", never a write.</td></tr>
+<tr><td>Flags</td><td><code>selftest.rs</code></td><td><code>mode=1920x1080</code>, <code>mode=0x0</code>, <code>mode=99999x1</code>, <code>display=unknown</code>.</td></tr>
+<tr><td>Bochs driver</td><td><code>selftest.rs</code> (hardware part) and <code>tests/scenarios/display.scn</code></td><td>Set 1920x1080, read the registers back, write and read a few pixels; <code>display</code>, <code>display mode 1280x720</code>, a mode too large for the video memory is refused, <code>display=text</code> boots to 80x25.</td></tr>
+<tr><td>Boot framebuffer</td><td>ISO boots (BIOS and UEFI)</td><td><code>display</code> reports a driver and a mode under both firmwares; one boot with <code>display=bootfb</code> so the bootloader path runs in QEMU too.</td></tr>
+<tr><td>Real pixels</td><td><code>tests/boot_test.py</code> (protected: a proposal)</td><td>A new directive <code>@screenshot WxH</code>: ask QEMU for a screen dump, check its size and that it matches the color bars of <code>display test</code> at a few points. This is the only test that proves the picture, not just our own bookkeeping.</td></tr>
+<tr><td>The HP</td><td>By hand, logged in the drivers todo</td><td>Output of <code>display</code>, time of a full redraw, a photo.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="risks">8. Risks and guardrails</h2>
+<ul>
+<li><b>Black screen on the HP.</b> The screen is the only output there. Guardrails: the text-mode menu entry, <code>display=text</code>, and falling back to text whenever the bootloader's data fails a check. The framebuffer screen is switched on as early as the text screen is today, so boot messages are not lost.</li>
+<li><b>A/B deploys.</b> A kernel that boots but shows nothing still passes the deploy check (it answers on serial). The <code>@screenshot</code> check in the scenarios is what catches this before a deploy.</li>
+<li><b>Data from the firmware is not trusted.</b> Every size and address is checked before the first pixel is written, the same rule as for received network packets.</li>
+<li><b>Crash reports.</b> Drawing must work during a panic: no heap, no waiting, no lock that the crashed code may hold. The cell buffer is allocated once at start.</li>
+<li><b>Threads.</b> Drawing never waits, so no other thread runs in the middle of it; the rule "no <code>Global::get()</code> reference across a wait" holds automatically.</li>
+<li><b>Speed on real hardware</b> is unknown until measured (G3). In VMs it is not an issue.</li>
+<li><b>Legacy BIOS mode list.</b> The HP's firmware may not offer 1920x1080 through VBE. Then the choice is UEFI boot, or G5.</li>
+<li><b><code>vm1</code> with QXL</b> is expected to accept the Bochs registers but that is not verified. If not: switch its video model to <code>vga</code> (one line in the VM definition).</li>
+</ul>
+
+<h2 id="decisions">9. Decisions for you</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Decision</th><th>Recommendation</th><th>Alternative and trade-off</th></tr></thead>
+<tbody>
+<tr><td><b>Edit <code>boot.s</code> for the video request?</b></td><td>Yes, header fields only. It is the smallest change that gives real hardware a framebuffer.</td><td>Move to Multiboot2 or Limine's own protocol: cleaner framebuffer and memory information, but a rewrite of the protected boot path.</td></tr>
+<tr><td><b>Legacy BIOS or UEFI on the HP?</b></td><td>Try legacy first (nothing else changes). Move to UEFI if it does not offer 1080p and the keyboard is PS/2.</td><td>UEFI with a USB keyboard needs the USB drivers first.</td></tr>
+<tr><td><b>Which font?</b></td><td>Spleen 8x16 and 16x32 (BSD license), stored as a generated table in <code>font.rs</code>, limited to the code page 437 characters.</td><td>Terminus (OFL license, very readable). Or draw our own 8x16 font: no license question, a day of work. Or one size only, doubled by the renderer: smaller kernel, blockier letters.</td></tr>
+<tr><td><b>Default in VMs</b></td><td>1920x1080 when the Bochs card is there.</td><td>Keep 80x25 by default and switch with <code>display mode</code>: safer for <code>vm1</code>, but the feature stays hidden.</td></tr>
+<tr><td><b>Screenshot test in <code>boot_test.py</code>?</b></td><td>Yes, with G1.</td><td>Without it the tests only check what the kernel believes it drew.</td></tr>
+<tr><td><b>virtio-gpu (G4)</b></td><td>Defer until virtio is wanted for network or disk as well.</td><td>None of today's machines need it.</td></tr>
+<tr><td><b>Native Intel driver (G5)</b></td><td>No, unless G2 shows the firmware cannot do 1080p.</td><td>The diagnosis-only step 1 is cheap and can be done any time.</td></tr>
+</tbody>
+</table>
+</div>
+
+</main>
+</body>
+</html>

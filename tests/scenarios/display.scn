@@ -1,0 +1,52 @@
+# The graphics console (display driver plan, phase G1): on QEMU's standard
+# graphics card the bochs driver sets 1920x1080 at boot, and text is drawn
+# with the built-in font. The screenshots check what a monitor would show.
+$ display
+driver: bochs
+mode: 1920x1080, 32 bits per pixel
+text: 240x67 characters (8x16 font)
+@screenshot 1920x1080 text
+
+# Color bars cover the whole screen; Enter brings the text back.
+$& display test
+@screenshot 1920x1080 bars
+> x
+$wait
+color bars on the screen: press Enter to go on
+~ ^drawing the whole screen again took \d+\.\d ms$
+@screenshot 1920x1080 text
+
+# Another resolution; the console follows.
+$ display mode 1280x720
+driver: bochs
+mode: 1280x720, 32 bits per pixel
+text: 160x45 characters (8x16 font)
+@screenshot 1280x720 text
+$ echo still typing: héllo
+still typing: héllo
+$& display test
+@screenshot 1280x720 bars
+> x
+$wait
+
+# Sizes the card or the kernel cannot do leave the mode as it is.
+$ display mode 4096x2160
+display mode 4096x2160: too large for the card's video memory
+$ display mode 100x100
+display mode 100x100: not a usable size (320x200 to 4096x2160, e.g. 1920x1080)
+$ display mode 1280x720x32
+~ not a usable size
+$ display mode
+usage: display [mode WIDTHxHEIGHT | test]
+$ display
+mode: 1280x720, 32 bits per pixel
+@screenshot 1280x720 text
+
+# A long output scrolls; the screen survives it.
+$ help
+~ ^  display \[mode WxH\]
+$ help
+$ help
+$ display mode 1920x1080
+text: 240x67 characters (8x16 font)
+@screenshot 1920x1080 text

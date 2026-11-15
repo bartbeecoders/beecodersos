@@ -180,6 +180,13 @@ impl Device {
         write32(self.bus, self.dev, self.func, 0x04, (reg & 0xFFFF) | bits as u32);
     }
 
+    /// Let the device raise its interrupt line (command register bit 10,
+    /// "interrupt disable", off). Firmware may leave it on.
+    pub fn allow_interrupts(&self) {
+        let reg = read32(self.bus, self.dev, self.func, 0x04);
+        write32(self.bus, self.dev, self.func, 0x04, reg & 0xFFFF & !(1 << 10));
+    }
+
     pub fn class_name(&self) -> &'static str {
         match (self.class, self.subclass) {
             (0x01, 0x01) => "IDE controller",

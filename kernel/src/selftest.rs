@@ -67,7 +67,12 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("shell: calc expressions", shell_calc),
     ("slots: parse and patch limine.conf", slots_state),
     ("pci: config address and BAR decoding", pci_decoding),
+    ("display: sizes, boot flags, pixel formats, framebuffer checks", display_basics),
+    ("display: text drawn as pixels in every pixel format", fbcon_drawing),
+    ("display: wrap, scroll, clear and cursor on a framebuffer", fbcon_screen),
+    ("display: odd framebuffer sizes never write outside", fbcon_bounds),
     ("pci: capability lists, also broken ones", pci_capability_lists),
+    ("interrupts: a device line that keeps firing is switched off", interrupt_storm_guard),
     ("net: frames, MAC text, descriptor rings", net_basics),
     ("rand: generator", rand_generator),
     ("net: address settings", net_config),
@@ -472,6 +477,36 @@ fn slots_state() -> TestResult {
     Ok(())
 }
 
+fn interrupt_storm_guard() -> TestResult {
+    use crate::interrupts::{set_device_handler, storm_step, STORM_LIMIT};
+    // Claimed interrupts never switch a line off, however many.
+    let mut count = 0;
+    for _ in 0..3 * STORM_LIMIT {
+        let (next, off) = storm_step(count, true);
+        check!(!off);
+        count = next;
+    }
+    check_eq!(count, 0);
+    // Unclaimed ones do, at the limit and not before; one claimed starts over.
+    for i in 1..STORM_LIMIT {
+        let (next, off) = storm_step(count, false);
+        check!(!off);
+        check_eq!(next, i);
+        count = next;
+    }
+    check_eq!(storm_step(count, true), (0, false));
+    check_eq!(storm_step(count, false), (STORM_LIMIT, true));
+    check_eq!(storm_step(u32::MAX, false), (u32::MAX, true)); // no overflow
+    // The system's own lines and lines that do not exist are refused.
+    fn never() -> bool {
+        false
+    }
+    for irq in [0, 1, 2, 3, 4, 16, 255] {
+        check!(!set_device_handler(irq, never));
+    }
+    Ok(())
+}
+
 fn pci_capability_lists() -> TestResult {
     // A configuration space with three capabilities: MSI at 0x50, PCI
     // Express at 0x70, power management at 0xC8.
@@ -813,5 +848,241 @@ fn net_stack_tcp() -> TestResult {
     check_eq!(n, message.len());
     check!(got[..n] == message[..]);
     check_eq!(b.tcp_recv(server, &mut got, 0), Err(TcpError::Closed(CloseReason::Normal)));
+    Ok(())
+}
+
+fn display_basics() -> TestResult {
+    use crate::display::{parse_mode, usable, Mode, PixelFormat};
+    use crate::{bochs, bootargs};
+    check_eq!(parse_mode("1920x1080"), Some((1920, 1080)));
+    check_eq!(parse_mode("320x200"), Some((320, 200)));
+    for bad in ["", "x", "1920", "1920x", "x1080", "0x0", "99999x1", "319x200", "1920x2161", "1920x1080x32", "-1x5", "a x b"] {
+        check_eq!((bad, parse_mode(bad)), (bad, None));
+    }
+    // key=value words on the kernel command line.
+    check_eq!(bootargs::value_in("test display=text mode=800x600", "display"), Some("text"));
+    check_eq!(bootargs::value_in("test display=text mode=800x600", "mode"), Some("800x600"));
+    check_eq!(bootargs::value_in("test displays=text nodisplay=x display", "display"), None);
+    check_eq!(bootargs::value_in("display=", "display"), Some(""));
+    // Colors in each pixel format.
+    check_eq!(PixelFormat::Xrgb8888.encode(0x112233), 0x112233);
+    check_eq!(PixelFormat::Xbgr8888.encode(0x112233), 0x332211);
+    check_eq!(PixelFormat::Rgb888.encode(0xFF112233), 0x112233);
+    check_eq!(PixelFormat::Rgb565.encode(0xFFFFFF), 0xFFFF);
+    check_eq!(PixelFormat::Rgb565.encode(0xFF0000), 0xF800);
+    check_eq!(PixelFormat::Rgb565.encode(0x00FF00), 0x07E0);
+    check_eq!(PixelFormat::Rgb565.encode(0x0000FF), 0x001F);
+    // A framebuffer is only used when all of it can be reached and its numbers add up.
+    let hd = Mode { width: 1920, height: 1080, pitch: 1920 * 4, format: PixelFormat::Xrgb8888 };
+    check!(usable(0xFD00_0000, &hd));
+    check!(!usable(0, &hd)); // no address
+    check!(!usable(0xB8000, &hd)); // inside low memory
+    check!(!usable(0x1_0000_0000, &hd)); // above what is mapped
+    check!(!usable(0xFFFF_0000, &hd)); // starts below 4 GiB, ends above
+    check!(!usable(u64::MAX - 100, &hd)); // the end overflows
+    check!(usable(0x1_0000_0000 - hd.bytes(), &hd)); // ends exactly at 4 GiB
+    check!(!usable(0xFD00_0000, &Mode { pitch: 1920 * 4 - 1, ..hd })); // a line too short for its pixels
+    check!(!usable(0xFD00_0000, &Mode { pitch: 0, ..hd }));
+    check!(!usable(0xFD00_0000, &Mode { width: 0, ..hd }));
+    check!(!usable(0xFD00_0000, &Mode { height: 0, ..hd }));
+    check!(!usable(0xFD00_0000, &Mode { width: u32::MAX, pitch: u32::MAX, ..hd }));
+    check!(usable(0xFD00_0000, &Mode { pitch: 1920 * 3, format: PixelFormat::Rgb888, ..hd }));
+    // The Bochs card's ID register; 0xFFFF is what a machine without it answers.
+    check!(bochs::id_ok(0xB0C5) && bochs::id_ok(0xB0C4));
+    check!(!bochs::id_ok(0xB0C0) && !bochs::id_ok(0xFFFF) && !bochs::id_ok(0));
+    Ok(())
+}
+
+/// A framebuffer in the heap for the display tests: every byte starts as
+/// 0xEE, with `GUARD` spare bytes after the last line.
+struct TestScreen {
+    mode: crate::display::Mode,
+    pixels: Vec<u8>,
+}
+
+impl TestScreen {
+    const GUARD: usize = 64;
+
+    fn new(width: u32, height: u32, extra_pitch: u32, format: crate::display::PixelFormat) -> Self {
+        let pitch = width * format.bytes() as u32 + extra_pitch;
+        let mode = crate::display::Mode { width, height, pitch, format };
+        TestScreen { mode, pixels: vec![0xEE; mode.bytes() as usize + Self::GUARD] }
+    }
+
+    fn pixel(&self, x: usize, y: usize) -> u32 {
+        let at = y * self.mode.pitch as usize + x * self.mode.format.bytes();
+        let mut bytes = [0u8; 4];
+        let n = self.mode.format.bytes();
+        bytes[..n].copy_from_slice(&self.pixels[at..at + n]);
+        u32::from_le_bytes(bytes)
+    }
+
+    fn color(&self, c: Color) -> u32 {
+        self.mode.format.encode(crate::fbcon::PALETTE[c as usize])
+    }
+
+    /// Does the cell at (row, col) show exactly this character in these colors?
+    fn shows(&self, row: usize, col: usize, c: char, fg: Color, bg: Color) -> bool {
+        let glyph = &crate::font::FONT[crate::vga::cp437(c) as usize];
+        (0..16).all(|gy| {
+            (0..8).all(|gx| {
+                let want = if glyph[gy] & (0x80 >> gx) != 0 { fg } else { bg };
+                self.pixel(col * 8 + gx, row * 16 + gy) == self.color(want)
+            })
+        })
+    }
+
+    /// True when nothing was written between the lines or after the last one.
+    fn untouched_outside(&self) -> bool {
+        let (pitch, used) = (self.mode.pitch as usize, self.mode.width as usize * self.mode.format.bytes());
+        let end = self.mode.bytes() as usize;
+        (0..self.mode.height as usize).all(|y| self.pixels[y * pitch + used..(y + 1) * pitch].iter().all(|&b| b == 0xEE))
+            && self.pixels[end..].iter().all(|&b| b == 0xEE)
+    }
+}
+
+fn fbcon_drawing() -> TestResult {
+    use crate::display::PixelFormat::*;
+    use crate::fbcon::FbCon;
+    // The font has real letters: an A is not blank and differs from a B.
+    let font = &crate::font::FONT;
+    check!(font[b' ' as usize].iter().all(|&row| row == 0));
+    check!(font[b'A' as usize].iter().any(|&row| row != 0));
+    check!(font[b'A' as usize] != font[b'B' as usize]);
+    for format in [Xrgb8888, Xbgr8888, Rgb888, Rgb565] {
+        let mut t = TestScreen::new(64, 48, 5, format);
+        let mut cells = vec![0u16; 64];
+        let mut screen = FbCon::new(t.pixels.as_mut_ptr(), t.mode, &mut cells);
+        check_eq!((screen.width(), screen.height()), (8, 3));
+        screen.clear();
+        screen.write_str("A");
+        screen.set_color(Color::Yellow, Color::Blue);
+        screen.write_str("é");
+        screen.set_pos(2, 7);
+        screen.set_color(Color::White, Color::Red);
+        screen.write_char('\u{4e16}'); // not in the font: the filled box
+        screen.set_cursor(8); // away from the cells we look at
+        check!(t.shows(0, 0, 'A', Color::LightGray, Color::Black));
+        check!(t.shows(0, 1, 'é', Color::Yellow, Color::Blue));
+        check!(t.shows(0, 2, ' ', Color::LightGray, Color::Black));
+        check!(t.shows(2, 7, '■', Color::White, Color::Red));
+        check!(!t.shows(0, 0, 'B', Color::LightGray, Color::Black));
+        check!(t.untouched_outside());
+    }
+    Ok(())
+}
+
+fn fbcon_screen() -> TestResult {
+    use crate::display::PixelFormat::Xrgb8888;
+    use crate::fbcon::{FbCon, BARS};
+    let (gray, black) = (Color::LightGray, Color::Black);
+    let mut t = TestScreen::new(64, 48, 0, Xrgb8888);
+    let mut cells = vec![0u16; 24];
+    let mut screen = FbCon::new(t.pixels.as_mut_ptr(), t.mode, &mut cells);
+    screen.clear();
+    // Everything is background now, except the cursor in the first cell.
+    check!(t.pixels[64 * 4 * 16..t.mode.bytes() as usize].chunks(4).all(|p| p == [0, 0, 0, 0]));
+    check_eq!((t.pixel(0, 13), t.pixel(7, 14), t.pixel(8, 13), t.pixel(0, 12)), (t.color(gray), t.color(gray), 0, 0));
+    // A ninth character wraps to the next line, but only when it is written.
+    screen.write_str("12345678");
+    check_eq!(screen.pos(), (0, 8));
+    screen.write_str("9");
+    check_eq!(screen.pos(), (1, 1));
+    check!(t.shows(0, 7, '8', gray, black) && t.shows(1, 0, '9', gray, black));
+    // Tabs go to the next multiple of 4; \r returns to the start of the line.
+    screen.write_str("\tx\ry");
+    check!(t.shows(1, 4, 'x', gray, black) && t.shows(1, 0, 'y', gray, black));
+    // The fourth line scrolls the screen up by one.
+    screen.write_str("\nc");
+    check_eq!((screen.scrolls(), screen.pos()), (0, (2, 1)));
+    screen.write_str("\nd");
+    check_eq!((screen.scrolls(), screen.pos()), (1, (2, 1)));
+    check!(t.shows(0, 0, 'y', gray, black) && t.shows(0, 4, 'x', gray, black));
+    check!(t.shows(0, 1, ' ', gray, black)); // the 2 of the old first line is gone
+    check!(t.shows(1, 0, 'c', gray, black) && t.shows(2, 0, 'd', gray, black));
+    // The cursor is an underline in the cell; moving it restores the cell.
+    screen.sync_cursor();
+    check!(!t.shows(2, 1, ' ', gray, black));
+    check_eq!(t.pixel(8, 2 * 16 + 13), t.color(gray));
+    check_eq!(t.pixel(8, 2 * 16 + 12), t.color(black));
+    screen.set_cursor(0);
+    check!(t.shows(2, 1, ' ', gray, black) && !t.shows(0, 0, 'y', gray, black));
+    screen.set_cursor(10_000); // past the end: the last cell
+    check!(t.shows(0, 0, 'y', gray, black) && !t.shows(2, 7, ' ', gray, black));
+    // Positions outside the screen are pulled inside.
+    screen.set_pos(99, 99);
+    check_eq!(screen.pos(), (2, 8));
+    screen.put_cell(3, 0, 0x0741); // below the last line: ignored
+    screen.put_cell(0, 8, 0x0741);
+    screen.put_cell(1, 1, 0x0741);
+    check!(t.shows(1, 1, 'A', gray, black));
+    // Color bars cover everything; a redraw brings the text back.
+    screen.color_bars();
+    for (i, bar) in BARS.iter().enumerate() {
+        check_eq!(t.pixel(i * 8 + 4, 0), t.color(*bar));
+        check_eq!(t.pixel(i * 8 + 4, 47), t.color(*bar));
+    }
+    screen.redraw();
+    check!(t.shows(1, 1, 'A', gray, black) && t.shows(0, 0, 'y', gray, black) && t.shows(2, 0, 'd', gray, black));
+    // Clearing uses the background color, everywhere.
+    screen.set_color(Color::White, Color::Blue);
+    screen.clear();
+    check_eq!(screen.pos(), (0, 0));
+    check!(t.shows(1, 3, ' ', Color::White, Color::Blue));
+    check_eq!(t.pixel(63, 47), t.color(Color::Blue));
+    check!(t.untouched_outside());
+    Ok(())
+}
+
+fn fbcon_bounds() -> TestResult {
+    use crate::display::{Mode, PixelFormat::*};
+    use crate::fbcon::FbCon;
+    let busy = |screen: &mut FbCon| {
+        screen.clear();
+        for i in 0..200 {
+            screen.write_str("line of text that is longer than the screen is wide\t\n");
+            screen.set_cursor(i * 7);
+        }
+        screen.put_cell(0, 0, 0x1F42);
+        screen.sync_cursor();
+        screen.color_bars();
+        screen.redraw();
+    };
+    // Sizes that are not whole characters: the rest stays background.
+    for (width, height, cols, rows) in [(13, 17, 1, 1), (8, 16, 1, 1), (100, 50, 12, 3), (9, 33, 1, 2)] {
+        for format in [Xrgb8888, Rgb888, Rgb565] {
+            let mut t = TestScreen::new(width, height, 3, format);
+            let mut cells = vec![0u16; 64];
+            let mut screen = FbCon::new(t.pixels.as_mut_ptr(), t.mode, &mut cells);
+            check_eq!((width, screen.width(), screen.height()), (width, cols, rows));
+            busy(&mut screen);
+            check!(t.untouched_outside());
+        }
+    }
+    // Too small for one character, or no cells to remember it in: nothing is drawn at all.
+    for (width, height, cell_count) in [(7, 100, 64), (100, 15, 64), (1, 1, 64), (64, 48, 0), (64, 48, 7)] {
+        let mut t = TestScreen::new(width, height, 0, Xrgb8888);
+        let mut cells = vec![0u16; cell_count];
+        let mut screen = FbCon::new(t.pixels.as_mut_ptr(), t.mode, &mut cells);
+        check_eq!((width, height, screen.width(), screen.height()), (width, height, 0, 0));
+        busy(&mut screen);
+        check_eq!(screen.pos(), (0, 0));
+        check!(t.pixels.iter().all(|&b| b == 0xEE));
+    }
+    // Fewer cells than the screen has room for: fewer lines, same rules.
+    let mut t = TestScreen::new(64, 48, 0, Xrgb8888);
+    let mut cells = vec![0u16; 17];
+    let mut screen = FbCon::new(t.pixels.as_mut_ptr(), t.mode, &mut cells);
+    check_eq!((screen.width(), screen.height()), (8, 2));
+    busy(&mut screen);
+    check!(t.untouched_outside());
+    // Lines too short to hold their pixels (bad data from a card or firmware).
+    let mut t = TestScreen::new(64, 48, 0, Xrgb8888);
+    let bad = Mode { pitch: 64 * 4 - 1, ..t.mode };
+    let mut cells = vec![0u16; 64];
+    let mut screen = FbCon::new(t.pixels.as_mut_ptr(), bad, &mut cells);
+    check_eq!((screen.width(), screen.height()), (0, 0));
+    busy(&mut screen);
+    check!(t.pixels.iter().all(|&b| b == 0xEE));
     Ok(())
 }

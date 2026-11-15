@@ -1,0 +1,8 @@
+# A machine without a graphics card we have a driver for stays on the text
+# screen, and a flag the kernel does not understand is not fatal.
+@vga cirrus
+@args display=nonsense mode=1x1
+$ display
+driver: text (VGA text mode, no graphics)
+text: 80x25 characters
+@screenshot 720x400 text

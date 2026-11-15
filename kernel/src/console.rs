@@ -1,18 +1,178 @@
-//! Kernel console: `print!` / `println!` to the VGA screen and the serial port
+//! Kernel console: `print!` / `println!` to the screen and the serial port
 //! (with ANSI colors), plus helpers the line editor uses to redraw input.
 //! A thread with a console session (session.rs) prints into that instead.
+//!
+//! The screen is the VGA text screen (vga.rs) until `start_display` finds a
+//! display driver; from then on it is the framebuffer console (fbcon.rs).
 
+use crate::display::{self, DisplayError, Target};
+use crate::fbcon::{self, FbCon};
+use crate::font::{GLYPH_HEIGHT, GLYPH_WIDTH};
 use crate::ring::Global;
 use crate::{serial, session, vga};
 use alloc::format;
+use alloc::string::String;
 use core::fmt::{self, Write};
 
-static SCREEN: Global<vga::Writer> = Global::new(vga::Writer::new());
+/// What characters are drawn on. Both kinds offer the same operations.
+enum Screen {
+    Text(vga::Writer),
+    Graphics(FbCon<'static>),
+}
+
+/// Call the same method on whichever screen is in use.
+macro_rules! on_screen {
+    ($screen:expr, $s:ident => $call:expr) => {
+        match $screen {
+            Screen::Text($s) => $call,
+            Screen::Graphics($s) => $call,
+        }
+    };
+}
+
+impl Screen {
+    fn width(&self) -> usize {
+        match self {
+            Screen::Text(_) => vga::WIDTH,
+            Screen::Graphics(s) => s.width(),
+        }
+    }
+
+    fn height(&self) -> usize {
+        match self {
+            Screen::Text(_) => vga::HEIGHT,
+            Screen::Graphics(s) => s.height(),
+        }
+    }
+
+    fn clear(&mut self) {
+        on_screen!(self, s => s.clear())
+    }
+
+    fn set_color(&mut self, fg: vga::Color, bg: vga::Color) {
+        on_screen!(self, s => s.set_color(fg, bg))
+    }
+
+    fn pos(&self) -> (usize, usize) {
+        on_screen!(self, s => s.pos())
+    }
+
+    fn set_pos(&mut self, row: usize, col: usize) {
+        on_screen!(self, s => s.set_pos(row, col))
+    }
+
+    fn scrolls(&self) -> usize {
+        on_screen!(self, s => s.scrolls())
+    }
+
+    fn write_char(&mut self, c: char) {
+        on_screen!(self, s => s.write_char(c))
+    }
+
+    fn write_str(&mut self, text: &str) {
+        on_screen!(self, s => s.write_str(text))
+    }
+
+    /// Show the cursor at the write position.
+    fn sync_cursor(&mut self) {
+        on_screen!(self, s => s.sync_cursor())
+    }
+
+    /// Show the cursor at a cell, counted from the top left.
+    fn set_cursor(&mut self, index: usize) {
+        match self {
+            Screen::Text(_) => vga::set_hw_cursor(index),
+            Screen::Graphics(s) => s.set_cursor(index),
+        }
+    }
+}
+
+static SCREEN: Global<Screen> = Global::new(Screen::Text(vga::Writer::new()));
+
+/// The framebuffer console's cells: static, so drawing never needs the heap.
+static CELLS: Global<[u16; fbcon::MAX_CELLS]> = Global::new([0; fbcon::MAX_CELLS]);
 
 pub fn init() {
     serial::init();
     SCREEN.get().clear();
     vga::enable_cursor();
+}
+
+/// Look for a display driver and move the console to its framebuffer; what
+/// the text screen showed so far is copied over. Needs the heap. Returns
+/// lines for the boot log: what the screen is now, and anything that went
+/// wrong on the way.
+pub fn start_display() -> String {
+    // Remember the text screen first: setting a graphics mode wipes it.
+    let Screen::Text(text) = SCREEN.get() else { return describe_display() };
+    let mut saved = [0u16; vga::WIDTH * vga::HEIGHT];
+    for (i, cell) in saved.iter_mut().enumerate() {
+        *cell = text.cell(i / vga::WIDTH, i % vga::WIDTH);
+    }
+    let ((row, col), attr) = (text.pos(), text.attr());
+
+    let (target, notes) = display::init();
+    if let Some(target) = target {
+        let mut screen = FbCon::new(target.framebuffer, target.mode, CELLS.get());
+        screen.clear();
+        for (i, cell) in saved.iter().enumerate() {
+            screen.put_cell(i / vga::WIDTH, i % vga::WIDTH, *cell);
+        }
+        screen.set_pos(row, col);
+        screen.set_attr(attr);
+        screen.sync_cursor();
+        *SCREEN.get() = Screen::Graphics(screen);
+    }
+    let mut lines = String::new();
+    for note in notes {
+        lines += &format!("{note}\n       ");
+    }
+    lines + &describe_display().replace('\n', ", ")
+}
+
+/// Driver, resolution and size in characters, one per line.
+pub fn describe_display() -> String {
+    let (cols, rows) = size();
+    match display::current() {
+        Some((name, mode)) => format!(
+            "driver: {name}\nmode: {}x{}, {} bits per pixel\ntext: {cols}x{rows} characters ({GLYPH_WIDTH}x{GLYPH_HEIGHT} font)",
+            mode.width,
+            mode.height,
+            mode.format.bytes() * 8
+        ),
+        None => format!("driver: text (VGA text mode, no graphics)\ntext: {cols}x{rows} characters"),
+    }
+}
+
+/// Characters per line, and lines, of the machine's own screen.
+pub fn size() -> (usize, usize) {
+    let screen = SCREEN.get();
+    (screen.width(), screen.height())
+}
+
+/// Change the resolution (`display mode`). The screen starts empty again.
+pub fn set_display_mode(width: u32, height: u32) -> Result<(), DisplayError> {
+    let Target { framebuffer, mode } = display::set_mode(width, height)?;
+    let mut screen = FbCon::new(framebuffer, mode, CELLS.get());
+    screen.clear();
+    *SCREEN.get() = Screen::Graphics(screen);
+    Ok(())
+}
+
+/// Color bars over the whole screen (`display test`); nothing on the text screen.
+pub fn show_color_bars() {
+    if let Screen::Graphics(screen) = SCREEN.get() {
+        screen.color_bars();
+    }
+}
+
+/// Draw the whole screen again; returns how long it took in microseconds.
+pub fn redraw() -> u64 {
+    let start = crate::time::micros();
+    if let Screen::Graphics(screen) = SCREEN.get() {
+        screen.redraw();
+    }
+    crate::time::micros() - start
 }
 
 pub fn clear() {
@@ -100,9 +260,9 @@ pub fn mark() -> Mark {
 
 impl Mark {
     /// Linear screen index of the line start, following any scrolling since.
-    fn start(&self, screen: &vga::Writer) -> usize {
-        let shift = (screen.scrolls() - self.scrolls) * vga::WIDTH;
-        (self.row * vga::WIDTH + self.col).saturating_sub(shift)
+    fn start(&self, screen: &Screen) -> usize {
+        let shift = (screen.scrolls() - self.scrolls) * screen.width();
+        (self.row * screen.width() + self.col).saturating_sub(shift)
     }
 }
 
@@ -110,17 +270,18 @@ impl Mark {
 /// `old_len`/`old_cursor` describe what is currently displayed; `tail_edit`
 /// means only the end of the line changed (a char typed or erased there).
 pub fn redraw_line(mark: &Mark, text: &[char], old_len: usize, cursor: usize, old_cursor: usize, tail_edit: bool) {
-    // VGA: rewrite from the line start, blank leftovers, place the cursor.
+    // Screen: rewrite from the line start, blank leftovers, place the cursor.
     let screen = SCREEN.get();
     let start = mark.start(screen);
-    screen.set_pos(start / vga::WIDTH, start % vga::WIDTH);
+    let width = screen.width().max(1);
+    screen.set_pos(start / width, start % width);
     text.iter().for_each(|&c| screen.write_char(c));
     let end = screen.pos();
     for _ in text.len()..old_len {
         screen.write_char(' ');
     }
     screen.set_pos(end.0, end.1);
-    vga::set_hw_cursor(mark.start(screen) + cursor);
+    screen.set_cursor(mark.start(screen) + cursor);
 
     // Serial fast paths: typing or backspacing at the end of the line.
     let mut buf = [0u8; 4];

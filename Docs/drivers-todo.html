@@ -207,7 +207,7 @@ ul.items { list-style: none; padding: 0; margin: 12px 0; }
 </li>
 <li class="item" data-status="todo" id="A2">
 <h4><span class="id">A2</span> Framebuffer console <span class="size">M</span> <span class="st"></span></h4>
-<p>Draw text ourselves on the graphics framebuffer the bootloader hands over, with a built-in bitmap font. Unlocks UEFI boot (which has no text mode), more than 80x25 characters, and the DisplayPort outputs. No graphics-card driver is needed.</p>
+<p>Draw text ourselves on the graphics framebuffer the bootloader hands over, with a built-in bitmap font. Unlocks UEFI boot (which has no text mode), more than 80x25 characters, and the DisplayPort outputs. No graphics-card driver is needed. Worked out in <a href="display-driver-plan.html">the display driver plan</a> (phases G1 and G2). G1 is done: the console draws its own text at 1920x1080 in QEMU. The HP needs G2 (the framebuffer from the bootloader).</p>
 <p class="facts">Code: <code>vga.rs</code>, <code>console.rs</code>, <code>boot.s</code> (protected: Multiboot header). Test: the UEFI ISO boot gets a screen.</p>
 </li>
 </ul>
@@ -249,10 +249,10 @@ ul.items { list-style: none; padding: 0; margin: 12px 0; }
 <p>The HP's card (<code>8086:153a</code>). The e1000 driver now handles three families: the original e1000, the e1000e (82574L), and the cards built into the chipset (I217-LM and I217-V). For the chipset cards the start-up differs: a careful reset, the address from the registers the firmware filled in, no forced speed. <code>net</code> has a new <code>chip:</code> line with the link speed and, for the I217, the register values we need if the link does not come up. After the first try on the HP (link up, frames received, no DHCP answer) the start-up also applies the transmit settings these cards are documented to need, and <code>net</code> shows the card's own counters: how many frames it really put on the wire. Build b7 made it transmit on the HP (see the log above). Not done: the PHY workarounds other drivers carry (waking the PHY when the management firmware left it in its own mode); we add those only if the HP shows it needs them.</p>
 <p class="facts">Code: <code>kernel/src/e1000.rs</code>. Tests: <code>net-e1000e-wire.scn</code> (frames and both rings on a test wire) and <code>net-e1000e.scn</code> (DHCP, ping, a TCP transfer) on QEMU's e1000e; the I217 start-up path run by hand on that card (boot flag <code>nic=chipset</code>) to show it cannot hang. No emulator has an I217: the real test is the HP.</p>
 </li>
-<li class="item" data-status="todo" id="N2">
+<li class="item" data-status="check" id="N2">
 <h4><span class="id">N2</span> Receive by interrupt <span class="size">M</span> <span class="st"></span></h4>
-<p>The card is polled every 10 ms now. Already an open item of network phase N6; natural once P1 exists.</p>
-<p class="facts">Protected: <code>interrupts.rs</code>.</p>
+<p>The card now raises its interrupt line when a frame arrives or the link changes, and the network thread looks at it at once. It is still polled every 10 ms as well, so nothing depends on the interrupt. It uses the old interrupt controller and the line the firmware gave the card; MSI comes with P1. A PCI line can be shared with a device we have no driver for: if the line keeps firing and the card says "not mine" 5000 times in a row, the line is switched off and the card is polled only. <code>net</code> has a new <code>receive:</code> line that says which of the two is in use. The boot flag <code>net=poll</code> switches the interrupt off.</p>
+<p class="facts">Works in QEMU on all three card families. To confirm on the HP: <code>net</code> should say <code>receive: by interrupt (IRQ N, ... so far)</code> with a count that goes up, and a ping from another machine should take under 1 ms instead of up to 10.</p>
 </li>
 </ul>
 
@@ -326,7 +326,7 @@ ul.items { list-style: none; padding: 0; margin: 12px 0; }
 </li>
 <li class="item" data-status="skip" id="X3">
 <h4><span class="id">X3</span> Intel HD Graphics driver <span class="size">XL</span> <span class="st"></span></h4>
-<p>Not needed: A2 uses the framebuffer the firmware set up.</p>
+<p>Not needed: A2 uses the framebuffer the firmware set up. Phase G5 of <a href="display-driver-plan.html">the display driver plan</a> says when that would change.</p>
 </li>
 <li class="item" data-status="skip" id="X4">
 <h4><span class="id">X4</span> NVMe disks <span class="size">M</span> <span class="st"></span></h4>

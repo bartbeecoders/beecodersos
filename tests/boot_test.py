@@ -61,6 +61,14 @@ Without @wire or @net the machine has no network card.
                                `{dns}` in a command becomes its address (10.0.2.2:PORT).
                                Other names do not exist; names starting with "drop." get
                                no answer at all
+    @args WORDS                (first lines) extra words for the kernel command line, e.g.
+                               `@args display=text` (not with @bootdisk)
+    @vga MODEL                 (first lines) the graphics card: QEMU's `-vga` (std, qxl,
+                               virtio, cirrus, none). Default: std
+    @screenshot WxH KIND       take a picture of the screen (what a monitor would show): it
+                               must be W by H pixels and show KIND: `text` (a mostly black
+                               screen with something on it) or `bars` (the eight color bars
+                               of `display test`). Waits up to 3 s for it
     @bootdisk                  (first lines) boot from an A/B boot disk (tools/bootdisk.py)
                                with the kernel in both slots, BeeFS in partition 2
     $ COMMAND                  type a command, wait for the next prompt
@@ -88,6 +96,7 @@ After the last command the runner types `shutdown` and expects a clean power-off
 
 import argparse
 import codecs
+import json
 import os
 import re
 import shutil
@@ -138,7 +147,8 @@ class Vm:
     """One QEMU run with the serial port on stdin/stdout."""
 
     def __init__(self, *, kernel_args=None, cdrom=None, disk=None, uefi=False, ai_port=None, bootdisk=None,
-                 wire=None, usernet=None, forward=None, forward_shell=None, sata=False, nic="e1000"):
+                 wire=None, usernet=None, forward=None, forward_shell=None, sata=False, nic="e1000",
+                 extra_args=None, vga=None, qmp=None):
         cmd = ["qemu-system-x86_64", "-m", "128M", "-display", "none", "-serial", "stdio",
                "-monitor", "none", "-no-reboot",
                "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04"]
@@ -149,7 +159,13 @@ class Vm:
         elif bootdisk:  # Limine on the disk picks the kernel slot
             cmd += ["-drive", f"file={bootdisk},format=raw,if=ide,index=0,media=disk"]
         else:
-            cmd += ["-kernel", str(KERNEL), "-append", kernel_args or ("test nodhcp" if wire else "test")]
+            args = kernel_args or ("test nodhcp" if wire else "test")
+            cmd += ["-kernel", str(KERNEL), "-append", f"{args} {extra_args}" if extra_args else args]
+        if vga:
+            cmd += ["-vga", vga]
+        self.qmp = qmp
+        if qmp:  # QEMU's control port, for screenshots
+            cmd += ["-qmp", f"tcp:127.0.0.1:{qmp},server=on,wait=off"]
         if disk and sata:
             cmd += ["-device", "ahci,id=ahci", "-drive", f"file={disk},format=raw,if=none,id=sata0",
                     "-device", "ide-hd,drive=sata0,bus=ahci.0"]
@@ -242,6 +258,26 @@ class Vm:
         lines = out.split("\n")
         return [l.rstrip() for l in lines[1:-1]]  # drop echoed command and the new prompt
 
+    def screenshot(self, path: Path) -> tuple[int, int, bytes]:
+        """What the screen shows now: (width, height, RGB bytes, 3 per pixel, row by row)."""
+        with socket.create_connection(("127.0.0.1", self.qmp), timeout=5) as conn:
+            f = conn.makefile("rw")
+            f.readline()  # QEMU's greeting
+            for request in ({"execute": "qmp_capabilities"},
+                            {"execute": "screendump", "arguments": {"filename": str(path)}}):
+                f.write(json.dumps(request) + "\n")
+                f.flush()
+                while "return" not in (answer := json.loads(f.readline())):  # skip events
+                    if "error" in answer:
+                        raise TestFailure(f"screenshot: QEMU says {answer['error'].get('desc')}")
+        data = path.read_bytes()  # PPM: "P6\nWIDTH HEIGHT\n255\n", then the pixels
+        magic, width, height, depth = data.split(maxsplit=4)[:4]
+        width, height = int(width), int(height)
+        pixels = data[-3 * width * height:]
+        if magic != b"P6" or depth != b"255" or len(pixels) != 3 * width * height:
+            raise TestFailure("screenshot: QEMU wrote something that is not a PPM picture")
+        return width, height, pixels
+
     def wait_exit(self, timeout: float) -> int:
         try:
             return self.proc.wait(timeout)
@@ -259,6 +295,35 @@ class Vm:
         if self.proc.poll() is None:
             self.proc.kill()
             self.proc.wait()
+
+
+BAR_COLORS = ["ffffff", "ffff55", "55ffff", "55ff55", "ff55ff", "ff5555", "5555ff", "000000"]  # fbcon::BARS
+
+
+def check_screenshot(vm: Vm, tmp: Path, spec: str, where: str):
+    """`@screenshot WxH KIND`: retry for 3 s, the screen may still be changing."""
+    m = re.fullmatch(r"(\d+)x(\d+) (text|bars)", spec)
+    if not m:
+        raise TestFailure(f"{where}: @screenshot wants WIDTHxHEIGHT and text or bars, not `{spec}`")
+    want_w, want_h, kind = int(m[1]), int(m[2]), m[3]
+    deadline = time.monotonic() + 3
+    while True:
+        width, height, pixels = vm.screenshot(tmp / "screen.ppm")
+        pixel = lambda x, y: pixels[3 * (y * width + x):3 * (y * width + x) + 3].hex()
+        if (width, height) != (want_w, want_h):
+            problem = f"the screen is {width}x{height}"
+        elif kind == "bars":
+            seen = [[pixel(width * (2 * i + 1) // 16, y) for i in range(8)] for y in (0, height // 2, height - 1)]
+            problem = None if all(row == BAR_COLORS for row in seen) else f"no color bars: the colors are {seen[1]}"
+        else:
+            lit = sum(1 for i in range(0, len(pixels), 3) if pixels[i:i + 3] != b"\0\0\0")
+            share = lit / (width * height)
+            problem = None if 0.0005 < share < 0.5 else f"{share:.2%} of the pixels are lit: not a text screen"
+        if not problem:
+            return
+        if time.monotonic() > deadline:
+            raise TestFailure(f"{where}: @screenshot {spec}: {problem}")
+        time.sleep(0.3)
 
 
 def tail(text: str, n: int = 25) -> str:
@@ -313,6 +378,10 @@ def parse_scenario(path: Path):
             opts.add(line[1:])
         elif line.startswith("@dns "):
             opts.add("dns:" + line[5:])
+        elif line.startswith(("@args ", "@vga ")):
+            opts.add(line[1:].replace(" ", ":", 1))
+        elif line.startswith("@screenshot "):
+            steps.append(("screenshot", line[12:].strip(), []))
         elif line.startswith(("@frame ", "@frame-soon ", "@send ")):
             kind, _, arg = line[1:].partition(" ")
             steps.append((kind, arg.strip(), []))
@@ -843,9 +912,14 @@ def test_scenario(path: Path):
         usernet = ("open" if servers else "isolated") if "net" in opts else None
         forward = free_port() if "forward" in opts else None
         forward_shell = free_port() if "forward" in opts else None
+        extra_args = next((o[5:] for o in opts if o.startswith("args:")), None)
+        if extra_args and bootdisk:
+            raise TestFailure(f"{path.name}: @args does not work with @bootdisk")
+        vga = next((o[4:] for o in opts if o.startswith("vga:")), None)
+        qmp = free_port() if any(kind == "screenshot" for kind, _, _ in steps) else None
         boot = lambda: Vm(disk=disk, ai_port=ai_port, bootdisk=bootdisk, wire=wire.ports if wire else None,
                           usernet=usernet, forward=forward, forward_shell=forward_shell, sata="sata" in opts,
-                          nic="e1000e" if "e1000e" in opts else "e1000")
+                          nic="e1000e" if "e1000e" in opts else "e1000", extra_args=extra_args, vga=vga, qmp=qmp)
         vm = boot()
         out = []
         try:
@@ -861,6 +935,9 @@ def test_scenario(path: Path):
                         wire.send(cmd)
                     else:
                         wire.expect(cmd, path.name, timeout=3 if kind == "frame" else 1)
+                    continue
+                if kind == "screenshot":
+                    check_screenshot(vm, Path(tmp), cmd, path.name)
                     continue
                 if kind == "request":
                     if not forward:

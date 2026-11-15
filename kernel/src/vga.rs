@@ -55,6 +55,15 @@ impl Writer {
         self.scrolls
     }
 
+    pub fn attr(&self) -> u8 {
+        self.attr
+    }
+
+    /// What is on screen at a position: color in the high byte, character in the low.
+    pub fn cell(&self, row: usize, col: usize) -> u16 {
+        unsafe { BUFFER.add(row.min(HEIGHT - 1) * WIDTH + col.min(WIDTH - 1)).read_volatile() }
+    }
+
     pub fn write_char(&mut self, c: char) {
         match c {
             '\n' => self.new_line(),
@@ -125,7 +134,7 @@ pub fn set_hw_cursor(index: usize) {
 }
 
 /// Translate a Unicode character to its code page 437 glyph (■ if missing).
-fn cp437(c: char) -> u8 {
+pub fn cp437(c: char) -> u8 {
     if (' '..='~').contains(&c) {
         return c as u8;
     }

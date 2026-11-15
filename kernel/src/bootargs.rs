@@ -8,8 +8,13 @@
 //!   `slot=a|b`  which A/B kernel slot was booted (set by the boot disk)
 //!   `failboot`  tests: a trial kernel panics after arming the rollback
 //!   `nodhcp`    tests: don't request an address automatically at boot
+//!   `net=poll`  don't use the network card's interrupt, only poll it (for
+//!               a machine where the interrupt line misbehaves)
 //!   `nic=chipset` tests: start the network card the way a chipset card
 //!               (Intel I217) is started, whatever card it is
+//!   `display=bochs|text` which display driver to use (`text`: none, the
+//!               80x25 VGA text screen); see display.rs
+//!   `mode=1920x1080` the screen resolution to ask the display driver for
 
 use crate::ring::Global;
 
@@ -46,4 +51,13 @@ pub fn cmdline() -> &'static str {
 /// True when `flag` appears as a separate word on the command line.
 pub fn has(flag: &str) -> bool {
     cmdline().split_whitespace().any(|w| w == flag)
+}
+
+/// The value of a `key=value` word on the command line (the first one).
+pub fn value(key: &str) -> Option<&'static str> {
+    value_in(cmdline(), key)
+}
+
+pub fn value_in<'a>(cmdline: &'a str, key: &str) -> Option<&'a str> {
+    cmdline.split_whitespace().find_map(|w| w.strip_prefix(key)?.strip_prefix('='))
 }

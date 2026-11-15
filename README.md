@@ -64,6 +64,7 @@ assembler and linked with the bundled `rust-lld`.
 | Roadmap | `Docs/self-improving-os-plan.html` |
 | Network stack plan (phases N1–N6, threads) | `Docs/network-stack-plan.html` |
 | Drivers for real hardware: todo list with progress | `Docs/drivers-todo.html` |
+| Display driver plan (phases G1–G5: framebuffer console, full HD) | `Docs/display-driver-plan.html` |
 | Backlog and review reports | `Docs/backlog/` (see its README) |
 | Tool options | `--help` of `tools/beehive/beehive.py`, `tools/evolve/evolve.py`, `tools/bootdisk.py`, `tools/deploy.py`, `tools/usbstick.py`, `tools/bee_report.py`, `tests/boot_test.py` |
 | Shell commands | `help` in the OS |
@@ -138,9 +139,10 @@ hardware, and how far it is, is in `Docs/drivers-todo.html`.
 (double-check `/dev/sdX`!). Limine loads the kernel with the Multiboot 1 protocol
 (`boot/limine.conf`).
 
-> UEFI note: UEFI firmware has no VGA text mode, so on UEFI all output (and the
-> terminal) only appears on the serial port; the keyboard still works. On-screen
-> output on UEFI needs a framebuffer text renderer (planned for a later phase).
+> UEFI note: UEFI firmware has no VGA text mode, so on UEFI real hardware all
+> output (and the terminal) only appears on the serial port; the keyboard still
+> works. In QEMU the `bochs` display driver gives a screen under UEFI too. For
+> real hardware this is phase G2 of `Docs/display-driver-plan.html`.
 > BIOS/CSM boots show everything on screen.
 
 Or by hand: `qemu-system-x86_64 -enable-kvm -kernel build/beecoders.elf`
@@ -182,7 +184,7 @@ kernel/
   src/boot.s           Multiboot header, CPU checks, page tables (4 GiB), 32→64-bit switch
   src/interrupts.s/.rs IDT, exception handlers, 8259 PIC, IRQ dispatch
   src/main.rs          kernel_main, panic handler
-  src/bootargs.rs      kernel command line (Multiboot cmdline): `test`, `selftest` flags
+  src/bootargs.rs      kernel command line (Multiboot cmdline): `test`, `selftest`, `display=`, `mode=` flags
   src/testmode.rs      test mode: pass/fail exit codes for QEMU (isa-debug-exit)
   src/selftest.rs      in-kernel self-tests (`selftest` command / boot flag, health check)
   src/time.rs          PIT timer (IRQ0, 100 Hz) + CMOS real-time clock
@@ -192,7 +194,7 @@ kernel/
   src/aibridge.rs      AI bridge: JSON lines on COM2 to beehive on the host
   src/bootslots.rs     A/B kernel slots: arm the rollback, health check, report failed trials
   src/pci.rs           PCI: find devices, read their configuration (`lspci`)
-  src/e1000.rs         Intel network cards: e1000, e1000e, I217 (polled descriptor rings)
+  src/e1000.rs         Intel network cards: e1000, e1000e, I217 (descriptor rings; interrupt + poll)
   src/net.rs           card + beenet stack: polling, settings, TCP streams, HTTP / time / TFTP transfers
   src/thread.rs        cooperative kernel threads: stacks, switching, waiting
   src/ahci.rs          SATA disks on AHCI controllers (real hardware; QEMU `-device ahci`)
@@ -201,7 +203,11 @@ kernel/
   src/session.rs       console sessions: a shell that is not on the real screen and keyboard
   src/rand.rs          random numbers (RDRAND, or a seeded generator)
   src/allocator.rs     kernel heap in free RAM from the Multiboot memory map
-  src/console.rs       print!/println! to VGA + serial, line redraw helpers
+  src/console.rs       print!/println! to the screen + serial, line redraw helpers
+  src/display.rs       display drivers: the interface, the list, `display=` / `mode=` flags
+  src/bochs.rs         display driver for the Bochs/QEMU graphics card (sets any resolution)
+  src/fbcon.rs         framebuffer console: text drawn as pixels, for any resolution
+  src/font.rs          the 8x16 console font (Spleen, BSD license), generated table
   src/keyboard.rs      PS/2 keyboard driver + scancode decoder (modifiers, dead keys)
   src/layouts.rs       keyboard layouts (US, Belgian Period)
   src/uart.rs          16550 serial port: detection, sending and receiving with limits
@@ -295,7 +301,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `ai`,
-`slots`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `display`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Under the hood:** interrupts are enabled (IDT + remapped PIC; IRQ0 timer,
 IRQ1 keyboard, IRQ3 COM2 AI bridge, IRQ4 COM1 serial). Handlers queue raw bytes; the shell decodes them and sleeps with
@@ -586,9 +592,12 @@ it has **no IP address yet** (that is N2/N3), so it cannot reach other machines.
   device's capability list (MSI, MSI-X, PCI Express, power management).
 - **e1000 driver** (`e1000.rs`): Intel 82540EM, the default card in QEMU and
   libvirt (`vm1` has one). Reset, MAC address, receive and transmit descriptor
-  rings in heap memory, link status. It is **polled**: the 100 Hz timer wakes
-  the idle loop, which takes received frames from the card every 10 ms, so no
-  interrupt code changed.
+  rings in heap memory, link status. The card **interrupts** when a frame
+  arrives (old interrupt controller, the line the firmware assigned), and is
+  also polled every 10 ms by the 100 Hz timer, so nothing depends on the
+  interrupt. A line that keeps firing for another device is switched off
+  after 5000 unclaimed interrupts in a row; the boot flag `net=poll` turns
+  the interrupt off. `net` says which is in use (`receive:`).
 - **`net`** shows the card, MAC address, link and frame counters;
   `net test` sends one harmless broadcast frame (EtherType 0x88B5) to check the
   transmit path. Boot prints `[net]  e1000 (Intel 82540EM) 52:54:00:..., link up`.
@@ -897,6 +906,47 @@ password and no address. Not yet tried with a real `telnet` program.
 Still open in N6: sending signals to beehive over the network, and
 downloading a new kernel into the spare slot.
 
+## Display — phase G1: a graphics console, full HD in QEMU ✅
+
+```
+[disp] driver: bochs, mode: 1920x1080, 32 bits per pixel, text: 240x67 characters (8x16 font)
+bee:/$ display mode 1280x720
+driver: bochs
+mode: 1280x720, 32 bits per pixel
+text: 160x45 characters (8x16 font)
+```
+
+The first phase of `Docs/display-driver-plan.html`. The console no longer needs
+VGA text mode: with a display driver it draws its own letters on a graphics
+framebuffer, at any resolution.
+
+- **Display drivers** (`kernel/src/display.rs`): a driver finds its hardware,
+  sets a mode and hands out a framebuffer. Drivers are tried in order; a new
+  one is a file plus one line in `DRIVERS`. When none fits the machine, the
+  80x25 VGA text screen stays, as before.
+- **`bochs` driver** (`kernel/src/bochs.rs`): the graphics card of QEMU
+  (`-vga std`, the default), also QXL (`vm1`), virtio-vga and VirtualBox. It
+  sets 1920x1080 at boot, or what fits the card's video memory.
+- **Framebuffer console** (`kernel/src/fbcon.rs`): keeps every character cell in
+  RAM, draws only the cells that change, and never reads video memory. Same
+  colors and characters as the text screen (code page 437), drawn with the
+  Spleen 8x16 font (`kernel/src/font.rs`). No heap, no waiting: it works
+  during a panic too.
+- **`display`** shows driver, resolution and size in characters;
+  **`display mode WIDTHxHEIGHT`** changes the resolution (not saved yet);
+  **`display test`** shows color bars until Enter, then tells how long drawing
+  the whole screen took.
+- **Boot flags:** `display=text` keeps the text screen (the way back if graphics
+  go wrong), `display=bochs` insists on a driver, `mode=1280x720` picks the
+  resolution.
+- **Tests:** self-tests draw into a framebuffer in RAM (every pixel format, odd
+  sizes, bad values). Scenarios `display*.scn` take real screenshots through
+  QEMU (`@screenshot`), on the standard card, on QXL, without a supported card
+  (`@vga`) and with `display=text` (`@args`).
+
+Not yet: real hardware and UEFI still have no graphics (phase G2: the
+bootloader's framebuffer), and there is one font size.
+
 ## Versioning
 
 `OS_VERSION` at the top of the `Makefile` is the release, set by hand (now
@@ -909,6 +959,6 @@ backlog items record the build they shipped in.
 
 Following `Docs/self-improving-os-plan.html`: phase 9, AI-written apps in a
 WebAssembly sandbox (new commands without touching the kernel). Other
-candidates: framebuffer console (on-screen text on UEFI), a text editor, tab
+candidates: the next display phases (`Docs/display-driver-plan.html`), a text editor, tab
 completion, more layouts (Belgian Comma, French, …), physical memory manager /
 paging, user programs.

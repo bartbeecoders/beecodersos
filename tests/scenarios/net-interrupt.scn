@@ -1,0 +1,10 @@
+# Drivers todo, item N2: the network card interrupts when a frame arrives
+# (it is still polled on every timer tick as well).
+@wire
+$ net
+~ ^receive: by interrupt \(IRQ \d+, 0 so far\)$
+frames:  0 sent, 0 received
+@send 3x ff ff ff ff ff ff  02 00 00 00 00 aa  88 b5  68 65 6c 6c 6f 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+$ net
+~ ^receive: by interrupt \(IRQ \d+, [1-9]\d* so far\)$
+frames:  0 sent, 3 received

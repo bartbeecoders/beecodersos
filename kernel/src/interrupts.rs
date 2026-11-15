@@ -2,13 +2,15 @@
 //!
 //! CPU exceptions (vectors 0-31) print a diagnostic and halt. Hardware IRQs are
 //! remapped to vectors 32-47; unmasked: IRQ0 (timer), IRQ1 (keyboard),
-//! IRQ3 (COM2, AI bridge) and IRQ4 (COM1).
+//! IRQ3 (COM2, AI bridge) and IRQ4 (COM1), plus the line of a device driver
+//! that asked for it (`set_device_handler`: the network card).
 
 use crate::port::{inb, outb};
 use crate::vga::Color;
 use crate::{acpi, aibridge, console, crash, keyboard, serial, time};
 use core::arch::asm;
 use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicU16, AtomicU32, AtomicUsize, Ordering};
 
 core::arch::global_asm!(include_str!("interrupts.s"));
 
@@ -108,6 +110,58 @@ unsafe fn init_pic() {
     outb(PIC2_DATA, 0xFF);
 }
 
+/// Handlers of device drivers, one per PIC line (0: none).
+static DEVICE_HANDLERS: [AtomicUsize; 16] = [const { AtomicUsize::new(0) }; 16];
+/// Interrupts in a row that the line's handler did not claim.
+static UNCLAIMED: [AtomicU32; 16] = [const { AtomicU32::new(0) }; 16];
+/// Lines that were switched off because they kept firing unclaimed.
+static GAVE_UP: AtomicU16 = AtomicU16::new(0);
+
+/// Unclaimed interrupts in a row before a line is switched off. A PCI line
+/// can be shared with a device we have no driver for; if that one keeps the
+/// line raised, the interrupt returns the moment it ends and nothing else
+/// would ever run.
+pub const STORM_LIMIT: u32 = 5000;
+
+/// One interrupt on a device line: the new count of unclaimed ones in a row,
+/// and whether the line must be switched off now.
+pub fn storm_step(unclaimed: u32, claimed: bool) -> (u32, bool) {
+    if claimed {
+        return (0, false);
+    }
+    let count = unclaimed.saturating_add(1);
+    (count, count >= STORM_LIMIT)
+}
+
+/// Call `handler` for every interrupt on PIC line `irq`, and unmask the
+/// line. The handler runs with interrupts off: it must be short, must make
+/// its device stop asking, and returns whether the interrupt was its own.
+/// False when the line can't be used: one of the system's own (timer,
+/// keyboard, serial ports), out of range, or taken.
+pub fn set_device_handler(irq: u8, handler: fn() -> bool) -> bool {
+    let system = [IRQ_TIMER, IRQ_KEYBOARD, IRQ_CASCADE, IRQ_COM2, IRQ_COM1];
+    if irq >= 16 || system.contains(&irq) {
+        return false;
+    }
+    if DEVICE_HANDLERS[irq as usize].compare_exchange(0, handler as usize, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+        return false;
+    }
+    unmask_irq(irq);
+    true
+}
+
+/// True when the line was switched off because it kept firing unclaimed.
+pub fn gave_up(irq: u8) -> bool {
+    irq < 16 && GAVE_UP.load(Ordering::Relaxed) & 1 << irq != 0
+}
+
+fn mask_irq(irq: u8) {
+    unsafe {
+        let (port, bit) = if irq < 8 { (PIC1_DATA, irq) } else { (PIC2_DATA, irq - 8) };
+        outb(port, inb(port) | 1 << bit);
+    }
+}
+
 /// Unmask a PIC interrupt line (0-15).
 pub fn unmask_irq(irq: u8) {
     if irq >= 16 {
@@ -163,12 +217,31 @@ extern "C" fn interrupt_dispatch(frame: &mut InterruptFrame) {
             IRQ_KEYBOARD => keyboard::on_interrupt(),
             IRQ_COM2 => aibridge::on_interrupt(),
             IRQ_COM1 => serial::on_interrupt(),
-            _ => {}
+            _ => device_interrupt(irq),
         }
         if irq >= 8 {
             outb(PIC2_CMD, 0x20);
         }
         outb(PIC1_CMD, 0x20);
+    }
+}
+
+/// An interrupt on a line a device driver asked for.
+fn device_interrupt(irq: u8) {
+    let line = irq as usize & 15;
+    let handler = DEVICE_HANDLERS[line].load(Ordering::SeqCst);
+    if handler == 0 {
+        return;
+    }
+    // Safety: only `set_device_handler` stores here, and it stores a `fn() -> bool`.
+    let handler: fn() -> bool = unsafe { core::mem::transmute(handler) };
+    // The ACPI interrupt may share the line and was served just before.
+    let claimed = handler() || irq == acpi::sci_irq();
+    let (count, storm) = storm_step(UNCLAIMED[line].load(Ordering::Relaxed), claimed);
+    UNCLAIMED[line].store(count, Ordering::Relaxed);
+    if storm {
+        mask_irq(irq);
+        GAVE_UP.fetch_or(1 << line, Ordering::Relaxed);
     }
 }
 

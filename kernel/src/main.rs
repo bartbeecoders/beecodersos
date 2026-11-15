@@ -14,15 +14,19 @@ mod ahci;
 mod aibridge;
 mod allocator;
 mod ata;
+mod bochs;
 mod bootargs;
 #[macro_use]
 mod console;
 // After `console`: uses println!.
 mod bootslots;
 mod crash;
+mod display;
 mod e1000;
 mod editor;
 mod eventlog;
+mod fbcon;
+mod font;
 mod httpd;
 mod remote;
 mod input;
@@ -79,6 +83,8 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info: u32) -> ! {
         Ok((start, size)) => println!("[mem]  {} MiB kernel heap at {:#x}", size >> 20, start),
         Err(e) => panic!("heap: {}", e),
     }
+    // Graphics, if a display driver knows this machine (it needs the heap).
+    println!("[disp] {}", console::start_display());
     thread::init();
     // A/B slots: a trial kernel arms the rollback before anything risky.
     let slot_report = bootslots::on_boot();
