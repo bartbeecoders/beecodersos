@@ -27,7 +27,7 @@ Current version: **0.0.2** (see [Versioning](#versioning)).
 | N4 | Networking: TCP connections (`nc`) | ✅ |
 | N5 | Networking: HTTP (`wget`), time (`ntp`), file transfer (`tftp`) | ✅ |
 | T | Cooperative kernel threads, console sessions | ✅ |
-| N6 | Networking: status page (`httpd`) ✅; remote shell, network signals, kernel download | in progress |
+| N6 | Networking: status page (`httpd`) ✅, remote shell (`remote`) ✅; network signals, kernel download | in progress |
 
 The roadmap is `Docs/self-improving-os-plan.html`, the network plan is
 `Docs/network-stack-plan.html`; each phase is described below.
@@ -64,7 +64,7 @@ assembler and linked with the bundled `rust-lld`.
 | Roadmap | `Docs/self-improving-os-plan.html` |
 | Network stack plan (phases N1–N6, threads) | `Docs/network-stack-plan.html` |
 | Backlog and review reports | `Docs/backlog/` (see its README) |
-| Tool options | `--help` of `tools/beehive/beehive.py`, `tools/evolve/evolve.py`, `tools/bootdisk.py`, `tools/deploy.py`, `tools/bee_report.py`, `tests/boot_test.py` |
+| Tool options | `--help` of `tools/beehive/beehive.py`, `tools/evolve/evolve.py`, `tools/bootdisk.py`, `tools/deploy.py`, `tools/usbstick.py`, `tools/bee_report.py`, `tests/boot_test.py` |
 | Shell commands | `help` in the OS |
 
 ## Troubleshooting
@@ -112,7 +112,24 @@ make run-iso       # boot the ISO in QEMU (BIOS)
 make run-iso-uefi  # boot the ISO in QEMU with OVMF (UEFI)
 ```
 
-Write it to a USB stick for real hardware: `sudo dd if=build/beecoders.iso of=/dev/sdX bs=4M status=progress`
+Write it to a USB stick for real hardware with `tools/usbstick.py`:
+
+```sh
+tools/usbstick.py            # list the USB sticks that are plugged in
+tools/usbstick.py /dev/sdX   # erase that stick and write the ISO to it
+```
+
+It only writes to a removable whole disk on USB of at most 128 GB that holds
+no part of the running system, shows what is on the stick, makes you type
+the device name, and reads the image back to compare. `--dry-run` does the
+checks without writing. Writing needs `sudo`.
+
+On a real PC, boot the stick in **legacy BIOS mode**: the screen is VGA
+text mode, which UEFI firmware does not provide (a UEFI boot runs, but
+shows nothing; only the serial port talks). The OS knows a PS/2 keyboard
+(or a USB keyboard the firmware presents as one), a disk on the legacy IDE
+ports and an Intel e1000 network card; without those it runs from a RAM
+disk and without a network. A disk that is not BeeFS is never written to.
 (double-check `/dev/sdX`!). Limine loads the kernel with the Multiboot 1 protocol
 (`boot/limine.conf`).
 
@@ -140,6 +157,7 @@ beenet/                network stack library (no_std + alloc, no hardware access
   src/http.rs          HTTP/1.1 client: addresses, requests, decoding answers
   src/sntp.rs          SNTP: the time from a time server
   src/tftp.rs          TFTP client: fetch / store a file
+  src/telnet.rs        Telnet, server side: what a remote shell needs
   src/tcp.rs           TCP: connections, retransmission, flow control, close and reset
 tools/beefs-tool/      host CLI to create/inspect/edit BeeFS images (and boot disks)
 tests/boot_test.py     boot tests: drives the kernel in headless QEMU over serial
@@ -150,6 +168,7 @@ tools/bee_report.py    report of what the OS recorded (crashes, missing commands
 tools/evolve/          improvement loop: signals -> backlog -> coding agent -> review
 tools/bootdisk.py      A/B boot disk: FAT16 boot partition (Limine, two kernels) + BeeFS
 tools/deploy.py        deploy to the libvirt VM's spare slot, with a watchdog
+tools/usbstick.py      write the ISO to a USB stick, with checks against the wrong disk
 Docs/backlog/          the backlog (one file per item) and review reports
 Docs/                  plans (self-improving OS roadmap)
 CLAUDE.md              rules for AI agents working on the code
@@ -172,6 +191,7 @@ kernel/
   src/net.rs           card + beenet stack: polling, settings, TCP streams, HTTP / time / TFTP transfers
   src/thread.rs        cooperative kernel threads: stacks, switching, waiting
   src/httpd.rs         status page for the local network (off by default)
+  src/remote.rs        remote shell with a password, Telnet style (off by default)
   src/session.rs       console sessions: a shell that is not on the real screen and keyboard
   src/rand.rs          random numbers (RDRAND, or a seeded generator)
   src/allocator.rs     kernel heap in free RAM from the Multiboot memory map
@@ -263,7 +283,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `ai`,
-`slots`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `arp`, `lspci`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Under the hood:** interrupts are enabled (IDT + remapped PIC; IRQ0 timer,
 IRQ1 keyboard, IRQ3 COM2 AI bridge, IRQ4 COM1 serial). Handlers queue raw bytes; the shell decodes them and sleeps with
@@ -813,8 +833,56 @@ forwarded port (`@forward`, `@request`): the page and JSON, files, attempts
 to escape `/public`, methods other than GET, garbage, a client that never
 finishes its request, and the setting surviving a reboot.
 
-Still open in N6: the remote shell, sending signals to beehive over the
-network, and downloading a new kernel into the spare slot.
+## Networking — phase N6 (second part): the remote shell ✅
+
+```
+bee:/$ remote on
+remote shell on, port 23 (saved)
+password: a8fj-zewx-dr6n   (shown only now; 'remote password' makes a new one)
+not encrypted: the password and all that is typed can be read on the network; use it on your own network only
+```
+
+Then, on another machine in the same network: `telnet ADDRESS` (the address
+`net` shows), type the password, and you have a BeeShell of your own next
+to the one on the console. `exit` or Ctrl+D ends it.
+
+- **Off by default.** `remote on [PORT]` starts it, `remote off` stops it
+  (and ends a running session); the choice is saved in `/system/remote`.
+- **Not encrypted.** The password and everything typed cross the network
+  as plain text. Use it on a network you trust; in `vm1`'s default NAT
+  network only this PC can reach it.
+- **The OS makes up the password** (12 letters and digits, about 59 bits),
+  so it is never one you also use elsewhere. It is shown once, when it is
+  made, and kept in `/system/remote-password`; `remote password` makes a
+  new one. Dashes and capitals do not matter when typing it.
+- **Guessing is slow:** one client at a time, a 2 second pause after a
+  wrong password, three tries per connection, 30 seconds to log in.
+- **One session at a time**, closed after 10 minutes without input. When
+  the client disappears, the command it was running is stopped.
+- **Only the machine's own console** can switch the service on or off or
+  make a new password: a remote session can look (`remote`), not change.
+- **Visible:** the console reports logins and wrong passwords
+  (`[remote] login to the remote shell`), and the event log counts them.
+  Client addresses are never logged, and commands are logged by name only,
+  as everywhere.
+- The remote shell has simple line editing (Backspace, Ctrl+C); the
+  history and cursor keys of the console's shell are not there.
+- `kernel/src/remote.rs` runs it in two threads: `remote` accepts and
+  checks the password, `remote-shell` is the shell, in a console session.
+  The Telnet details are in `beenet/src/telnet.rs`.
+
+Tests: host tests for the Telnet decoder (options, cut-off sequences, a
+subnegotiation that never ends) and a kernel self-test for the setting,
+the made-up passwords and the password check. `net-remote.scn` logs in
+from the host through a forwarded port (`@remote`, `@capture`): wrong and
+empty passwords, a shell with its own directory next to the local one,
+that the password is never echoed, that a remote session cannot change the
+service, a client that vanishes in the middle of a command, the setting
+and password across a reboot, a new password, and that the log holds no
+password and no address. Not yet tried with a real `telnet` program.
+
+Still open in N6: sending signals to beehive over the network, and
+downloading a new kernel into the spare slot.
 
 ## Versioning
 
