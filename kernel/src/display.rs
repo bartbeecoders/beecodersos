@@ -200,6 +200,12 @@ pub fn current() -> Option<(&'static str, Mode)> {
     Some((driver.name(), driver.mode()?))
 }
 
+/// Where the driver in use draws.
+pub fn target() -> Option<Target> {
+    let driver = DRIVER.get().as_ref()?;
+    Some(Target { framebuffer: driver.framebuffer(), mode: driver.mode()? })
+}
+
 /// Change the resolution. The caller (console.rs) must lay the screen out
 /// again for the new target.
 pub fn set_mode(width: u32, height: u32) -> Result<Target, DisplayError> {

@@ -208,6 +208,8 @@ kernel/
   src/bochs.rs         display driver for the Bochs/QEMU graphics card (sets any resolution)
   src/fbcon.rs         framebuffer console: text drawn as pixels, for any resolution
   src/font.rs          the 8x16 console font (Spleen, BSD license), generated table
+  src/gfx.rs           drawing on a framebuffer: rectangles and characters, always clipped
+  src/wm.rs            window system: desktop background, window frames, the terminal window
   src/keyboard.rs      PS/2 keyboard driver + scancode decoder (modifiers, dead keys)
   src/layouts.rs       keyboard layouts (US, Belgian Period)
   src/uart.rs          16550 serial port: detection, sending and receiving with limits
@@ -301,7 +303,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `ai`,
-`slots`, `display`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `display`, `desktop`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Under the hood:** interrupts are enabled (IDT + remapped PIC; IRQ0 timer,
 IRQ1 keyboard, IRQ3 COM2 AI bridge, IRQ4 COM1 serial). Handlers queue raw bytes; the shell decodes them and sleeps with
@@ -946,6 +948,36 @@ framebuffer, at any resolution.
 
 Not yet: real hardware and UEFI still have no graphics (phase G2: the
 bootloader's framebuffer), and there is one font size.
+
+## Graphical desktop: a terminal in a window ✅
+
+```
+bee:/$ desktop on
+desktop on
+bee:/$ desktop
+desktop: on, the terminal window has 221x56 characters ('desktop off' ends it)
+```
+
+`desktop on` turns the screen into a desktop: a light blue background and one
+window, the terminal. `desktop off` gives the terminal the whole screen again.
+It needs a graphics mode (see the display section above); on the text screen
+it says so.
+
+- **Drawing** (`kernel/src/gfx.rs`): filled rectangles and characters on the
+  framebuffer. Every position is checked, so nothing is written outside it.
+- **Window system** (`kernel/src/wm.rs`): a desktop holds windows, back to
+  front; each has a border, a title bar with its title, and a content area its
+  owner draws in. The top window has the focus (a blue title bar; others gray).
+- **Terminal** (the only app): the framebuffer console drawn in the window's
+  content area. Everything works as before: colors, scrolling, line editing.
+- The boot flag `desktop` starts with the desktop on. `desktop on` is not
+  saved: after a restart the terminal is full screen again.
+- **No mouse yet**, so windows cannot be moved or clicked and the close box
+  does nothing. A USB mouse is U5 in `Docs/drivers-todo.html`; it needs the
+  USB host controller and USB core first (U1, U2).
+- **Tests:** self-tests for the layout at every screen size and for drawing on
+  a framebuffer in RAM; scenarios `desktop*.scn` check real pixels of the
+  screen (`@screenshot WxH pixels X,Y=RRGGBB ...`).
 
 ## Versioning
 

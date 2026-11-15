@@ -7,9 +7,13 @@
 //! are drawn. Nothing is ever read from the framebuffer: reading video
 //! memory is very slow on real hardware. Drawing needs no heap and never
 //! waits, so it also works while the kernel panics.
+//!
+//! The console fills the whole screen, or one area of it: the inside of the
+//! terminal window on the desktop (wm.rs).
 
 use crate::display::Mode;
-use crate::font::{FONT, GLYPH_HEIGHT, GLYPH_WIDTH};
+use crate::font::{GLYPH_HEIGHT, GLYPH_WIDTH};
+use crate::gfx::{Canvas, Rect};
 use crate::vga::{self, Color};
 
 /// Most cells the screen keeps (320x100: enough for 2560x1600). A larger
@@ -22,7 +26,8 @@ pub const PALETTE: [u32; 16] = [
     0x555555, 0x5555FF, 0x55FF55, 0x55FFFF, 0xFF5555, 0xFF55FF, 0xFFFF55, 0xFFFFFF,
 ];
 
-/// The colors of `display test`, left to right.
+/// The colors of `display test`, left to right. It covers the whole screen,
+/// not only the console's area.
 pub const BARS: [Color; 8] = [
     Color::White, Color::Yellow, Color::LightCyan, Color::LightGreen,
     Color::Pink, Color::LightRed, Color::LightBlue, Color::Black,
@@ -32,8 +37,9 @@ pub const BARS: [Color; 8] = [
 const CURSOR_ROWS: core::ops::Range<usize> = 13..15;
 
 pub struct FbCon<'a> {
-    framebuffer: *mut u8,
-    mode: Mode,
+    canvas: Canvas,
+    /// The part of the canvas the console draws in.
+    area: Rect,
     cells: &'a mut [u16],
     cols: usize,
     rows: usize,
@@ -46,20 +52,30 @@ pub struct FbCon<'a> {
 }
 
 impl<'a> FbCon<'a> {
-    /// `framebuffer` must be valid for `mode.bytes()` bytes. A mode whose
-    /// lines cannot hold their pixels gives a screen of 0x0 characters:
-    /// nothing is drawn.
+    /// A console over the whole screen. `framebuffer` must be valid for
+    /// `mode.bytes()` bytes. A mode whose lines cannot hold their pixels
+    /// gives a screen of 0x0 characters: nothing is drawn.
     pub fn new(framebuffer: *mut u8, mode: Mode, cells: &'a mut [u16]) -> Self {
-        let line_ok = mode.pitch as usize >= mode.width as usize * mode.format.bytes();
-        let cols = if line_ok { mode.width as usize / GLYPH_WIDTH } else { 0 };
-        let mut rows = mode.height as usize / GLYPH_HEIGHT;
+        let canvas = Canvas::new(framebuffer, mode);
+        Self::in_area(canvas, canvas.bounds(), cells)
+    }
+
+    /// A console in one area of the canvas (what lies outside the canvas is cut off).
+    pub fn in_area(canvas: Canvas, area: Rect, cells: &'a mut [u16]) -> Self {
+        let area = area.clip(&canvas.bounds());
+        let cols = area.width / GLYPH_WIDTH;
+        let mut rows = area.height / GLYPH_HEIGHT;
         if cols == 0 || rows == 0 {
             rows = 0;
         } else {
             rows = rows.min(cells.len() / cols);
         }
         let cols = if rows == 0 { 0 } else { cols };
-        FbCon { framebuffer, mode, cells, cols, rows, col: 0, row: 0, attr: 0x07, scrolls: 0, cursor: None }
+        FbCon { canvas, area, cells, cols, rows, col: 0, row: 0, attr: 0x07, scrolls: 0, cursor: None }
+    }
+
+    pub fn canvas(&self) -> Canvas {
+        self.canvas
     }
 
     pub fn width(&self) -> usize {
@@ -82,12 +98,11 @@ impl<'a> FbCon<'a> {
         (self.attr as u16) << 8 | b' ' as u16
     }
 
-    /// Fill the whole screen (also the edges no character reaches) with the
+    /// Fill the whole area (also the edges no character reaches) with the
     /// background color.
     pub fn clear(&mut self) {
-        let color = self.mode.format.encode(PALETTE[(self.attr >> 4) as usize]);
         if self.cols > 0 {
-            self.fill(0, self.mode.width as usize, color);
+            self.canvas.fill_rect(self.area, PALETTE[(self.attr >> 4) as usize]);
         }
         let blank = self.blank();
         self.cells[..self.cols * self.rows].fill(blank);
@@ -159,13 +174,9 @@ impl<'a> FbCon<'a> {
         }
         let index = index.min(self.cols * self.rows - 1);
         self.cursor = Some(index);
-        let color = self.color((self.cells[index] >> 8) as u8 & 0x0F);
+        let color = PALETTE[(self.cells[index] >> 8) as usize & 0x0F];
         let (x, y) = self.origin(index);
-        for gy in CURSOR_ROWS {
-            for gx in 0..GLYPH_WIDTH {
-                self.put_pixel(x + gx, y + gy, color);
-            }
-        }
+        self.canvas.fill_rect(Rect::new(x, y + CURSOR_ROWS.start, GLYPH_WIDTH, CURSOR_ROWS.len()), color);
     }
 
     /// Draw every cell again (after something else drew on the screen).
@@ -173,8 +184,7 @@ impl<'a> FbCon<'a> {
         if self.cols == 0 {
             return;
         }
-        let color = self.mode.format.encode(PALETTE[(self.attr >> 4) as usize]);
-        self.fill(0, self.mode.width as usize, color);
+        self.canvas.fill_rect(self.area, PALETTE[(self.attr >> 4) as usize]);
         for index in 0..self.cols * self.rows {
             self.draw_cell(index);
         }
@@ -189,10 +199,10 @@ impl<'a> FbCon<'a> {
         if self.cols == 0 {
             return;
         }
-        let width = self.mode.width as usize;
+        let (width, height) = (self.canvas.width(), self.canvas.height());
         for (i, color) in BARS.iter().enumerate() {
-            let value = self.color(*color as u8);
-            self.fill(width * i / BARS.len(), width * (i + 1) / BARS.len(), value);
+            let (from, to) = (width * i / BARS.len(), width * (i + 1) / BARS.len());
+            self.canvas.fill_rect(Rect::new(from, 0, to - from, height), PALETTE[*color as usize]);
         }
     }
 
@@ -223,46 +233,13 @@ impl<'a> FbCon<'a> {
 
     /// Top left pixel of a cell.
     fn origin(&self, index: usize) -> (usize, usize) {
-        (index % self.cols * GLYPH_WIDTH, index / self.cols * GLYPH_HEIGHT)
-    }
-
-    fn color(&self, index: u8) -> u32 {
-        self.mode.format.encode(PALETTE[(index & 0x0F) as usize])
+        (self.area.x + index % self.cols * GLYPH_WIDTH, self.area.y + index / self.cols * GLYPH_HEIGHT)
     }
 
     fn draw_cell(&mut self, index: usize) {
         let cell = self.cells[index];
-        let (fg, bg) = (self.color((cell >> 8) as u8), self.color((cell >> 12) as u8));
+        let (fg, bg) = (PALETTE[(cell >> 8) as usize & 0x0F], PALETTE[(cell >> 12) as usize]);
         let (x, y) = self.origin(index);
-        for (gy, bits) in FONT[(cell & 0xFF) as usize].iter().enumerate() {
-            for gx in 0..GLYPH_WIDTH {
-                self.put_pixel(x + gx, y + gy, if bits & (0x80 >> gx) != 0 { fg } else { bg });
-            }
-        }
-    }
-
-    /// Fill the columns `from..to` of every line with one pixel value.
-    fn fill(&mut self, from: usize, to: usize, value: u32) {
-        for y in 0..self.mode.height as usize {
-            for x in from..to {
-                self.put_pixel(x, y, value);
-            }
-        }
-    }
-
-    /// Callers stay inside the screen: x < width and y < height.
-    fn put_pixel(&mut self, x: usize, y: usize, value: u32) {
-        let bytes = self.mode.format.bytes();
-        let at = y * self.mode.pitch as usize + x * bytes;
-        unsafe {
-            let p = self.framebuffer.add(at);
-            if bytes == 4 {
-                (p as *mut u32).write_unaligned(value);
-            } else {
-                for (i, b) in value.to_le_bytes()[..bytes].iter().enumerate() {
-                    p.add(i).write(*b);
-                }
-            }
-        }
+        self.canvas.glyph(x, y, cell as u8, fg, bg);
     }
 }

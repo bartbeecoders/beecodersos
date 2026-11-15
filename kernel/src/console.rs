@@ -3,13 +3,15 @@
 //! A thread with a console session (session.rs) prints into that instead.
 //!
 //! The screen is the VGA text screen (vga.rs) until `start_display` finds a
-//! display driver; from then on it is the framebuffer console (fbcon.rs).
+//! display driver; from then on it is the framebuffer console (fbcon.rs),
+//! over the whole screen or inside the terminal window of the desktop (wm.rs).
 
 use crate::display::{self, DisplayError, Target};
 use crate::fbcon::{self, FbCon};
 use crate::font::{GLYPH_HEIGHT, GLYPH_WIDTH};
+use crate::gfx::Canvas;
 use crate::ring::Global;
-use crate::{serial, session, vga};
+use crate::{bootargs, serial, session, vga, wm};
 use alloc::format;
 use alloc::string::String;
 use core::fmt::{self, Write};
@@ -92,6 +94,9 @@ static SCREEN: Global<Screen> = Global::new(Screen::Text(vga::Writer::new()));
 /// The framebuffer console's cells: static, so drawing never needs the heap.
 static CELLS: Global<[u16; fbcon::MAX_CELLS]> = Global::new([0; fbcon::MAX_CELLS]);
 
+/// The desktop, when it is on: the console is then its terminal window.
+static DESKTOP: Global<Option<wm::Desktop>> = Global::new(None);
+
 pub fn init() {
     serial::init();
     SCREEN.get().clear();
@@ -113,15 +118,15 @@ pub fn start_display() -> String {
 
     let (target, notes) = display::init();
     if let Some(target) = target {
-        let mut screen = FbCon::new(target.framebuffer, target.mode, CELLS.get());
-        screen.clear();
-        for (i, cell) in saved.iter().enumerate() {
-            screen.put_cell(i / vga::WIDTH, i % vga::WIDTH, *cell);
+        lay_out(target, bootargs::has("desktop"));
+        if let Screen::Graphics(screen) = SCREEN.get() {
+            for (i, cell) in saved.iter().enumerate() {
+                screen.put_cell(i / vga::WIDTH, i % vga::WIDTH, *cell);
+            }
+            screen.set_pos(row, col);
+            screen.set_attr(attr);
+            screen.sync_cursor();
         }
-        screen.set_pos(row, col);
-        screen.set_attr(attr);
-        screen.sync_cursor();
-        *SCREEN.get() = Screen::Graphics(screen);
     }
     let mut lines = String::new();
     for note in notes {
@@ -135,10 +140,11 @@ pub fn describe_display() -> String {
     let (cols, rows) = size();
     match display::current() {
         Some((name, mode)) => format!(
-            "driver: {name}\nmode: {}x{}, {} bits per pixel\ntext: {cols}x{rows} characters ({GLYPH_WIDTH}x{GLYPH_HEIGHT} font)",
+            "driver: {name}\nmode: {}x{}, {} bits per pixel\ntext: {cols}x{rows} characters ({GLYPH_WIDTH}x{GLYPH_HEIGHT} font)\ndesktop: {}",
             mode.width,
             mode.height,
-            mode.format.bytes() * 8
+            mode.format.bytes() * 8,
+            if desktop_on() { "on" } else { "off" }
         ),
         None => format!("driver: text (VGA text mode, no graphics)\ntext: {cols}x{rows} characters"),
     }
@@ -150,13 +156,52 @@ pub fn size() -> (usize, usize) {
     (screen.width(), screen.height())
 }
 
-/// Change the resolution (`display mode`). The screen starts empty again.
-pub fn set_display_mode(width: u32, height: u32) -> Result<(), DisplayError> {
-    let Target { framebuffer, mode } = display::set_mode(width, height)?;
-    let mut screen = FbCon::new(framebuffer, mode, CELLS.get());
+/// Put an empty console on the framebuffer: over the whole screen, or with
+/// `desktop` in the terminal window of a new desktop. Returns whether the
+/// desktop is on now (a screen too small for a window gets none).
+fn lay_out(target: Target, desktop: bool) -> bool {
+    let canvas = Canvas::new(target.framebuffer, target.mode);
+    let frame = if desktop { wm::terminal_frame(canvas.width(), canvas.height()) } else { None };
+    let mut screen = match frame {
+        Some(frame) => {
+            let mut desk = wm::Desktop::new();
+            let id = desk.open("Terminal", frame);
+            desk.draw(&canvas);
+            let area = desk.window(id).map_or(frame, |w| w.content());
+            *DESKTOP.get() = Some(desk);
+            FbCon::in_area(canvas, area, CELLS.get())
+        }
+        None => {
+            *DESKTOP.get() = None;
+            FbCon::in_area(canvas, canvas.bounds(), CELLS.get())
+        }
+    };
     screen.clear();
     *SCREEN.get() = Screen::Graphics(screen);
+    frame.is_some()
+}
+
+/// Change the resolution (`display mode`). The screen starts empty again;
+/// the desktop stays on if the new screen has room for it.
+pub fn set_display_mode(width: u32, height: u32) -> Result<(), DisplayError> {
+    let target = display::set_mode(width, height)?;
+    lay_out(target, desktop_on());
     Ok(())
+}
+
+pub fn desktop_on() -> bool {
+    DESKTOP.get().is_some()
+}
+
+/// Switch the desktop on or off (`desktop on` / `desktop off`). The
+/// terminal starts empty.
+pub fn set_desktop(on: bool) -> Result<(), &'static str> {
+    let target = display::target().ok_or("the desktop needs a graphics mode, and this is the text screen (see display)")?;
+    if lay_out(target, on) == on {
+        Ok(())
+    } else {
+        Err("the screen is too small for a window")
+    }
 }
 
 /// Color bars over the whole screen (`display test`); nothing on the text screen.
@@ -170,6 +215,9 @@ pub fn show_color_bars() {
 pub fn redraw() -> u64 {
     let start = crate::time::micros();
     if let Screen::Graphics(screen) = SCREEN.get() {
+        if let Some(desk) = DESKTOP.get() {
+            desk.draw(&screen.canvas());
+        }
         screen.redraw();
     }
     crate::time::micros() - start

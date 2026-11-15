@@ -462,6 +462,16 @@ impl Shell {
                 println!("drawing the whole screen again took {}.{} ms", micros / 1000, micros % 1000 / 100);
             }
             ("display", _) => error("usage: display [mode WIDTHxHEIGHT | test]"),
+            ("desktop", []) if console::desktop_on() => {
+                let (cols, rows) = console::size();
+                println!("desktop: on, the terminal window has {cols}x{rows} characters ('desktop off' ends it)")
+            }
+            ("desktop", []) => println!("desktop: off ('desktop on' starts it)"),
+            ("desktop", [state @ ("on" | "off")]) => match console::set_desktop(*state == "on") {
+                Ok(()) => println!("desktop {state}"),
+                Err(e) => error(&format!("desktop {state}: {e}")),
+            },
+            ("desktop", _) => error("usage: desktop [on | off]"),
             ("slots", []) => match bootslots::describe() {
                 Some(text) => println!("{text}"),
                 None => println!("not booted from a boot disk with A/B slots (see tools/bootdisk.py)"),
@@ -1295,6 +1305,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("lspci [-v]", "list PCI devices (-v: what each one can do)"),
     ("threads", "what runs side by side inside the kernel"),
     ("display [mode WxH]", "screen: driver and resolution; change it; 'display test': color bars"),
+    ("desktop [on|off]", "graphical desktop: the terminal in a window"),
     ("slots", "A/B kernel slots: which one runs, last trial"),
     ("crash", "deliberately crash the kernel (tests crash reports)"),
     ("reboot, shutdown", "restart / power off"),

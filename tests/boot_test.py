@@ -68,7 +68,8 @@ Without @wire or @net the machine has no network card.
     @screenshot WxH KIND       take a picture of the screen (what a monitor would show): it
                                must be W by H pixels and show KIND: `text` (a mostly black
                                screen with something on it) or `bars` (the eight color bars
-                               of `display test`). Waits up to 3 s for it
+                               of `display test`), or `pixels X,Y=RRGGBB ...` (these pixels
+                               have these colors). Waits up to 3 s for it
     @bootdisk                  (first lines) boot from an A/B boot disk (tools/bootdisk.py)
                                with the kernel in both slots, BeeFS in partition 2
     $ COMMAND                  type a command, wait for the next prompt
@@ -302,16 +303,21 @@ BAR_COLORS = ["ffffff", "ffff55", "55ffff", "55ff55", "ff55ff", "ff5555", "5555f
 
 def check_screenshot(vm: Vm, tmp: Path, spec: str, where: str):
     """`@screenshot WxH KIND`: retry for 3 s, the screen may still be changing."""
-    m = re.fullmatch(r"(\d+)x(\d+) (text|bars)", spec)
+    m = re.fullmatch(r"(\d+)x(\d+) (text|bars|pixels((?: \d+,\d+=[0-9a-f]{6})+))", spec)
     if not m:
-        raise TestFailure(f"{where}: @screenshot wants WIDTHxHEIGHT and text or bars, not `{spec}`")
-    want_w, want_h, kind = int(m[1]), int(m[2]), m[3]
+        raise TestFailure(f"{where}: @screenshot wants WIDTHxHEIGHT and text, bars or pixels X,Y=RRGGBB, not `{spec}`")
+    want_w, want_h, kind = int(m[1]), int(m[2]), m[3].split()[0]
+    points = [(int(x), int(y), color) for x, y, color in re.findall(r"(\d+),(\d+)=(\w+)", m[4] or "")]
     deadline = time.monotonic() + 3
     while True:
         width, height, pixels = vm.screenshot(tmp / "screen.ppm")
         pixel = lambda x, y: pixels[3 * (y * width + x):3 * (y * width + x) + 3].hex()
         if (width, height) != (want_w, want_h):
             problem = f"the screen is {width}x{height}"
+        elif kind == "pixels":
+            wrong = [f"{x},{y} is {pixel(x, y)}, not {color}" for x, y, color in points
+                     if x >= width or y >= height or pixel(x, y) != color]
+            problem = "; ".join(wrong) or None
         elif kind == "bars":
             seen = [[pixel(width * (2 * i + 1) // 16, y) for i in range(8)] for y in (0, height // 2, height - 1)]
             problem = None if all(row == BAR_COLORS for row in seen) else f"no color bars: the colors are {seen[1]}"

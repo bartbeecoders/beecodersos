@@ -274,6 +274,11 @@ ul.items { list-style: none; padding: 0; margin: 12px 0; }
 <p>Sticks and USB disks as block devices.</p>
 <p class="facts">Test: QEMU <code>-device usb-storage</code>.</p>
 </li>
+<li class="item" data-status="todo" id="U5">
+<h4><span class="id">U5</span> USB mouse <span class="size">M</span> <span class="st"></span></h4>
+<p>For the graphical desktop (<code>desktop on</code>): a pointer on the screen, and windows that can be picked and moved. A USB mouse speaks the same simple "boot protocol" family as the keyboard: a small report with the buttons and how far it moved, read from an interrupt endpoint. The window system (<code>wm.rs</code>) then needs a pointer drawn over the windows, and clicks sent to the window under it.</p>
+<p class="facts">Needs U1 and U2 (host controller, finding devices, reading descriptors); the mouse itself is the small part. Test: QEMU <code>-device usb-mouse</code> (or <code>usb-tablet</code>, which reports absolute positions), with the test moving the pointer through QEMU and a screenshot showing where it is.</p>
+</li>
 <li class="item" data-status="skip" id="U4">
 <h4><span class="id">U4</span> EHCI host controller (USB 2) <span class="size">L</span> <span class="st"></span></h4>
 <p>Only if xHCI turns out not to cover the ports we use.</p>
@@ -349,7 +354,7 @@ ul.items { list-style: none; padding: 0; margin: 12px 0; }
 <li><b>D1</b>: a disk (done), then <b>D2</b>: decide where BeeFS lives.</li>
 <li><b>N1</b>: network (done, works on the HP), which brings back the path to beehive.</li>
 <li><b>A2</b>: framebuffer console, then UEFI boot.</li>
-<li><b>P1, P3</b>, then <b>U1 to U3</b>: USB.</li>
+<li><b>P1, P3</b>, then <b>U1 to U3</b>: USB; then <b>U5</b>, the USB mouse for the desktop.</li>
 </ol>
 
 </main>

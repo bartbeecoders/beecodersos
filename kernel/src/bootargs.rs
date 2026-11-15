@@ -15,6 +15,7 @@
 //!   `display=bochs|text` which display driver to use (`text`: none, the
 //!               80x25 VGA text screen); see display.rs
 //!   `mode=1920x1080` the screen resolution to ask the display driver for
+//!   `desktop`   start with the desktop on (a graphics mode is needed)
 
 use crate::ring::Global;
 

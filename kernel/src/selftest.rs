@@ -71,6 +71,9 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("display: text drawn as pixels in every pixel format", fbcon_drawing),
     ("display: wrap, scroll, clear and cursor on a framebuffer", fbcon_screen),
     ("display: odd framebuffer sizes never write outside", fbcon_bounds),
+    ("desktop: rectangles and drawing stay inside the screen", gfx_canvas),
+    ("desktop: where the terminal window goes", wm_layout),
+    ("desktop: background, window frames, terminal inside its window", wm_drawing),
     ("pci: capability lists, also broken ones", pci_capability_lists),
     ("interrupts: a device line that keeps firing is switched off", interrupt_storm_guard),
     ("net: frames, MAC text, descriptor rings", net_basics),
@@ -923,13 +926,23 @@ impl TestScreen {
 
     /// Does the cell at (row, col) show exactly this character in these colors?
     fn shows(&self, row: usize, col: usize, c: char, fg: Color, bg: Color) -> bool {
+        let palette = &crate::fbcon::PALETTE;
+        self.shows_at(col * 8, row * 16, c, palette[fg as usize], palette[bg as usize])
+    }
+
+    /// Is this character drawn with its top left corner at pixel (x, y), in these 0xRRGGBB colors?
+    fn shows_at(&self, x: usize, y: usize, c: char, fg: u32, bg: u32) -> bool {
         let glyph = &crate::font::FONT[crate::vga::cp437(c) as usize];
         (0..16).all(|gy| {
             (0..8).all(|gx| {
                 let want = if glyph[gy] & (0x80 >> gx) != 0 { fg } else { bg };
-                self.pixel(col * 8 + gx, row * 16 + gy) == self.color(want)
+                self.pixel(x + gx, y + gy) == self.mode.format.encode(want)
             })
         })
+    }
+
+    fn rgb(&self, x: usize, y: usize) -> u32 {
+        self.pixel(x, y) // only for Xrgb8888 screens
     }
 
     /// True when nothing was written between the lines or after the last one.
@@ -1084,5 +1097,167 @@ fn fbcon_bounds() -> TestResult {
     check_eq!((screen.width(), screen.height()), (0, 0));
     busy(&mut screen);
     check!(t.pixels.iter().all(|&b| b == 0xEE));
+    Ok(())
+}
+
+fn gfx_canvas() -> TestResult {
+    use crate::display::{Mode, PixelFormat::*};
+    use crate::gfx::{Canvas, Rect};
+    // Clipping, also with numbers that would overflow.
+    let screen = Rect::new(0, 0, 100, 50);
+    check_eq!(Rect::new(10, 10, 20, 20).clip(&screen), Rect::new(10, 10, 20, 20));
+    check_eq!(Rect::new(90, 40, 20, 20).clip(&screen), Rect::new(90, 40, 10, 10));
+    check_eq!(Rect::new(100, 50, 5, 5).clip(&screen), Rect::new(100, 50, 0, 0));
+    check_eq!(Rect::new(500, 500, 5, 5).clip(&screen).width, 0);
+    check_eq!(Rect::new(5, 5, usize::MAX, usize::MAX).clip(&screen), Rect::new(5, 5, 95, 45));
+    check_eq!(Rect::new(usize::MAX, usize::MAX, usize::MAX, 9).clip(&screen).height, 0);
+    check_eq!(Rect::new(0, 0, 30, 30).clip(&Rect::new(10, 20, 5, 5)), Rect::new(10, 20, 5, 5));
+    for format in [Xrgb8888, Xbgr8888, Rgb888, Rgb565] {
+        let mut t = TestScreen::new(40, 30, 3, format);
+        let canvas = Canvas::new(t.pixels.as_mut_ptr(), t.mode);
+        check_eq!(canvas.bounds(), Rect::new(0, 0, 40, 30));
+        canvas.fill_rect(canvas.bounds(), 0x102030);
+        canvas.fill_rect(Rect::new(30, 20, 500, 500), 0xFF0000); // sticks out: cut off
+        canvas.fill_rect(Rect::new(40, 0, 10, 10), 0x00FF00); // outside
+        canvas.fill_rect(Rect::new(usize::MAX - 2, usize::MAX - 2, usize::MAX, usize::MAX), 0x00FF00);
+        check_eq!(t.pixel(0, 0), format.encode(0x102030));
+        check_eq!(t.pixel(29, 19), format.encode(0x102030));
+        check_eq!((t.pixel(30, 20), t.pixel(39, 29)), (format.encode(0xFF0000), format.encode(0xFF0000)));
+        // Characters: drawn when they fit completely, otherwise not at all.
+        canvas.glyph(32, 14, b'A', 0xFFFFFF, 0);
+        check!(t.shows_at(32, 14, 'A', 0xFFFFFF, 0));
+        canvas.glyph(33, 0, b'B', 0xFFFFFF, 0); // one pixel too far right
+        canvas.glyph(0, 15, b'B', 0xFFFFFF, 0); // one pixel too low
+        canvas.glyph(usize::MAX, usize::MAX, b'B', 0xFFFFFF, 0);
+        check_eq!((t.pixel(33, 0), t.pixel(0, 15)), (format.encode(0x102030), format.encode(0x102030)));
+        // Text stops at its width, and at the edge of the canvas.
+        canvas.text(0, 0, "abcdefgh", 0xFFFFFF, 0, 17);
+        check!(t.shows_at(0, 0, 'a', 0xFFFFFF, 0) && t.shows_at(8, 0, 'b', 0xFFFFFF, 0));
+        check_eq!(t.pixel(20, 5), format.encode(0x102030));
+        canvas.text(16, 0, "abcdefgh", 0xFFFFFF, 0, 1000);
+        check!(t.shows_at(32, 0, 'c', 0xFFFFFF, 0));
+        check!(t.untouched_outside());
+    }
+    // A canvas whose lines cannot hold their pixels draws nothing.
+    let mut t = TestScreen::new(40, 30, 0, Xrgb8888);
+    let canvas = Canvas::new(t.pixels.as_mut_ptr(), Mode { pitch: 40 * 4 - 1, ..t.mode });
+    check_eq!(canvas.bounds(), Rect::new(0, 0, 0, 0));
+    canvas.fill_rect(Rect::new(0, 0, 40, 30), 0xFFFFFF);
+    canvas.glyph(0, 0, b'A', 0xFFFFFF, 0);
+    check!(t.pixels.iter().all(|&b| b == 0xEE));
+    Ok(())
+}
+
+fn wm_layout() -> TestResult {
+    use crate::gfx::Rect;
+    use crate::wm::{terminal_frame, Window};
+    let content = |frame: Rect| Window { title: String::new(), frame }.content();
+    // Full HD: a window in the middle with desktop all around.
+    let frame = terminal_frame(1920, 1080).ok_or("no window on a full HD screen")?;
+    let inside = content(frame);
+    check_eq!((inside.width / 8, inside.height / 16), (221, 56));
+    check_eq!(frame.x, 1920 - frame.x - frame.width); // centered
+    check!(frame.x >= 60 && frame.y >= 60);
+    // Every screen size: the window is inside the screen, the content inside
+    // the window, and the content is a whole number of characters.
+    let mut with_window = 0;
+    for width in (0..2600).step_by(53) {
+        for height in (0..1700).step_by(47) {
+            let Some(frame) = terminal_frame(width, height) else { continue };
+            with_window += 1;
+            let inside = content(frame);
+            check!(frame.x + frame.width <= width && frame.y + frame.height <= height);
+            check!(inside.x > frame.x && inside.x + inside.width < frame.x + frame.width);
+            check!(inside.y > frame.y && inside.y + inside.height < frame.y + frame.height);
+            check_eq!((inside.width % 8, inside.height % 16), (0, 0));
+            check!(inside.width / 8 >= 20 && inside.height / 16 >= 4);
+        }
+    }
+    check!(with_window > 500);
+    // Too small for a window.
+    for (width, height) in [(0, 0), (1, 1), (100, 1000), (1000, 60), (150, 120)] {
+        check_eq!((width, terminal_frame(width, height)), (width, None));
+    }
+    check!(terminal_frame(320, 200).is_some() && terminal_frame(640, 480).is_some());
+    // A window frame too small to have an inside does not underflow.
+    check_eq!(content(Rect::new(5, 5, 3, 3)).width, 0);
+    check_eq!(content(Rect::new(5, 5, 3, 3)).height, 0);
+    Ok(())
+}
+
+fn wm_drawing() -> TestResult {
+    use crate::display::PixelFormat::*;
+    use crate::fbcon::FbCon;
+    use crate::gfx::{Canvas, Rect};
+    use crate::wm::{self, Desktop};
+    let mut t = TestScreen::new(640, 480, 0, Xrgb8888);
+    let canvas = Canvas::new(t.pixels.as_mut_ptr(), t.mode);
+    let frame = wm::terminal_frame(640, 480).ok_or("no window at 640x480")?;
+    let mut desk = Desktop::new();
+    let id = desk.open("Terminal", frame);
+    desk.draw(&canvas);
+    let inside = desk.window(id).ok_or("the window is gone")?.content();
+    check!(desk.window(id + 1).is_none());
+    // Light blue in all four corners; the window in the middle.
+    for (x, y) in [(0, 0), (639, 0), (0, 479), (639, 479), (frame.x - 1, 240), (320, frame.y - 1)] {
+        check_eq!((x, y, t.rgb(x, y)), (x, y, wm::BACKGROUND));
+    }
+    check!(t.rgb(frame.x, frame.y) != wm::BACKGROUND); // the border
+    check_eq!(t.rgb(frame.x + frame.width / 2, frame.y + 3), wm::TITLE_BAR);
+    check!(t.shows_at(frame.x + 2 + 8, frame.y + 2 + 4, 'T', 0xFFFFFF, wm::TITLE_BAR));
+    check!(t.shows_at(frame.x + 2 + 16, frame.y + 2 + 4, 'e', 0xFFFFFF, wm::TITLE_BAR));
+    check_eq!(t.rgb(inside.x, inside.y), wm::CONTENT);
+    check_eq!(t.rgb(inside.x + inside.width - 1, inside.y + inside.height - 1), wm::CONTENT);
+    // The terminal draws inside the window and nowhere else.
+    let mut cells = vec![0u16; 8000];
+    let mut term = FbCon::in_area(canvas, inside, &mut cells);
+    check_eq!((term.width(), term.height()), (inside.width / 8, inside.height / 16));
+    term.clear();
+    term.write_str("A");
+    term.set_color(Color::White, Color::Blue);
+    for _ in 0..term.height() + 3 {
+        term.write_str("\nline"); // scrolls
+    }
+    term.set_cursor(0);
+    check!(t.shows_at(inside.x + 8, inside.y + (term.height() - 1) * 16, 'i', 0xFFFFFF, 0x0000AA));
+    check!(t.shows_at(inside.x + 8, inside.y, 'i', 0xFFFFFF, 0x0000AA));
+    term.clear();
+    check_eq!(t.rgb(inside.x, inside.y), 0x0000AA);
+    check_eq!(t.rgb(inside.x + inside.width - 1, inside.y + inside.height - 1), 0x0000AA);
+    check_eq!(t.rgb(inside.x - 1, inside.y), wm::CONTENT); // the padding is not the terminal's
+    check_eq!(t.rgb(frame.x + frame.width / 2, frame.y + 3), wm::TITLE_BAR);
+    check_eq!((t.rgb(0, 0), t.rgb(639, 479)), (wm::BACKGROUND, wm::BACKGROUND));
+    // Color bars cover the desktop too; drawing the desktop and the terminal again restores it.
+    term.write_str("back");
+    term.color_bars();
+    check_eq!(t.rgb(0, 0), 0xFFFFFF);
+    desk.draw(&canvas);
+    term.redraw();
+    check_eq!(t.rgb(0, 0), wm::BACKGROUND);
+    check!(t.shows_at(inside.x + 8, inside.y, 'a', 0xFFFFFF, 0x0000AA)); // the cursor is on the b
+    // A second window takes the focus: the first one's title bar turns gray.
+    desk.open("Second", Rect::new(frame.x + 200, frame.y + 100, 200, 120));
+    desk.draw(&canvas);
+    check!(t.rgb(frame.x + 40, frame.y + 3) != wm::TITLE_BAR);
+    check_eq!(t.rgb(frame.x + 200 + 100, frame.y + 100 + 3), wm::TITLE_BAR);
+    // Windows that stick out of the screen, or are tiny, are cut off: no write outside.
+    for format in [Xrgb8888, Rgb888, Rgb565] {
+        let mut t = TestScreen::new(200, 100, 5, format);
+        let canvas = Canvas::new(t.pixels.as_mut_ptr(), t.mode);
+        let mut desk = Desktop::new();
+        for frame in [Rect::new(150, 60, 300, 300), Rect::new(190, 0, 5, 5), Rect::new(0, 95, 1, 1),
+                      Rect::new(500, 500, 50, 50), Rect::new(10, 10, 0, 0), Rect::new(0, 0, 200, 100)] {
+            let id = desk.open("A window with a very long title that does not fit in its title bar", frame);
+            desk.draw(&canvas);
+            let inside = desk.window(id).ok_or("the window is gone")?.content();
+            let mut cells = vec![0u16; 400];
+            let mut term = FbCon::in_area(canvas, inside, &mut cells);
+            term.clear();
+            term.write_str("some text\nmore text");
+            term.sync_cursor();
+        }
+        check_eq!(t.pixel(0, 0) == format.encode(wm::BACKGROUND), false); // the last window covers it
+        check!(t.untouched_outside());
+    }
     Ok(())
 }

@@ -1,0 +1,7 @@
+# Without a graphics mode there is no desktop, and asking for one says why.
+@args display=text desktop
+$ desktop
+desktop: off ('desktop on' starts it)
+$ desktop on
+desktop on: the desktop needs a graphics mode, and this is the text screen (see display)
+@screenshot 720x400 text

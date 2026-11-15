@@ -1,0 +1,45 @@
+# The graphical desktop: a light blue background and the terminal in a
+# window. The screenshots check real pixels: the background in the corners
+# (a8d0f0), the window's title bar (3a6ea5) and the black inside of the terminal.
+$ desktop
+desktop: off ('desktop on' starts it)
+$ desktop on
+desktop on
+@screenshot 1920x1080 pixels 0,0=a8d0f0 1919,1079=a8d0f0 30,540=a8d0f0 960,78=3a6ea5 1800,990=000000
+$ desktop
+desktop: on, the terminal window has 221x56 characters ('desktop off' ends it)
+$ display
+mode: 1920x1080, 32 bits per pixel
+text: 221x56 characters (8x16 font)
+desktop: on
+
+# The terminal works as before, also when it scrolls.
+$ echo héllo from a window
+héllo from a window
+$ help
+$ help
+$ help
+@screenshot 1920x1080 pixels 0,0=a8d0f0 1919,1079=a8d0f0 960,78=3a6ea5 1800,120=000000
+
+# Color bars cover everything; afterwards the desktop is back.
+$& display test
+@screenshot 1920x1080 bars
+> x
+$wait
+@screenshot 1920x1080 pixels 0,0=a8d0f0 1919,1079=a8d0f0 960,78=3a6ea5
+
+# Another resolution keeps the desktop.
+$ display mode 1024x768
+text: 114x39 characters (8x16 font)
+desktop: on
+@screenshot 1024x768 pixels 0,0=a8d0f0 1023,767=a8d0f0 512,56=3a6ea5
+
+# Off: the terminal has the whole screen again.
+$ desktop off
+desktop off
+$ display
+text: 128x48 characters (8x16 font)
+desktop: off
+@screenshot 1024x768 text
+$ desktop sideways
+usage: desktop [on | off]

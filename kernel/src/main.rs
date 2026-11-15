@@ -27,6 +27,7 @@ mod editor;
 mod eventlog;
 mod fbcon;
 mod font;
+mod gfx;
 mod httpd;
 mod remote;
 mod input;
@@ -50,6 +51,7 @@ mod thread;
 mod time;
 mod uart;
 mod vga;
+mod wm;
 
 use core::panic::PanicInfo;
 
