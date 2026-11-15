@@ -1,0 +1,86 @@
+# Network phase N5: `wget` (HTTP), against a small web server run by the test.
+@net
+@http
+@dns web.test=10.0.2.2
+$ net dhcp
+~ ^address 10\.0\.2\.15/24 \(DHCP\)
+$ wget http://{http}/hello
+Hello from the test web server
+# The "http://" may be left out; a host name works too.
+$ net dns {dns}
+$ wget web.test:{http-port}/hello
+Hello from the test web server
+# What the OS tells the server about itself.
+$ wget http://{http}/who
+~ ^host=10\.0\.2\.2:\d+ agent=BeeCodersOs/[\d.]+ connection=close$
+# The three ways a server can mark the end of a page.
+$ wget http://{http}/chunked
+first
+second
+third
+$ wget http://{http}/until-close
+no length given
+but two lines
+$ wget http://{http}/empty
+!~ .
+# Redirects are followed, within the site and to a full address.
+$ wget http://{http}/redirect
+Hello from the test web server
+!~ go away
+$ wget http://{http}/redirect-full
+first
+third
+$ wget http://{http}/loop
+~ /loop: too many redirects$
+$ wget http://{http}/secure
+~ /secure: the server sends us to an https:// address, and HTTPS \(encrypted HTTP\) is not supported yet$
+$ wget https://example.com/
+~ ^https://example.com/: HTTPS \(encrypted HTTP\) is not supported yet: only http:// addresses work$
+# Errors say what happened; the error page itself is not shown.
+$ wget http://{http}/missing
+~ /missing: the server answered: 404 Not Found$
+!~ no such page
+$ wget http://{http}/cut
+~ /cut: the connection ended before the whole answer arrived$
+$ wget http://{http}/not-http
+~ /not-http: the server's answer is not valid HTTP$
+$ wget http://nowhere.test/
+~ ^http://nowhere.test/: nowhere.test: 
+$ wget http://10.0.2.2:1/
+~ ^http://10.0.2.2:1/: 10.0.2.2 port 1: connection refused
+$ wget ftp://example.com/x
+~ not a valid address \(expected http://HOST\[:PORT\]/PATH\)$
+# Bytes that are not text don't garble the screen.
+$ wget http://{http}/binary
+!~ \x07
+# Saving to a file: 4000 lines, 272 000 bytes, complete and in order.
+$ wget http://{http}/big big.txt
+saved 272000 bytes to /big.txt
+$ ls
+~ ^ *272000  big\.txt$
+$ wget http://{http}/redirect > page.txt
+~ ^\(redirected to http://10\.0\.2\.2:\d+/hello\)$
+saved 31 bytes to /page.txt
+$ cat page.txt
+Hello from the test web server
+# Saving again replaces the file; a failed download leaves the old one alone.
+$ wget http://{http}/chunked page.txt
+saved 19 bytes to /page.txt
+$ wget http://{http}/missing page.txt
+~ 404 Not Found$
+$ wget http://{http}/cut page.txt
+~ the connection ended before the whole answer arrived$
+$ wget http://{http}/huge page.txt
+~ /huge: too large \(files can be 8 MiB at most\)$
+$ cat page.txt
+first
+second
+third
+$ ls
+!~ \.part
+# A page too long for the screen is refused before any of it is shown.
+$ wget http://{http}/big
+!~ ^line
+~ too large to show \(256 KiB at most\): save it with wget URL FILE$
+$ wget
+~ ^usage: wget URL \[FILE\]

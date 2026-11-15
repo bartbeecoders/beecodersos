@@ -103,13 +103,15 @@ directives (full list at the top of `tests/boot_test.py`): `@disk`, `@ai`,
 `@net` (QEMU's built-in network: DHCP gives 10.0.2.15, gateway 10.0.2.2),
 `@dns NAME=IP ...` (fake DNS server; `{dns}` in a command is its address),
 `@tcp` (TCP test services: `{once}`, `{echo}`, `{lines}`, `{sink}`, `{closed}`),
+`@http` / `@ntp` / `@tftp` (web, time and TFTP test servers: `{http}`, `{ntp}`, `{tftp}`),
 `$& CMD` / `> TEXT` / `>^D` / `>^C` / `$wait` (type into a running command),
 `@reboot`, `@deploy [ARGS]`, `@deploy-crash ARGS`, `@signal REGEX`,
 `@frame HEXREGEX` / `@send [Nx] HEX` (frames on the wire), `$ CMD`,
 `$! CMD` (must crash), `$^C CMD` (Ctrl+C after 1 s).
 
-Networking follows `Docs/network-stack-plan.html` (N1-N4 done: PCI, e1000,
-and in the `beenet` crate ARP, IPv4, ICMP, UDP, DHCP, DNS, TCP; commands `net`,
+Networking follows `Docs/network-stack-plan.html` (N1-N5 done: PCI, e1000,
+and in the `beenet` crate ARP, IPv4, ICMP, UDP, DHCP, DNS, TCP, and the client
+side of HTTP, SNTP and TFTP; commands `wget`, `ntp`, `tftp`, `net`,
 `ping`, `arp`, `nslookup`, `nc`). The OS must not listen on any TCP port
 before phase N6 (default deny inbound). Never log host names or addresses (privacy rule). Received packets
 are untrusted: check every length, keep every table bounded, add a test with

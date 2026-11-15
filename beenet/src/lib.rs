@@ -7,7 +7,8 @@
 //!
 //! Ethernet II, ARP with a cache, IPv4 (one interface, local subnet or default
 //! gateway, no fragments), ICMP echo and "unreachable" (network phase N2);
-//! UDP sockets, a DHCP client and a DNS resolver (phase N3); TCP (phase N4).
+//! UDP sockets, a DHCP client and a DNS resolver (phase N3); TCP (phase N4);
+//! the client side of HTTP, SNTP and TFTP as socket-free modules (phase N5).
 //! See Docs/network-stack-plan.html.
 //!
 //! Every received byte is untrusted: parsers check every length before use.
@@ -18,8 +19,11 @@ extern crate alloc;
 
 mod dhcp;
 mod dns;
+pub mod http;
+pub mod sntp;
 mod stack;
 mod tcp;
+pub mod tftp;
 pub mod wire;
 
 pub use dhcp::{Lease, Notice};

@@ -70,6 +70,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("net: address settings", net_config),
     ("net: two stacks ping each other (beenet in the kernel)", net_stack_ping),
     ("net: TCP connection between two stacks", net_stack_tcp),
+    ("net: web addresses, time replies, host:port (phase N5)", net_clients),
 ];
 
 /// Run every test silently (the health check of a trial kernel).
@@ -425,6 +426,32 @@ fn net_stack_ping() -> TestResult {
         }
     }
     check_eq!(a.take_event(), Some(Event::EchoReply { from: ip_b, id: 7, seq: 1, ttl: 64, len: 3 }));
+    Ok(())
+}
+
+fn net_clients() -> TestResult {
+    use beenet::http::{HttpError, Response, Url};
+    let url = Url::parse("http://Example.com:8080/a?b=1").map_err(|e| String::from(e.message()))?;
+    check_eq!((url.host.as_str(), url.port, url.path.as_str()), ("example.com", 8080, "/a?b=1"));
+    check_eq!(Url::parse("https://example.com/").err(), Some(HttpError::Https));
+    check!(Url::parse("http://h/a b").is_err());
+    let (mut response, mut body) = (Response::new(), Vec::new());
+    for piece in b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n".chunks(5) {
+        response.feed(piece, &mut body).map_err(|e| String::from(e.message()))?;
+    }
+    check!(response.complete());
+    check_eq!((response.status(), body.as_slice()), (200, &b"abc"[..]));
+
+    check_eq!(net::split_host_port("host", 69), Some(("host", 69)));
+    check_eq!(net::split_host_port("10.0.2.2:6969", 69), Some(("10.0.2.2", 6969)));
+    check_eq!(net::split_host_port("host:", 69), None);
+    check_eq!(net::split_host_port("host:0", 69), None);
+    check_eq!(net::split_host_port(":69", 69), None);
+    check_eq!(net::split_host_port("", 69), None);
+
+    let request = beenet::sntp::request(42);
+    check_eq!(request.len(), 48);
+    check!(beenet::sntp::parse_reply(&request, 42).is_err()); // our own request is not a reply
     Ok(())
 }
 

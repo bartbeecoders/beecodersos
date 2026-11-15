@@ -26,6 +26,16 @@ Scenario files (tests/scenarios/*.scn):
                                  {sink}    reads until the client finishes, then reports
                                            how many bytes it got and closes
                                  {closed}  a port where nothing listens
+    @http                      (first lines, with @net) run a small web server on the host;
+                               {http} becomes its address (10.0.2.2:PORT), {http-port} its
+                               port. Pages: see FakeHttp.PAGES
+    @ntp                       (first lines, with @net) run a fake time server whose clock
+                               started at 2030-01-02T03:04:05Z: {ntp} is its address,
+                               {ntp-unsynced} one that says it does not know the time
+    @tftp                      (first lines, with @net) run a TFTP server on the host with the
+                               files hello.txt and big.bin (200 000 bytes): {tftp} is its
+                               address. Fetching "compare:A:B" tells whether its files A and
+                               B are identical
 Without @wire or @net the machine has no network card.
     @net                       (first lines) connect the card to QEMU's built-in network: a
                                DHCP server (gives 10.0.2.15/24) and a gateway at 10.0.2.2
@@ -290,8 +300,8 @@ def parse_scenario(path: Path):
             steps.append(("reboot", "(reboot)", []))
         elif line.startswith("@signal "):
             signals.append((re.compile(line[8:]), n))
-        elif line == "@tcp":
-            opts.add("tcp")
+        elif line in ("@tcp", "@http", "@ntp", "@tftp"):
+            opts.add(line[1:])
         elif line.startswith("$& "):
             steps.append(("start", line[3:], []))
         elif line.startswith("> ") or line in (">^D", ">^C"):
@@ -433,6 +443,208 @@ class FakeTcp:
             s.close()
 
 
+class FakeHttp:
+    """A small web server for tests (see @http)."""
+
+    BIG = b"".join(b"line %05d of the big page %s\n" % (i, b"-" * 40) for i in range(1, 4001))
+    PAGES = {  # path: (status line, extra headers, body); "{port}" in a header is our port
+        "/hello": ("200 OK", ["Content-Type: text/plain"], b"Hello from the test web server\n"),
+        "/redirect": ("302 Found", ["Location: /hello"], b"go away\n"),
+        "/redirect-full": ("301 Moved Permanently", ["Location: http://10.0.2.2:{port}/chunked"], b""),
+        "/loop": ("302 Found", ["Location: /loop"], b""),
+        "/secure": ("301 Moved Permanently", ["Location: https://example.com/"], b""),
+        "/big": ("200 OK", [], BIG),
+        "/empty": ("204 No Content", [], b""),
+        "/binary": ("200 OK", [], bytes(range(256))),
+    }
+
+    def __init__(self):
+        self.srv = socket.socket()
+        self.srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.srv.bind(("127.0.0.1", 0))
+        self.srv.listen(8)
+        self.port = self.srv.getsockname()[1]
+        self.requests = []
+        threading.Thread(target=self.accept, daemon=True).start()
+
+    def accept(self):
+        while True:
+            try:
+                conn, _ = self.srv.accept()
+            except OSError:
+                return
+            threading.Thread(target=self.serve, args=(conn,), daemon=True).start()
+
+    def serve(self, conn):
+        try:
+            with conn:
+                conn.settimeout(20)
+                head = b""
+                while b"\r\n\r\n" not in head:
+                    piece = conn.recv(4096)
+                    if not piece:
+                        return
+                    head += piece
+                lines = head.decode(errors="replace").split("\r\n")
+                self.requests.append(lines)
+                method, path, _ = (lines[0].split(" ") + ["", ""])[:3]
+                headers = {k.lower(): v.strip() for k, _, v in (l.partition(":") for l in lines[1:] if l)}
+                send = conn.sendall
+                if method != "GET":
+                    send(b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n")
+                elif path == "/chunked":  # in pieces, with a pause in the middle
+                    send(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n6\r\nfirst\n\r\n")
+                    time.sleep(0.2)
+                    send(b"7;x=y\r\nsecond\n\r\n1\r\nt\r\n5\r\nhird\n\r\n0\r\n\r\n")
+                elif path == "/until-close":  # an old-style answer: the end is the close
+                    send(b"HTTP/1.0 200 OK\r\n\r\nno length given\nbut two lines\n")
+                elif path == "/cut":  # promises 100 bytes, sends 10
+                    send(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n0123456789")
+                elif path == "/huge":  # larger than a BeeFS file can be
+                    send(b"HTTP/1.1 200 OK\r\nContent-Length: 9000000\r\n\r\n" + b"x" * 1000)
+                elif path == "/who":  # what the client said about itself
+                    body = f"host={headers.get('host')} agent={headers.get('user-agent')} " \
+                           f"connection={headers.get('connection')}\n".encode()
+                    send(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
+                elif path == "/not-http":
+                    send(b"SSH-2.0-NotAWebServer\r\n\r\n")
+                elif path.split("?")[0] in self.PAGES:
+                    status, extra, body = self.PAGES[path.split("?")[0]]
+                    head = [f"HTTP/1.1 {status}"] + [h.replace("{port}", str(self.port)) for h in extra]
+                    if not status.startswith("204"):
+                        head.append(f"Content-Length: {len(body)}")
+                    send("\r\n".join(head).encode() + b"\r\n\r\n" + body)
+                else:
+                    body = b"no such page\n"
+                    send(b"HTTP/1.1 404 Not Found\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
+        except OSError:
+            pass
+
+    def close(self):
+        self.srv.close()
+
+
+class FakeNtp(threading.Thread):
+    """A fake time server (see @ntp). Its clock started at 2030-01-02T03:04:05Z
+    when the test began; with `synced=False` it claims to have no time."""
+
+    START = 1893553445  # 2030-01-02T03:04:05Z
+
+    def __init__(self, synced=True):
+        super().__init__(daemon=True)
+        self.synced = synced
+        self.began = time.monotonic()
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind(("127.0.0.1", 0))
+        self.port = self.sock.getsockname()[1]
+        self.start()
+
+    def run(self):
+        while True:
+            try:
+                data, peer = self.sock.recvfrom(1500)
+            except OSError:
+                return
+            if len(data) < 48 or data[0] & 7 != 3:
+                continue
+            now = self.START + 2208988800 + (time.monotonic() - self.began)
+            stamp = int(now).to_bytes(4, "big") + int(now % 1 * 2**32).to_bytes(4, "big")
+            first = bytes([0x24 if self.synced else 0xE4, 2 if self.synced else 0, 0, 0xEC])
+            reply = first + bytes(12) + stamp + data[40:48] + stamp + stamp  # reference, origin, receive, transmit
+            self.sock.sendto(reply, peer)
+
+    def close(self):
+        self.sock.close()
+
+
+class FakeTftp(threading.Thread):
+    """A TFTP server for tests (see @tftp): files in memory, binary mode, 512-byte blocks."""
+
+    BIG = bytes((i * 7 + i // 512) % 256 for i in range(200_000))
+
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.files = {"hello.txt": b"Hello from the TFTP server\n", "big.bin": self.BIG, "empty": b""}
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind(("127.0.0.1", 0))
+        self.port = self.sock.getsockname()[1]
+        self.start()
+
+    def run(self):
+        while True:
+            try:
+                data, peer = self.sock.recvfrom(1500)
+            except OSError:
+                return
+            fields = data[2:].split(b"\0")
+            if data[:2] in (b"\0\1", b"\0\2") and len(fields) >= 2 and fields[1].lower() == b"octet":
+                name = fields[0].decode(errors="replace")
+                threading.Thread(target=self.transfer, args=(data[1] == 2, name, peer), daemon=True).start()
+
+    def content(self, name):
+        if name.startswith("compare:"):
+            _, a, b = (name.split(":") + ["", ""])[:3]
+            fa, fb = self.files.get(a), self.files.get(b)
+            if fa is None or fb is None:
+                return None
+            same = f"are identical ({len(fa)} bytes)" if fa == fb else "are different"
+            return f"{a} and {b} {same}\n".encode()
+        return self.files.get(name)
+
+    def transfer(self, writing, name, peer):
+        """One transfer, on a socket (port) of its own as TFTP requires."""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(("127.0.0.1", 0))
+        sock.settimeout(1)
+
+        def exchange(packet, want_op, want_block):
+            """Send `packet` until the answer with that opcode and block arrives; its payload."""
+            for _ in range(5):
+                sock.sendto(packet, peer)
+                try:
+                    while True:
+                        data, sender = sock.recvfrom(1500)
+                        if sender == peer and data[:2] == want_op and data[2:4] == want_block.to_bytes(2, "big"):
+                            return data[4:]
+                        if sender == peer and data[:2] == b"\0\5":
+                            return None
+                except socket.timeout:
+                    pass
+            return None
+
+        try:
+            if writing:
+                if name == "readonly":
+                    sock.sendto(b"\0\5\0\2Access violation\0", peer)
+                    return
+                data, block = b"", 0
+                while True:
+                    piece = exchange(b"\0\4" + block.to_bytes(2, "big"), b"\0\3", block + 1)
+                    if piece is None:
+                        return
+                    data, block = data + piece, block + 1
+                    if len(piece) < 512:
+                        break
+                self.files[name] = data
+                sock.sendto(b"\0\4" + block.to_bytes(2, "big"), peer)
+            else:
+                data = self.content(name)
+                if data is None:
+                    sock.sendto(b"\0\5\0\1File not found\0", peer)
+                    return
+                for block in range(1, len(data) // 512 + 2):
+                    piece = data[(block - 1) * 512:block * 512]
+                    if exchange(b"\0\3" + block.to_bytes(2, "big") + piece, b"\0\4", block) is None:
+                        return
+        except OSError:
+            pass
+        finally:
+            sock.close()
+
+    def close(self):
+        self.sock.close()
+
+
 class Wire:
     """The test's end of the network cable (see @wire)."""
 
@@ -532,8 +744,18 @@ def test_scenario(path: Path):
         names = {"{dns}": f"10.0.2.2:{dns.port}"} if dns else {}
         if tcp:
             names.update({"{%s}" % name: f"10.0.2.2 {port}" for name, port in tcp.ports.items()})
+        servers = [x for x in (dns, tcp) if x]
+        if "http" in opts:
+            servers.append(FakeHttp())
+            names.update({"{http}": f"10.0.2.2:{servers[-1].port}", "{http-port}": str(servers[-1].port)})
+        if "ntp" in opts:
+            servers += [FakeNtp(), FakeNtp(synced=False)]
+            names.update({"{ntp}": f"10.0.2.2:{servers[-2].port}", "{ntp-unsynced}": f"10.0.2.2:{servers[-1].port}"})
+        if "tftp" in opts:
+            servers.append(FakeTftp())
+            names["{tftp}"] = f"10.0.2.2:{servers[-1].port}"
         # The fake servers listen on the host, so the guest must be able to reach it.
-        usernet = ("open" if dns or tcp else "isolated") if "net" in opts else None
+        usernet = ("open" if servers else "isolated") if "net" in opts else None
         boot = lambda: Vm(disk=disk, ai_port=ai_port, bootdisk=bootdisk, wire=wire.ports if wire else None,
                           usernet=usernet)
         vm = boot()
@@ -608,10 +830,8 @@ def test_scenario(path: Path):
             vm.kill()
             if wire:
                 wire.close()
-            if dns:
-                dns.close()
-            if tcp:
-                tcp.close()
+            for server in servers:
+                server.close()
             if hive:
                 hive.kill()
                 hive.wait()

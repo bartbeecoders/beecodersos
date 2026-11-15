@@ -25,7 +25,8 @@ Current version: **0.0.2** (see [Versioning](#versioning)).
 | N2 | Networking: ARP, IPv4, ICMP: `ping` | ✅ |
 | N3 | Networking: UDP, DHCP (automatic address), DNS (names) | ✅ |
 | N4 | Networking: TCP connections (`nc`) | ✅ |
-| N5–N6 | Networking: HTTP, time, file transfer, servers | planned |
+| N5 | Networking: HTTP (`wget`), time (`ntp`), file transfer (`tftp`) | ✅ |
+| T, N6 | Cooperative threads, then network servers | planned |
 
 The roadmap is `Docs/self-improving-os-plan.html`, the network plan is
 `Docs/network-stack-plan.html`; each phase is described below.
@@ -134,6 +135,10 @@ beenet/                network stack library (no_std + alloc, no hardware access
   src/stack.rs         the stack: ARP cache, routing, ping, UDP sockets; frames in, frames out
   src/dhcp.rs          DHCP client: automatic address, renewal
   src/dns.rs           DNS resolver: names to addresses, with a cache
+  src/tcp.rs           TCP connections
+  src/http.rs          HTTP/1.1 client: addresses, requests, decoding answers
+  src/sntp.rs          SNTP: the time from a time server
+  src/tftp.rs          TFTP client: fetch / store a file
   src/tcp.rs           TCP: connections, retransmission, flow control, close and reset
 tools/beefs-tool/      host CLI to create/inspect/edit BeeFS images (and boot disks)
 tests/boot_test.py     boot tests: drives the kernel in headless QEMU over serial
@@ -163,7 +168,7 @@ kernel/
   src/bootslots.rs     A/B kernel slots: arm the rollback, health check, report failed trials
   src/pci.rs           PCI: find devices, read their configuration (`lspci`)
   src/e1000.rs         Intel e1000 network card driver (polled descriptor rings)
-  src/net.rs           card + beenet stack: polling, settings, TCP streams, `net` / `ping` / `arp` / `nslookup` / `nc`
+  src/net.rs           card + beenet stack: polling, settings, TCP streams, HTTP / time / TFTP transfers
   src/rand.rs          random numbers (RDRAND, or a seeded generator)
   src/allocator.rs     kernel heap in free RAM from the Multiboot memory map
   src/console.rs       print!/println! to VGA + serial, line redraw helpers
@@ -254,7 +259,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `ai`,
-`slots`, `net`, `ping`, `nslookup`, `nc`, `arp`, `lspci`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `arp`, `lspci`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Under the hood:** interrupts are enabled (IDT + remapped PIC; IRQ0 timer,
 IRQ1 keyboard, IRQ3 COM2 AI bridge, IRQ4 COM1 serial). Handlers queue raw bytes; the shell decodes them and sleeps with
@@ -639,7 +644,7 @@ PING example.com (93.184.216.34): 32 data bytes
 - **Privacy:** the event log records that the network came up and that
   `ping` / `nslookup` ran, never the names or addresses.
 
-Not done yet: TCP (N4), so no HTTP; DNS over TCP, DNSSEC and IPv6.
+Not done: DNS over TCP, DNSSEC and IPv6.
 
 Tests: `beenet` now has 32 host unit tests: full DHCP handshakes against a
 hand-built fake server (retries, refusals, renewal, expiry, odd answers), and
@@ -687,6 +692,49 @@ full receiver stalls the sender without errors, forged resets and data are
 ignored, a dead peer is detected. `net-tcp.scn` runs `nc` against small
 services (`@tcp`): one line each way, 300 lines in order, a refused port, a
 typed conversation, half-close with Ctrl+D, and ten connections in a row.
+
+## Networking — phase N5: HTTP, time, file transfer ✅
+
+The commands that make the network useful:
+
+```
+bee:/$ wget http://192.168.122.1:8000/notes.txt
+(the page, on the screen)
+bee:/$ wget http://192.168.122.1:8000/notes.txt notes.txt
+saved 1834 bytes to /notes.txt
+bee:/$ ntp
+clock set to 2026-11-15T10:42:07Z (it was 3 s behind; server stratum 2)
+bee:/$ tftp put 192.168.122.1 notes.txt
+sent 1834 bytes as notes.txt
+```
+
+- **`wget URL`** shows a page (256 KiB at most); **`wget URL FILE`** or
+  **`wget URL > FILE`** saves it (8 MiB at most, the BeeFS file limit).
+  HTTP/1.1 GET with `Content-Length`, chunked and close-delimited bodies; up
+  to 5 redirects are followed; anything but a 2xx answer is an error.
+  - **Plain HTTP only.** `https://` addresses, and sites that redirect to
+    them (most of the public web), are refused with a clear message. TLS is
+    an open decision in the network plan.
+- **`ntp [SERVER[:PORT]]`** sets the clock with one SNTP request (default
+  server `pool.ntp.org`), corrected for half the round trip. The clock is
+  kept in memory: it is not written back to the machine's clock chip, so
+  after a reboot the OS starts from the chip's time again.
+- **`tftp get HOST[:PORT] FILE [LOCAL]`** and **`tftp put HOST[:PORT] FILE
+  [REMOTE]`** copy files from and to a TFTP server (RFC 1350, 512-byte
+  blocks, binary mode), for moving files between the OS and the host without
+  stopping the VM. TFTP has no passwords: use it on your own network.
+- Downloads go to `FILE.part` first; only a complete transfer replaces
+  `FILE`, and a failed one leaves nothing behind.
+- The protocol logic is in `beenet` (`http.rs`, `sntp.rs`, `tftp.rs`) without
+  sockets, so it is tested on the host; the kernel moves the bytes
+  (`kernel/src/net.rs`).
+
+Tests: 21 host tests (answers cut at every byte, damaged chunks, an endless
+header block, forged or stale time replies, TFTP with lost datagrams in both
+directions, strangers and duplicates). `net-http.scn`, `net-time.scn` and
+`net-tftp.scn` run the commands against a web server, a time server and a TFTP
+server started by the test (`@http`, `@ntp`, `@tftp`); a 200 000-byte file
+goes out and back by TFTP unchanged.
 
 ## Versioning
 

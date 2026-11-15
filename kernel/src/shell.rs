@@ -173,8 +173,11 @@ impl Shell {
         let a: Vec<&str> = args.iter().map(String::as_str).collect();
 
         if let Some((append, file)) = redirect {
+            if cmd == "wget" && !append && a.len() == 1 {
+                return self.wget(a[0], Some(&file));
+            }
             if cmd != "echo" {
-                return error("redirection is only supported for echo");
+                return error("redirection is only supported for echo and wget");
             }
             let mut text = a.join(" ");
             text.push('\n');
@@ -272,6 +275,16 @@ impl Shell {
             ("nslookup" | "host", [name]) => self.nslookup(name),
             ("nc", [host, port]) => self.nc(host, port, None),
             ("nc", [host, port, text @ ..]) => self.nc(host, port, Some(&text.join(" "))),
+            ("wget", [url]) => self.wget(url, None),
+            ("wget", [url, file]) => self.wget(url, Some(file)),
+            ("wget", _) => error("usage: wget URL [FILE]   (or: wget URL > FILE)"),
+            ("ntp", []) => self.ntp("pool.ntp.org"),
+            ("ntp", [server]) => self.ntp(server),
+            ("tftp", ["get", host, remote]) => self.tftp_get(host, remote, None),
+            ("tftp", ["get", host, remote, local]) => self.tftp_get(host, remote, Some(local)),
+            ("tftp", ["put", host, local]) => self.tftp_put(host, local, None),
+            ("tftp", ["put", host, local, remote]) => self.tftp_put(host, local, Some(remote)),
+            ("tftp", _) => error("usage: tftp get HOST[:PORT] FILE [LOCAL-NAME]   or: tftp put HOST[:PORT] FILE [REMOTE-NAME]"),
             ("arp", []) => {
                 let table = net::arp_table();
                 if table.is_empty() {
@@ -594,6 +607,123 @@ impl Shell {
                 }
             }
             net::idle(10); // one timer tick: data and keys are handled promptly
+        }
+    }
+
+    /// `wget URL [FILE]`: fetch over HTTP, to the screen or into a file.
+    fn wget(&mut self, url: &str, file: Option<&str>) {
+        let Some(file) = file else {
+            let mut at_line_start = true;
+            let result = net::http_get(url, MAX_SHOWN, &mut |data| {
+                for c in String::from_utf8_lossy(data).chars().filter(|c| *c != '\r') {
+                    let shown = if c == '\n' || c == '\t' || !c.is_control() { c } else { '.' };
+                    print!("{shown}");
+                    at_line_start = shown == '\n';
+                }
+                Ok(())
+            });
+            if !at_line_start {
+                println!();
+            }
+            return match result {
+                Ok(_) => {}
+                Err(e) if e == "too large" => {
+                    error(&format!("{url}: too large to show ({} KiB at most): save it with wget URL FILE", MAX_SHOWN / 1024))
+                }
+                Err(e) => error(&format!("{url}: {e}")),
+            };
+        };
+        let path = self.abs_target(url.split(['?', '#']).next().unwrap_or(""), file);
+        let mut download = Download::start(&mut self.storage, &path);
+        let result = net::http_get(url, beefs::MAX_FILE_SIZE, &mut |data| download.write(data));
+        match result.and_then(|r| download.finish().map(|()| r)) {
+            Ok(r) => {
+                if let Some(to) = r.redirected_to {
+                    println!("(redirected to {to})");
+                }
+                println!("saved {} bytes to {path}", r.bytes);
+            }
+            Err(e) if e == "too large" => {
+                error(&format!("{url}: too large (files can be {} MiB at most)", beefs::MAX_FILE_SIZE >> 20))
+            }
+            Err(e) => error(&format!("{url}: {e}")),
+        }
+    }
+
+    /// `ntp [SERVER[:PORT]]`: set the clock from a time server.
+    fn ntp(&mut self, server: &str) {
+        let Some((host, port)) = net::split_host_port(server, beenet::sntp::PORT) else {
+            return error("usage: ntp [SERVER[:PORT]]");
+        };
+        let ip = match net::resolve(host) {
+            Ok(ip) => ip,
+            Err(e) => return error(&e),
+        };
+        let before = time::now_unix_ms();
+        let (secs, millis, stratum) = match net::sntp_query(ip, port) {
+            Ok(t) => t,
+            Err(e) => return error(&format!("{host}: {e}")),
+        };
+        time::set_unix(secs, millis);
+        let offset = before.map(|old| (secs * 1000 + millis as u64) as i64 - old as i64);
+        let was = match offset {
+            None => String::from("there was no clock before"),
+            Some(ms) if ms.abs() < 1000 => String::from("it was right to within a second"),
+            Some(ms) => format!(
+                "it was {} {}",
+                time::format_duration(ms.unsigned_abs()),
+                if ms > 0 { "behind" } else { "ahead" }
+            ),
+        };
+        println!("clock set to {} ({was}; server stratum {stratum})", time::iso8601(secs));
+        let ev = eventlog::event("ntp").num("offset_s", offset.unwrap_or(0) / 1000).finish();
+        eventlog::write(&mut self.storage.fs(), ev);
+    }
+
+    /// `tftp get HOST[:PORT] FILE [LOCAL]`: fetch a file from a TFTP server.
+    fn tftp_get(&mut self, host: &str, remote: &str, local: Option<&str>) {
+        let Some((ip, port)) = self.tftp_server(host) else { return };
+        let name = remote.rsplit('/').next().unwrap_or(remote);
+        let path = match local {
+            Some(l) => self.abs_target(name, l),
+            None => self.abs(name),
+        };
+        let started = time::uptime_ms();
+        let mut download = Download::start(&mut self.storage, &path);
+        let result = net::tftp_get(ip, port, remote, beefs::MAX_FILE_SIZE, &mut |data| download.write(data));
+        match result.and_then(|n| download.finish().map(|()| n)) {
+            Ok(n) => println!("received {n} bytes into {path}{}", rate(n, started)),
+            Err(e) => error(&format!("{remote}: {e}")),
+        }
+    }
+
+    /// `tftp put HOST[:PORT] FILE [REMOTE]`: store a file on a TFTP server.
+    fn tftp_put(&mut self, host: &str, local: &str, remote: Option<&str>) {
+        let path = self.abs(local);
+        let data = match self.storage.fs().read_file(&path) {
+            Ok(d) => d,
+            Err(e) => return error(&format!("{local}: {e}")),
+        };
+        let Some((ip, port)) = self.tftp_server(host) else { return };
+        let name = remote.unwrap_or_else(|| path.rsplit('/').next().unwrap_or(local));
+        let started = time::uptime_ms();
+        match net::tftp_put(ip, port, name, data) {
+            Ok(n) => println!("sent {n} bytes as {name}{}", rate(n, started)),
+            Err(e) => error(&format!("{name}: {e}")),
+        }
+    }
+
+    fn tftp_server(&mut self, host: &str) -> Option<(beenet::Ipv4, u16)> {
+        let Some((name, port)) = net::split_host_port(host, beenet::tftp::PORT) else {
+            error("the server must look like HOST or HOST:PORT");
+            return None;
+        };
+        match net::resolve(name) {
+            Ok(ip) => Some((ip, port)),
+            Err(e) => {
+                error(&e);
+                None
+            }
         }
     }
 
@@ -928,6 +1058,9 @@ const COMMANDS: &[(&str, &str)] = &[
     ("ping [-c N] HOST", "check that a machine answers"),
     ("nslookup NAME", "look up the address of a host name"),
     ("nc HOST PORT [TEXT]", "open a TCP connection: type lines, see the answers"),
+    ("wget URL [FILE]", "fetch a web address (http://): show it or save it"),
+    ("ntp [SERVER]", "set the clock from a time server"),
+    ("tftp get|put HOST FILE", "copy a file from / to a TFTP server"),
     ("arp", "neighbours learned on the local network"),
     ("lspci", "list PCI devices"),
     ("slots", "A/B kernel slots: which one runs, last trial"),
@@ -949,6 +1082,78 @@ fn help() {
         print!("  {usage:<20}");
         console::set_color(Color::LightGray, Color::Black);
         println!("{text}");
+    }
+}
+
+/// `wget URL` without a file shows at most this much.
+const MAX_SHOWN: u64 = 256 * 1024;
+
+/// " in 1.2 s (340 KiB/s)" for transfers that took a noticeable time.
+fn rate(bytes: u64, started_ms: u64) -> String {
+    let ms = time::uptime_ms() - started_ms;
+    if ms < 500 {
+        return String::new();
+    }
+    format!(" in {}.{} s ({} KiB/s)", ms / 1000, ms % 1000 / 100, bytes * 1000 / ms / 1024)
+}
+
+/// A file being received from the network. The data goes to `PATH.part`
+/// first; only a complete transfer replaces the file at PATH.
+struct Download<'a> {
+    storage: &'a mut Storage,
+    path: &'a str,
+    part: String,
+    /// Received, not yet written.
+    buffer: Vec<u8>,
+    /// `part` exists on the disk.
+    started: bool,
+    done: bool,
+}
+
+impl<'a> Download<'a> {
+    const FLUSH: usize = 64 * 1024;
+
+    fn start(storage: &'a mut Storage, path: &'a str) -> Self {
+        Download { storage, path, part: format!("{path}.part"), buffer: Vec::new(), started: false, done: false }
+    }
+
+    fn flush(&mut self) -> Result<(), String> {
+        let mut fs = self.storage.fs();
+        let r = if self.started { fs.append(&self.part, &self.buffer) } else { fs.write_file(&self.part, &self.buffer) };
+        drop(fs);
+        self.started = true;
+        self.buffer.clear();
+        r.map_err(|e| format!("can't write {}: {e}", self.path))
+    }
+
+    fn write(&mut self, data: &[u8]) -> Result<(), String> {
+        self.buffer.extend_from_slice(data);
+        if self.buffer.len() >= Self::FLUSH {
+            return self.flush();
+        }
+        Ok(())
+    }
+
+    /// The transfer is complete: put the file in place.
+    fn finish(mut self) -> Result<(), String> {
+        self.flush()?;
+        let mut fs = self.storage.fs();
+        if fs.exists(self.path) {
+            fs.remove(self.path).map_err(|e| format!("can't replace {}: {e}", self.path))?;
+        }
+        let r = fs.rename(&self.part, self.path).map_err(|e| format!("can't write {}: {e}", self.path));
+        drop(fs);
+        self.done = r.is_ok();
+        r
+    }
+}
+
+impl Drop for Download<'_> {
+    /// An unfinished transfer leaves no partial file behind.
+    fn drop(&mut self) {
+        if !self.done && self.started {
+            let _ = self.storage.fs().remove(&self.part);
+        }
     }
 }
 

@@ -1,5 +1,5 @@
 //! Time: the PIT timer (IRQ0, 100 Hz) counts uptime and drives timeouts; the
-//! CMOS real-time clock gives the date and time at boot.
+//! CMOS real-time clock gives the date and time at boot; `ntp` can correct it.
 //!
 //! The RTC is read as UTC (QEMU and libvirt default to a UTC clock).
 
@@ -45,6 +45,21 @@ pub fn now_unix() -> Option<u64> {
     let boot = BOOT_UNIX.load(Ordering::Relaxed);
     let ticks = TICKS.load(Ordering::Relaxed) - BOOT_TICK.load(Ordering::Relaxed);
     (boot != 0).then(|| boot + ticks / HZ)
+}
+
+/// Milliseconds since 1970-01-01 UTC, if the clock is set.
+pub fn now_unix_ms() -> Option<u64> {
+    let boot = BOOT_UNIX.load(Ordering::Relaxed);
+    let ticks = TICKS.load(Ordering::Relaxed) - BOOT_TICK.load(Ordering::Relaxed);
+    (boot != 0).then(|| boot * 1000 + ticks * 1000 / HZ)
+}
+
+/// Set the clock (from a time server). Uptime and timeouts are not affected.
+pub fn set_unix(unix_secs: u64, millis: u32) {
+    let ticks = TICKS.load(Ordering::Relaxed);
+    // "Now" is `millis` past the full second: pretend the second began that many ticks ago.
+    BOOT_TICK.store(ticks.saturating_sub(millis as u64 * HZ / 1000), Ordering::Relaxed);
+    BOOT_UNIX.store(unix_secs, Ordering::Relaxed);
 }
 
 /// Current time as `2026-11-14T15:04:05Z`, or "unknown".

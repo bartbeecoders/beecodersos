@@ -1,0 +1,48 @@
+# Network phase N5: `tftp get` / `tftp put`, against a TFTP server run by the test.
+@net
+@tftp
+$ net dhcp
+~ ^address 10\.0\.2\.15/24 \(DHCP\)
+$ tftp get {tftp} hello.txt
+received 27 bytes into /hello.txt
+$ cat hello.txt
+Hello from the TFTP server
+# A file made here goes to the server and comes back unchanged.
+$ echo written inside BeeCodersOs > note.txt
+$ tftp put {tftp} note.txt
+sent 27 bytes as note.txt
+$ tftp get {tftp} note.txt back.txt
+received 27 bytes into /back.txt
+$ cat back.txt
+written inside BeeCodersOs
+# 200 000 bytes of binary data, there and back: 391 blocks each way.
+$ tftp get {tftp} big.bin
+~ ^received 200000 bytes into /big\.bin
+$ tftp put {tftp} big.bin copy.bin
+~ ^sent 200000 bytes as copy\.bin
+$ tftp get {tftp} compare:big.bin:copy.bin verdict
+$ cat verdict
+big.bin and copy.bin are identical (200000 bytes)
+# Sizes around one block, and an empty file.
+$ tftp get {tftp} empty
+received 0 bytes into /empty
+$ tftp put {tftp} empty empty2
+sent 0 bytes as empty2
+$ tftp get {tftp} compare:empty:empty2 verdict
+$ cat verdict
+empty and empty2 are identical (0 bytes)
+# Into a directory, under the same name.
+$ mkdir inbox
+$ tftp get {tftp} hello.txt inbox
+received 27 bytes into /inbox/hello.txt
+# Errors from the server and from here.
+$ tftp get {tftp} missing.txt
+missing.txt: the server says: file not found
+$ ls
+!~ missing
+$ tftp put {tftp} note.txt readonly
+readonly: the server says: access denied
+$ tftp put {tftp} nothere.txt
+~ ^nothere\.txt: 
+$ tftp
+~ ^usage: tftp get HOST\[:PORT\] FILE

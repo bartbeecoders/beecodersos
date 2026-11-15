@@ -1,6 +1,7 @@
 //! Networking in the kernel: the network card, the beenet protocol stack
 //! (ARP, IPv4, ICMP, UDP, DHCP, DNS, TCP) and what the `net`, `ping`, `arp`,
-//! `nslookup` and `nc` commands need. See Docs/network-stack-plan.html (phases N1-N4).
+//! `nslookup`, `nc`, `wget`, `ntp` and `tftp` commands need.
+//! See Docs/network-stack-plan.html (phases N1-N5).
 //!
 //! `poll()` moves frames between the card and the stack. It runs from the idle
 //! loop (every 10 ms, so the OS answers pings at the prompt) and inside
@@ -612,4 +613,246 @@ pub fn describe() -> Option<String> {
         }
     }
     Some(out)
+}
+
+// --- phase N5: HTTP, SNTP, TFTP ------------------------------------------------------------
+
+/// "HOST" or "HOST:PORT" (for services that are not on their usual port).
+pub fn split_host_port(text: &str, default: u16) -> Option<(&str, u16)> {
+    match text.rsplit_once(':') {
+        Some((host, port)) if !host.is_empty() => Some((host, port.parse().ok().filter(|p| *p != 0)?)),
+        Some(_) => None,
+        None if text.is_empty() => None,
+        None => Some((text, default)),
+    }
+}
+
+fn unreachable_text(reason: Reason) -> &'static str {
+    match reason {
+        Reason::NoArpReply => "host unreachable (no machine with that address answered)",
+        Reason::Icmp(3) => "nothing is listening on that port",
+        Reason::Icmp(_) => "host unreachable (a router said so)",
+    }
+}
+
+/// While a transfer is moving, check the card continuously instead of
+/// sleeping until the next timer tick (the card is polled: a sleep costs up
+/// to 10 ms per packet exchange).
+fn transfer_wait(last_activity_ms: u64) {
+    if time::uptime_ms() - last_activity_ms < 50 {
+        core::hint::spin_loop();
+    } else {
+        interrupts::wait_until(input::pending);
+    }
+}
+
+/// An open UDP port; closed when dropped.
+struct UdpPort(u16);
+
+impl UdpPort {
+    fn open(net: &mut Net) -> Result<UdpPort, String> {
+        net.stack.udp_open(None).map(UdpPort).map_err(|e| String::from(e.message()))
+    }
+}
+
+impl Drop for UdpPort {
+    fn drop(&mut self) {
+        if let Some(net) = NET.get().as_mut() {
+            net.stack.udp_close(self.0);
+        }
+    }
+}
+
+/// Ask a time server for the time (SNTP). Returns Unix seconds and
+/// milliseconds, corrected for half the round trip.
+pub fn sntp_query(server: Ipv4, port: u16) -> Result<(u64, u32, u8), String> {
+    let net = NET.get().as_mut().ok_or_else(|| String::from(NetError::NoCard.message()))?;
+    let socket = UdpPort::open(net)?;
+    let _ = time::micros(); // calibrate before timing anything
+    while net.stack.take_event().is_some() {}
+    let mut last_error = "no answer from the time server (timed out)";
+    for _attempt in 0..3 {
+        let nonce = (rand::next_u32() as u64) << 32 | rand::next_u32() as u64;
+        let (sent_ms, sent) = (time::uptime_ms(), time::micros());
+        net.stack
+            .udp_send(socket.0, server, port, &beenet::sntp::request(nonce), sent_ms)
+            .map_err(|e| String::from(e.message()))?;
+        while time::uptime_ms() - sent_ms < 2000 || net.stack.resolving() {
+            net.poll();
+            while let Some((from, from_port, data)) = net.stack.udp_recv(socket.0) {
+                if from != server || from_port != port {
+                    continue;
+                }
+                match beenet::sntp::parse_reply(&data, nonce) {
+                    Ok(t) => {
+                        let half_trip_ms = (time::micros() - sent) / 2000;
+                        let total = t.unix_secs * 1000 + t.millis as u64 + half_trip_ms;
+                        return Ok((total / 1000, (total % 1000) as u32, t.stratum));
+                    }
+                    // The server answered our request, but has no time to give.
+                    Err(e @ beenet::sntp::SntpError::NotSynchronised) => return Err(String::from(e.message())),
+                    Err(e) => last_error = e.message(), // a stray or old reply: keep waiting
+                }
+            }
+            while let Some(event) = net.stack.take_event() {
+                if let Event::Unreachable { dst, reason } = event {
+                    if dst == server {
+                        return Err(String::from(match reason {
+                            Reason::Icmp(3) => "that machine has no time service (port closed)",
+                            r => unreachable_text(r),
+                        }));
+                    }
+                }
+            }
+            if cancelled() {
+                return Err(String::from("cancelled"));
+            }
+            core::hint::spin_loop(); // no sleeping: the round trip is being timed
+        }
+    }
+    Err(String::from(last_error))
+}
+
+/// Takes pieces of a file as they arrive; an error stops the transfer.
+pub type Sink<'a> = &'a mut dyn FnMut(&[u8]) -> Result<(), String>;
+
+fn tftp_run(server: Ipv4, mut transfer: beenet::tftp::Transfer, sink: Sink) -> Result<u64, String> {
+    use beenet::tftp::Status;
+    let net = NET.get().as_mut().ok_or_else(|| String::from(NetError::NoCard.message()))?;
+    let socket = UdpPort::open(net)?;
+    while net.stack.take_event().is_some() {}
+    let mut last_activity = time::uptime_ms();
+    let mut failure: Option<String> = None;
+    loop {
+        let now = time::uptime_ms();
+        net.poll();
+        while let Some((from, from_port, data)) = net.stack.udp_recv(socket.0) {
+            if from == server {
+                transfer.receive(from_port, &data, now);
+                last_activity = now;
+            }
+        }
+        transfer.poll(now);
+        let received = transfer.take_received();
+        if !received.is_empty() && failure.is_none() {
+            if let Err(e) = sink(&received) {
+                failure = Some(e);
+                transfer.cancel();
+            }
+        }
+        while let Some(event) = net.stack.take_event() {
+            if let Event::Unreachable { dst, reason } = event {
+                if dst == server && failure.is_none() {
+                    failure = Some(String::from(match reason {
+                        Reason::Icmp(3) => "that machine has no TFTP service (port closed)",
+                        r => unreachable_text(r),
+                    }));
+                    transfer.cancel();
+                }
+            }
+        }
+        if failure.is_none() && cancelled() {
+            failure = Some(String::from("cancelled"));
+            transfer.cancel();
+        }
+        while let Some((port, packet)) = transfer.transmit() {
+            if let Err(e) = net.stack.udp_send(socket.0, server, port, &packet, now) {
+                failure.get_or_insert(String::from(e.message()));
+                transfer.cancel();
+            }
+        }
+        net.poll();
+        match (transfer.status(), failure.take()) {
+            (Status::Running, None) => {}
+            (Status::Done, None) => return Ok(transfer.bytes()),
+            (_, Some(e)) => return Err(e),
+            (Status::Failed(e), None) => return Err(String::from(e.message())),
+        }
+        transfer_wait(last_activity);
+    }
+}
+
+/// Fetch a file from a TFTP server, at most `limit` bytes. Returns its size.
+pub fn tftp_get(server: Ipv4, port: u16, name: &str, limit: u64, sink: Sink) -> Result<u64, String> {
+    let transfer = beenet::tftp::Transfer::get(name, limit, port, time::uptime_ms()).map_err(|e| String::from(e.message()))?;
+    tftp_run(server, transfer, sink)
+}
+
+/// Store `data` on a TFTP server as `name`.
+pub fn tftp_put(server: Ipv4, port: u16, name: &str, data: Vec<u8>) -> Result<u64, String> {
+    let transfer = beenet::tftp::Transfer::put(name, data, port, time::uptime_ms()).map_err(|e| String::from(e.message()))?;
+    tftp_run(server, transfer, &mut |_| Ok(()))
+}
+
+pub struct HttpResult {
+    /// The address the content came from, if the server sent us elsewhere.
+    pub redirected_to: Option<String>,
+    pub bytes: u64,
+}
+
+const MAX_REDIRECTS: usize = 5;
+/// Give up when a server sends nothing for this long.
+const HTTP_STALL_MS: u64 = 15_000;
+
+/// HTTP GET: the body goes to `sink` piece by piece; at most `limit` bytes.
+/// Follows redirects. Anything but a 2xx answer is an error.
+pub fn http_get(address: &str, limit: u64, sink: Sink) -> Result<HttpResult, String> {
+    use beenet::http::{request, Response, Url};
+    let mut url = Url::parse(address).map_err(|e| String::from(e.message()))?;
+    let agent = format!("BeeCodersOs/{}", crate::OS_VERSION);
+    let mut redirected_to = None;
+    for _hop in 0..=MAX_REDIRECTS {
+        let ip = resolve(&url.host)?;
+        let stream = tcp_connect(ip, url.port).map_err(|e| format!("{} port {}: {e}", url.host, url.port))?;
+        stream.send(&request("GET", &url, &agent, None)).map_err(String::from)?;
+        let (mut response, mut body, mut buf) = (Response::new(), Vec::new(), [0u8; 2048]);
+        let mut bytes = 0u64;
+        let mut last_activity = time::uptime_ms();
+        while !response.complete() && response.redirect().is_none() {
+            match stream.receive(&mut buf) {
+                Received::Data(n) => {
+                    last_activity = time::uptime_ms();
+                    response.feed(&buf[..n], &mut body).map_err(|e| String::from(e.message()))?;
+                }
+                Received::End => {
+                    response.end_of_stream().map_err(|e| String::from(e.message()))?;
+                }
+                Received::Failed(e) => return Err(String::from(e)),
+                Received::Nothing => {
+                    if cancelled() {
+                        return Err(String::from("cancelled"));
+                    }
+                    if time::uptime_ms() - last_activity > HTTP_STALL_MS {
+                        return Err(String::from("the server stopped answering"));
+                    }
+                    transfer_wait(last_activity);
+                }
+            }
+            if !response.headers_done() || response.redirect().is_some() {
+                continue;
+            }
+            if !(200..300).contains(&response.status()) {
+                return Err(format!("the server answered: {} {}", response.status(), response.reason()));
+            }
+            if response.content_length().is_some_and(|n| n > limit) || bytes + body.len() as u64 > limit {
+                return Err(String::from("too large"));
+            }
+            if !body.is_empty() {
+                bytes += body.len() as u64;
+                sink(&body)?;
+                body.clear();
+            }
+        }
+        let Some(location) = response.redirect() else {
+            return Ok(HttpResult { redirected_to, bytes });
+        };
+        url = url.join(location).map_err(|e| match e {
+            beenet::http::HttpError::Https => {
+                String::from("the server sends us to an https:// address, and HTTPS (encrypted HTTP) is not supported yet")
+            }
+            e => format!("bad redirect: {}", e.message()),
+        })?;
+        redirected_to = Some(format!("{url}"));
+    }
+    Err(String::from("too many redirects"))
 }

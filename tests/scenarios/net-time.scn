@@ -1,0 +1,27 @@
+# Network phase N5: `ntp` sets the clock from a time server (here: a fake one
+# whose clock started at 2030-01-02T03:04:05Z).
+@net
+@ntp
+$ net dhcp
+~ ^address 10\.0\.2\.15/24 \(DHCP\)
+$ date
+!~ ^2030
+$ ntp {ntp}
+~ ^clock set to 2030-01-02T03:0[45]:\d\dZ \(it was .* behind; server stratum 2\)$
+$ date
+~ ^2030-01-02T03:0[45]:\d\dZ$
+# Asking again: the clock now agrees with the server.
+$ ntp {ntp}
+~ ^clock set to 2030-01-02T03:0[45]:\d\dZ \(it was right to within a second; server stratum 2\)$
+# The event log keeps time with the new clock.
+$ log 3
+~ 2030-01-02T03:0[45]:\d\dZ.*ntp
+# A server that does not know the time changes nothing.
+$ ntp {ntp-unsynced}
+~ ^10\.0\.2\.2: the server does not know the time itself$
+$ date
+~ ^2030-01-02T03:0[45]:\d\dZ$
+$ uptime
+~ ^up 0m \d\ds$
+$ ntp host:port
+~ ^usage: ntp \[SERVER\[:PORT\]\]$
