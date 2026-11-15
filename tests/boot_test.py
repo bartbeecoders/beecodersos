@@ -59,6 +59,7 @@ Without @wire or @net the machine has no network card.
     @signal REGEX              (with @ai) beehive must have received a signal matching REGEX
     @frame HEXREGEX            (with @wire) the OS must have sent a frame whose bytes, as
                                lowercase hex, match the regex (waits up to 3 s)
+    @frame-soon HEXREGEX       like @frame, but the frame must arrive within 1 s
     @send [Nx] HEX             (with @wire) inject this frame (hex, spaces allowed), N times
     @deploy [ARGS]             (with @bootdisk) shut down, deploy the kernel to the spare
                                slot (ARGS: extra kernel arguments for it), boot again
@@ -290,7 +291,7 @@ def parse_scenario(path: Path):
             opts.add(line[1:])
         elif line.startswith("@dns "):
             opts.add("dns:" + line[5:])
-        elif line.startswith(("@frame ", "@send ")):
+        elif line.startswith(("@frame ", "@frame-soon ", "@send ")):
             kind, _, arg = line[1:].partition(" ")
             steps.append((kind, arg.strip(), []))
         elif line.startswith("@deploy"):
@@ -663,8 +664,8 @@ class Wire:
         # enables its receiver; inject nothing before that.
         self.ready_at = time.monotonic() + 1.2
 
-    def expect(self, pattern: str, where: str):
-        rx, deadline = re.compile(pattern), time.monotonic() + 3
+    def expect(self, pattern: str, where: str, timeout: float = 3):
+        rx, deadline = re.compile(pattern), time.monotonic() + timeout
         while True:
             for i, f in enumerate(self.frames):
                 if rx.search(f):
@@ -765,10 +766,13 @@ def test_scenario(path: Path):
                 wire.booted()
             commands = 0
             for kind, cmd, expectations in steps:
-                if kind in ("frame", "send"):
+                if kind in ("frame", "frame-soon", "send"):
                     if not wire:
                         raise TestFailure(f"{path.name}: @{kind} needs @wire")
-                    wire.expect(cmd, path.name) if kind == "frame" else wire.send(cmd)
+                    if kind == "send":
+                        wire.send(cmd)
+                    else:
+                        wire.expect(cmd, path.name, timeout=3 if kind == "frame" else 1)
                     continue
                 if kind == "reboot":
                     vm.shutdown()

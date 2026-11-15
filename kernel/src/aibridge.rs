@@ -15,7 +15,7 @@ use crate::input::{self, Key};
 use crate::json::{self, Obj, Object};
 use crate::port::{inb, outb};
 use crate::ring::{Global, Ring};
-use crate::{interrupts, time};
+use crate::{thread, time};
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -157,10 +157,12 @@ pub fn ping(ms: u64) -> Option<String> {
         if let Some(p) = peer() {
             return Some(p);
         }
-        interrupts::wait_until(pending);
+        thread::pause(pending);
     }
     None
 }
+
+static REQUEST_RUNNING: AtomicBool = AtomicBool::new(false);
 
 pub enum Outcome {
     Done,
@@ -173,6 +175,17 @@ pub enum Outcome {
 /// Send a request (`fields` must not contain "type" or "id") and stream the
 /// answer: `on_line` is called for every line. Ctrl+C cancels.
 pub fn request(kind: &str, fields: Obj, mut on_line: impl FnMut(&str)) -> Outcome {
+    // One conversation at a time: answers carry no thread, only a request id.
+    if REQUEST_RUNNING.swap(true, Ordering::SeqCst) {
+        return Outcome::Error("the AI is busy with a request from another session".into());
+    }
+    struct Running;
+    impl Drop for Running {
+        fn drop(&mut self) {
+            REQUEST_RUNNING.store(false, Ordering::SeqCst);
+        }
+    }
+    let _running = Running;
     drain();
     let st = STATE.get();
     let id = st.next_id;
@@ -205,6 +218,6 @@ pub fn request(kind: &str, fields: Obj, mut on_line: impl FnMut(&str)) -> Outcom
             return if acked { Outcome::Error("no answer (timed out)".into()) } else { Outcome::Offline };
         }
         // The 100 Hz timer wakes us too, so the deadline is checked.
-        interrupts::wait_until(|| pending() || input::pending());
+        thread::pause(|| pending() || input::pending());
     }
 }

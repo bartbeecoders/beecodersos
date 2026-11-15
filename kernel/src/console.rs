@@ -1,8 +1,9 @@
 //! Kernel console: `print!` / `println!` to the VGA screen and the serial port
 //! (with ANSI colors), plus helpers the line editor uses to redraw input.
+//! A thread with a console session (session.rs) prints into that instead.
 
 use crate::ring::Global;
-use crate::{serial, vga};
+use crate::{serial, session, vga};
 use alloc::format;
 use core::fmt::{self, Write};
 
@@ -15,11 +16,17 @@ pub fn init() {
 }
 
 pub fn clear() {
+    if session::current().is_some() {
+        return;
+    }
     SCREEN.get().clear();
     serial::write_str("\x1b[2J\x1b[H");
 }
 
 pub fn set_color(fg: vga::Color, bg: vga::Color) {
+    if session::current().is_some() {
+        return; // sessions get plain text
+    }
     SCREEN.get().set_color(fg, bg);
     serial::write_str(ansi(fg));
 }
@@ -43,6 +50,10 @@ struct Console;
 
 impl Write for Console {
     fn write_str(&mut self, s: &str) -> fmt::Result {
+        if let Some(id) = session::current() {
+            session::write(id, s);
+            return Ok(());
+        }
         let screen = SCREEN.get();
         screen.write_str(s);
         screen.sync_cursor();

@@ -1,0 +1,32 @@
+# Phase T: cooperative threads. The network has a thread of its own, so the OS
+# keeps answering while a command waits for something else.
+# The OS is 10.0.0.2 (52:54:00:be:e0:01); the test plays 10.0.0.3 (02:00:00:00:00:0b).
+@wire
+@ai-offline
+$ threads
+~ ^ ID  NAME       STATE         RUNS  STACK USED$
+~ ^  0  main       running +\d+  \(boot stack\)$
+~ ^ +\d+  net        waiting +\d+  \d+ of 256 KiB$
+$ net static 10.0.0.2/24
+@frame ^ffffffffffff525400bee00108060001080006040001525400bee0010a0000020000000000000a000002
+@send ffffffffffff02000000000b0806000108000604000102000000000b0a0000030000000000000a000002000000000000000000000000000000000000
+@frame ^02000000000b525400bee00108060001080006040002
+# `ask` waits 3 seconds for an AI that is not there. A ping sent meanwhile is
+# answered within a second, not after the command has finished.
+$& ask hello
+@send 525400bee00102000000000b08004500002400014000400126d40a0000030a00000208005b580b0b0007616263646566676800000000000000000000
+@frame-soon ^02000000000b525400bee001080045000024[0-9a-f]{4}40004001[0-9a-f]{4}0a0000020a000003000063580b0b00076162636465666768
+$wait
+AI offline: beehive is not running on the host (start it with: make beehive)
+# The self-tests start and end threads of their own, including a second shell;
+# afterwards only the two permanent threads are left.
+$ selftest
+~ ^  ok    threads: take turns, sleep, end$
+~ ^  ok    threads: no switch while the file system is in use$
+~ ^  ok    threads: a second shell runs in its own session$
+~ ^selftest: \d+ passed, 0 failed$
+$ threads
+~ main       running
+~ net        waiting
+!~ shell2
+!~ ready

@@ -69,6 +69,7 @@ KVM when `/dev/kvm` is usable. No LLM, login or network is needed.
 - `kernel/src/boot.s`, `kernel/linker.ld` — boot path and memory layout
 - `kernel/src/interrupts.s`, `kernel/src/interrupts.rs` — IDT, exception handling
 - `kernel/src/allocator.rs` — kernel heap
+- `kernel/src/thread.rs` — context switch and scheduler
 - `beefs/src/fs.rs` on-disk format (superblock, inode or directory layout):
   existing disks must keep working
 - `kernel/src/acpi.rs`, `kernel/src/power.rs` — power off / reset
@@ -106,7 +107,7 @@ directives (full list at the top of `tests/boot_test.py`): `@disk`, `@ai`,
 `@http` / `@ntp` / `@tftp` (web, time and TFTP test servers: `{http}`, `{ntp}`, `{tftp}`),
 `$& CMD` / `> TEXT` / `>^D` / `>^C` / `$wait` (type into a running command),
 `@reboot`, `@deploy [ARGS]`, `@deploy-crash ARGS`, `@signal REGEX`,
-`@frame HEXREGEX` / `@send [Nx] HEX` (frames on the wire), `$ CMD`,
+`@frame HEXREGEX` / `@frame-soon` / `@send [Nx] HEX` (frames on the wire), `$ CMD`,
 `$! CMD` (must crash), `$^C CMD` (Ctrl+C after 1 s).
 
 Networking follows `Docs/network-stack-plan.html` (N1-N5 done: PCI, e1000,
@@ -116,5 +117,14 @@ side of HTTP, SNTP and TFTP; commands `wget`, `ntp`, `tftp`, `net`,
 before phase N6 (default deny inbound). Never log host names or addresses (privacy rule). Received packets
 are untrusted: check every length, keep every table bounded, add a test with
 truncated input for every new parser.
-The card is polled from the idle loop (`input::read_key`) and from `net`
+The card is polled by the `net` thread (`net::start_task`) and from `net`
 commands; keep the "write flush" in `e1000.rs` (see its comment).
+
+Threads (`kernel/src/thread.rs`) are cooperative: a switch happens only in
+`thread::pause` / `wait_until` / `yield_now` (so also in `input::read_key` and
+every waiting network or AI call). Two rules: never keep a `Global::get()`
+reference across a call that can wait (fetch it again afterwards), and never
+wait while holding an `FsGuard` (nothing switches then; other threads stall).
+Use `thread::pause`, not `interrupts::wait_until`, to wait. A shell may run in
+a console session (`kernel/src/session.rs`), so shell code must use `print!`
+and `input::*`, never the screen, serial port or keyboard directly.

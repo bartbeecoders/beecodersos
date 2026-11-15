@@ -3,14 +3,16 @@
 //! `nslookup`, `nc`, `wget`, `ntp` and `tftp` commands need.
 //! See Docs/network-stack-plan.html (phases N1-N5).
 //!
-//! `poll()` moves frames between the card and the stack. It runs from the idle
-//! loop (every 10 ms, so the OS answers pings at the prompt) and inside
-//! waiting network calls.
+//! `poll()` moves frames between the card and the stack. It runs in a thread
+//! of its own (`start_task`, every 10 ms, so the OS answers pings and keeps
+//! connections alive whatever the shell is doing) and inside waiting network
+//! calls. Threads are cooperative (thread.rs): no reference to the network
+//! state may be kept across a call that waits, so loops fetch it each round.
 
 use crate::e1000::E1000;
 use crate::input::{self, Key};
 use crate::ring::Global;
-use crate::{interrupts, pci, rand, time};
+use crate::{pci, rand, thread, time};
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::format;
@@ -195,6 +197,19 @@ pub fn take_notice() -> Option<(&'static str, String)> {
     NET.get().as_mut()?.notices.pop_front()
 }
 
+/// Start the thread that keeps the network going: it polls the card on
+/// every timer tick, whatever the other threads are doing.
+pub fn start_task() {
+    if NET.get().is_none() {
+        return;
+    }
+    thread::spawn("net", None, || loop {
+        poll();
+        let tick = time::uptime_ms();
+        thread::wait_until(|| time::uptime_ms() != tick);
+    });
+}
+
 /// Move frames between the card and the protocol stack.
 pub fn poll() {
     if let Some(net) = NET.get() {
@@ -340,9 +355,9 @@ pub enum DhcpWait {
 
 /// Wait for the DHCP client to finish (after `apply` with `Mode::Dhcp`).
 pub fn dhcp_wait(timeout_ms: u64) -> DhcpWait {
-    let Some(net) = NET.get().as_mut() else { return DhcpWait::Failed };
     let end = time::uptime_ms() + timeout_ms;
     loop {
+        let Some(net) = NET.get().as_mut() else { return DhcpWait::Failed };
         net.poll();
         if let Some(text) = net.lease_text() {
             net.notices.retain(|(kind, _)| *kind != "dhcp-bound"); // shown here, not again at the prompt
@@ -361,7 +376,7 @@ pub fn dhcp_wait(timeout_ms: u64) -> DhcpWait {
         if time::uptime_ms() >= end {
             return DhcpWait::Failed;
         }
-        interrupts::wait_until(input::pending);
+        thread::pause(input::pending);
     }
 }
 
@@ -380,6 +395,7 @@ pub fn resolve(host: &str) -> Result<Ipv4, String> {
         Err(e) => return Err(format!("{host}: {}", e.message())),
     };
     loop {
+        let net = NET.get().as_mut().ok_or_else(|| String::from(NetError::NoCard.message()))?;
         net.poll();
         while let Some(event) = net.stack.take_event() {
             if let Event::Dns { handle: h, result } = event {
@@ -391,7 +407,7 @@ pub fn resolve(host: &str) -> Result<Ipv4, String> {
         if cancelled() {
             return Err(String::from("cancelled"));
         }
-        interrupts::wait_until(input::pending); // the lookup times out by itself after 5 s
+        thread::pause(input::pending); // the lookup times out by itself after 5 s
     }
 }
 
@@ -417,6 +433,7 @@ pub fn tcp_connect(dst: Ipv4, port: u16) -> Result<TcpStream, &'static str> {
     let handle = net.stack.tcp_connect(dst, port, time::uptime_ms()).map_err(|e| e.message())?;
     let stream = TcpStream(handle);
     loop {
+        let net = NET.get().as_mut().ok_or(NetError::NoCard.message())?;
         net.poll();
         match net.stack.tcp_status(handle) {
             Ok(TcpStatus::Connecting) => {}
@@ -427,15 +444,15 @@ pub fn tcp_connect(dst: Ipv4, port: u16) -> Result<TcpStream, &'static str> {
         if cancelled() {
             return Err("cancelled"); // dropping `stream` gives up the attempt
         }
-        interrupts::wait_until(input::pending);
+        thread::pause(input::pending);
     }
 }
 
 impl TcpStream {
     /// Send all of `data` (waits while the send buffer is full).
     pub fn send(&self, mut data: &[u8]) -> Result<(), &'static str> {
-        let net = NET.get().as_mut().ok_or(NetError::NoCard.message())?;
         while !data.is_empty() {
+            let net = NET.get().as_mut().ok_or(NetError::NoCard.message())?;
             let n = net.stack.tcp_send(self.0, data, time::uptime_ms()).map_err(|e| e.message())?;
             data = &data[n..];
             net.poll();
@@ -443,7 +460,7 @@ impl TcpStream {
                 if cancelled() {
                     return Err("cancelled");
                 }
-                interrupts::wait_until(input::pending);
+                thread::pause(input::pending);
             }
         }
         Ok(())
@@ -490,7 +507,7 @@ pub fn idle(ms: u64) {
     let end = time::uptime_ms() + ms;
     while time::uptime_ms() < end && !input::pending() {
         poll();
-        interrupts::wait_until(input::pending);
+        thread::pause(input::pending);
     }
 }
 
@@ -507,9 +524,9 @@ pub enum Ping {
 /// Send one echo request and wait for its reply (Ctrl+C cancels).
 /// Polls without sleeping, so the round-trip time is accurate.
 pub fn ping(dst: Ipv4, id: u16, seq: u16, timeout_ms: u64) -> Ping {
-    let Some(net) = NET.get().as_mut() else { return Ping::Failed(NetError::NoCard.message()) };
     let payload: [u8; 32] = core::array::from_fn(|i| b'a' + (i % 26) as u8);
     let _ = time::micros(); // calibrate the clock before timing anything
+    let Some(net) = NET.get().as_mut() else { return Ping::Failed(NetError::NoCard.message()) };
     while net.stack.take_event().is_some() {} // forget old results
     let start_ms = time::uptime_ms();
     let start = time::micros();
@@ -517,6 +534,7 @@ pub fn ping(dst: Ipv4, id: u16, seq: u16, timeout_ms: u64) -> Ping {
         return Ping::Failed(e.message());
     }
     loop {
+        let Some(net) = NET.get().as_mut() else { return Ping::Failed(NetError::NoCard.message()) };
         net.poll();
         while let Some(event) = net.stack.take_event() {
             match event {
@@ -535,7 +553,7 @@ pub fn ping(dst: Ipv4, id: u16, seq: u16, timeout_ms: u64) -> Ping {
         if time::uptime_ms() - start_ms >= timeout_ms && !net.stack.resolving() {
             return Ping::Timeout;
         }
-        core::hint::spin_loop();
+        thread::yield_now(); // no sleeping (the round trip is being timed), but others get a turn
     }
 }
 
@@ -547,7 +565,7 @@ pub fn sleep(ms: u64) -> bool {
         if cancelled() {
             return false;
         }
-        interrupts::wait_until(input::pending); // the 100 Hz timer wakes us
+        thread::pause(input::pending); // the 100 Hz timer wakes us
     }
     true
 }
@@ -640,9 +658,9 @@ fn unreachable_text(reason: Reason) -> &'static str {
 /// to 10 ms per packet exchange).
 fn transfer_wait(last_activity_ms: u64) {
     if time::uptime_ms() - last_activity_ms < 50 {
-        core::hint::spin_loop();
+        thread::yield_now();
     } else {
-        interrupts::wait_until(input::pending);
+        thread::pause(input::pending);
     }
 }
 
@@ -666,18 +684,24 @@ impl Drop for UdpPort {
 /// Ask a time server for the time (SNTP). Returns Unix seconds and
 /// milliseconds, corrected for half the round trip.
 pub fn sntp_query(server: Ipv4, port: u16) -> Result<(u64, u32, u8), String> {
-    let net = NET.get().as_mut().ok_or_else(|| String::from(NetError::NoCard.message()))?;
-    let socket = UdpPort::open(net)?;
     let _ = time::micros(); // calibrate before timing anything
+    let no_card = || String::from(NetError::NoCard.message());
+    let net = NET.get().as_mut().ok_or_else(no_card)?;
+    let socket = UdpPort::open(net)?;
     while net.stack.take_event().is_some() {}
     let mut last_error = "no answer from the time server (timed out)";
     for _attempt in 0..3 {
+        let net = NET.get().as_mut().ok_or_else(no_card)?;
         let nonce = (rand::next_u32() as u64) << 32 | rand::next_u32() as u64;
         let (sent_ms, sent) = (time::uptime_ms(), time::micros());
         net.stack
             .udp_send(socket.0, server, port, &beenet::sntp::request(nonce), sent_ms)
             .map_err(|e| String::from(e.message()))?;
-        while time::uptime_ms() - sent_ms < 2000 || net.stack.resolving() {
+        loop {
+            let net = NET.get().as_mut().ok_or_else(no_card)?;
+            if time::uptime_ms() - sent_ms >= 2000 && !net.stack.resolving() {
+                break;
+            }
             net.poll();
             while let Some((from, from_port, data)) = net.stack.udp_recv(socket.0) {
                 if from != server || from_port != port {
@@ -707,7 +731,7 @@ pub fn sntp_query(server: Ipv4, port: u16) -> Result<(u64, u32, u8), String> {
             if cancelled() {
                 return Err(String::from("cancelled"));
             }
-            core::hint::spin_loop(); // no sleeping: the round trip is being timed
+            thread::yield_now(); // no sleeping: the round trip is being timed
         }
     }
     Err(String::from(last_error))
@@ -724,6 +748,7 @@ fn tftp_run(server: Ipv4, mut transfer: beenet::tftp::Transfer, sink: Sink) -> R
     let mut last_activity = time::uptime_ms();
     let mut failure: Option<String> = None;
     loop {
+        let net = NET.get().as_mut().ok_or_else(|| String::from(NetError::NoCard.message()))?;
         let now = time::uptime_ms();
         net.poll();
         while let Some((from, from_port, data)) = net.stack.udp_recv(socket.0) {

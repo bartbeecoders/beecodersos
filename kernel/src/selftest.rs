@@ -71,6 +71,9 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("net: two stacks ping each other (beenet in the kernel)", net_stack_ping),
     ("net: TCP connection between two stacks", net_stack_tcp),
     ("net: web addresses, time replies, host:port (phase N5)", net_clients),
+    ("threads: take turns, sleep, end", threads_take_turns),
+    ("threads: no switch while the file system is in use", threads_respect_the_file_system),
+    ("threads: a second shell runs in its own session", second_shell_session),
 ];
 
 /// Run every test silently (the health check of a trial kernel).
@@ -426,6 +429,121 @@ fn net_stack_ping() -> TestResult {
         }
     }
     check_eq!(a.take_event(), Some(Event::EchoReply { from: ip_b, id: 7, seq: 1, ttl: 64, len: 3 }));
+    Ok(())
+}
+
+fn threads_take_turns() -> TestResult {
+    use crate::thread;
+    use alloc::rc::Rc;
+    use core::cell::RefCell;
+    let before = thread::list().len();
+    let log = Rc::new(RefCell::new(String::new()));
+    let mut ids = Vec::new();
+    for name in ["a", "b", "c"] {
+        let log = log.clone();
+        let id = thread::spawn(name, None, move || {
+            for round in 0..3 {
+                log.borrow_mut().push_str(&format!("{name}{round} "));
+                thread::yield_now();
+            }
+        });
+        ids.push(id.ok_or("could not start a thread")?);
+    }
+    check_eq!(thread::list().len(), before + 3);
+    for id in &ids {
+        thread::join(*id);
+    }
+    check_eq!(log.borrow().as_str(), "a0 b0 c0 a1 b1 c1 a2 b2 c2 ");
+    check!(ids.iter().all(|id| !thread::is_alive(*id)));
+
+    // Sleeping threads wake in the order of their deadlines, and the main
+    // thread keeps running meanwhile.
+    log.borrow_mut().clear();
+    let start = time::uptime_ms();
+    let mut ids = Vec::new();
+    for (name, ms) in [("slow", 60u64), ("fast", 20)] {
+        let log = log.clone();
+        ids.push(thread::spawn(name, None, move || {
+            thread::sleep_ms(ms);
+            log.borrow_mut().push_str(name);
+        }));
+    }
+    let mut turns = 0u32;
+    while ids.iter().any(|id| id.is_some_and(thread::is_alive)) {
+        turns += 1;
+        thread::pause(|| false);
+    }
+    check_eq!(log.borrow().as_str(), "fastslow");
+    let took = time::uptime_ms() - start;
+    check!((60..200).contains(&took));
+    check!(turns >= 2);
+    thread::yield_now(); // lets the scheduler clear away the ended threads
+    check_eq!(thread::list().len(), before);
+    check_eq!(thread::current_name().as_str(), thread::list().iter().find(|t| t.state == "running").map(|t| t.name.as_str()).unwrap_or(""));
+    Ok(())
+}
+
+fn threads_respect_the_file_system() -> TestResult {
+    use crate::thread;
+    use alloc::rc::Rc;
+    use core::cell::Cell;
+    let Some(mut storage) = crate::storage::handle() else { return Err(String::from("no file system is mounted")) };
+    let ran = Rc::new(Cell::new(false));
+    let flag = ran.clone();
+    let id = thread::spawn("other", None, move || flag.set(true)).ok_or("could not start a thread")?;
+    {
+        let mut fs = storage.fs();
+        thread::yield_now();
+        thread::pause(|| false); // sleeps until the next interrupt instead of switching
+        check!(!ran.get());
+        check!(fs.exists("/"));
+    }
+    thread::join(id);
+    check!(ran.get());
+    Ok(())
+}
+
+fn second_shell_session() -> TestResult {
+    use crate::{session, thread};
+    let storage = crate::storage::handle().ok_or("no file system is mounted")?;
+    let id = session::open().ok_or("no free session")?;
+    let shell = thread::spawn("shell2", Some(id), move || crate::shell::Shell::unlogged(storage).run_session());
+    let Some(shell) = shell else {
+        session::remove(id);
+        return Err(String::from("could not start a thread"));
+    };
+    // Type one command, let it run, and only then the next: both shells are
+    // alive at the same time, each with its own state.
+    session::type_text(id, "echo hello from shell two\n");
+    let start = time::uptime_ms();
+    let mut output = String::new();
+    while !output.contains("hello from shell two\n") && time::uptime_ms() - start < 2000 {
+        thread::pause(|| false);
+        output += &session::take_output(id);
+    }
+    session::type_text(id, "mkdir /tmp-shell2\ncd /tmp-shell2\npwd\ncat /nope\ncalc 6 * 7\ncd /\nrm /tmp-shell2\n");
+    session::close(id);
+    thread::join(shell);
+    output += &session::take_output(id);
+    session::remove(id);
+    let lines: Vec<&str> = output.lines().collect();
+    let expected = [
+        "bee:/$ ",
+        "hello from shell two",
+        "bee:/$ ",
+        "bee:/$ ",
+        "bee:/tmp-shell2$ ",
+        "/tmp-shell2",
+        "bee:/tmp-shell2$ ",
+        "/nope: no such file or directory",
+        "bee:/tmp-shell2$ ",
+        "42",
+        "bee:/tmp-shell2$ ",
+        "bee:/$ ",
+        "bee:/$ ",
+    ];
+    check_eq!(lines.as_slice(), &expected[..]);
+    check!(!thread::is_alive(shell));
     Ok(())
 }
 

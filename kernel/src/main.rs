@@ -35,9 +35,11 @@ mod rand;
 mod ring;
 mod selftest;
 mod serial;
+mod session;
 mod shell;
 mod storage;
 mod testmode;
+mod thread;
 mod time;
 mod vga;
 
@@ -70,6 +72,7 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info: u32) -> ! {
         Ok((start, size)) => println!("[mem]  {} MiB kernel heap at {:#x}", size >> 20, start),
         Err(e) => panic!("heap: {}", e),
     }
+    thread::init();
     // A/B slots: a trial kernel arms the rollback before anything risky.
     let slot_report = bootslots::on_boot();
     interrupts::init();
@@ -89,6 +92,8 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info: u32) -> ! {
         None => println!("[acpi] no ACPI tables found (power button unsupported)"),
     }
 
+    let storage = storage::mount();
+
     if bootargs::has("selftest") {
         let passed = selftest::run();
         if testmode::enabled() {
@@ -100,8 +105,8 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info: u32) -> ! {
         Ok(line) => println!("[net]  {line}"),
         Err(e) => println!("[net]  {e}"),
     }
+    net::start_task();
 
-    let storage = storage::mount();
     let mut shell = shell::Shell::new(storage);
     shell.load_layout();
     shell.load_network();
@@ -153,8 +158,15 @@ fn halt_forever() -> ! {
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     console::set_color(vga::Color::White, vga::Color::Red);
-    println!("KERNEL PANIC: {}", info);
-    crash::record("panic", format_args!("{}", info));
+    // Which thread it was matters for anything but the main one.
+    let thread = thread::current_name();
+    if thread == "main" {
+        println!("KERNEL PANIC: {}", info);
+        crash::record("panic", format_args!("{}", info));
+    } else {
+        println!("KERNEL PANIC in thread '{}': {}", thread, info);
+        crash::record("panic", format_args!("[thread {}] {}", thread, info));
+    }
     testmode::on_fatal_error();
     halt_forever()
 }

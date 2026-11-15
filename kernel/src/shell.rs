@@ -7,7 +7,7 @@ use crate::vga::Color;
 use crate::aibridge::{self, Outcome};
 use crate::json::Obj;
 use crate::ring::Global;
-use crate::{allocator, bootslots, console, crash, eventlog, keyboard, net, pci, power, selftest, time};
+use crate::{allocator, bootslots, console, crash, eventlog, keyboard, net, pci, power, selftest, thread, time};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -23,8 +23,23 @@ const NET_FILE: &str = "/system/net";
 const INBOX: &str = "/system/inbox/signals.jsonl";
 const OLD_INBOX: &str = "/system/inbox/signals.old.jsonl";
 
-/// Last error message printed by `error()`, and whether the current command printed one.
-static LAST_ERROR: Global<Option<String>> = Global::new(None);
+/// The error message the current command printed with `error()`, per thread
+/// (every shell runs in a thread of its own).
+static LAST_ERROR: Global<Vec<(thread::ThreadId, String)>> = Global::new(Vec::new());
+
+fn set_last_error(msg: Option<&str>) {
+    let me = thread::current();
+    let errors = LAST_ERROR.get();
+    errors.retain(|(id, _)| *id != me);
+    if let Some(msg) = msg {
+        errors.push((me, String::from(msg)));
+    }
+}
+
+fn last_error() -> Option<String> {
+    let me = thread::current();
+    LAST_ERROR.get().iter().find(|(id, _)| *id == me).map(|(_, msg)| msg.clone())
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Status {
@@ -42,6 +57,8 @@ pub struct Shell {
     last_failure: Option<(String, String)>,
     /// A crash saved by the previous boot (for `explain`).
     last_crash: Option<crash::Report>,
+    /// Record commands in the event log (off for the self-tests' shell).
+    logging: bool,
 }
 
 impl Shell {
@@ -53,6 +70,34 @@ impl Shell {
             status: Status::Ok,
             last_failure: None,
             last_crash: None,
+            logging: true,
+        }
+    }
+
+    /// A shell whose commands are not recorded in the event log.
+    pub fn unlogged(storage: Storage) -> Self {
+        Shell { logging: false, ..Shell::new(storage) }
+    }
+
+    /// Run in a console session (see session.rs): read command lines from
+    /// its input until it is closed. No line editing: the other end does that.
+    pub fn run_session(&mut self) {
+        loop {
+            self.prompt();
+            let mut line = String::new();
+            loop {
+                match crate::input::read_key() {
+                    crate::input::Key::Enter => break,
+                    crate::input::Key::Char(c) => line.push(c),
+                    crate::input::Key::Ctrl('d') => {
+                        set_last_error(None);
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+            println!();
+            self.run_line(&line);
         }
     }
 
@@ -128,15 +173,15 @@ impl Shell {
     fn run_line(&mut self, line: &str) {
         let Some(name) = line.split_whitespace().next().map(String::from) else { return };
         crash::set_command(&name);
-        *LAST_ERROR.get() = None;
+        set_last_error(None);
         self.status = Status::Ok;
         let start = time::uptime_ms();
         self.execute(line);
-        if self.status == Status::Ok && LAST_ERROR.get().is_some() {
+        if self.status == Status::Ok && last_error().is_some() {
             self.status = Status::Error;
         }
         if self.status != Status::Ok {
-            let msg = LAST_ERROR.get().clone().unwrap_or_default();
+            let msg = last_error().unwrap_or_default();
             self.last_failure = Some((String::from(line), msg));
         }
         let status = match self.status {
@@ -144,6 +189,9 @@ impl Shell {
             Status::Error => "error",
             Status::NotFound => "notfound",
         };
+        if !self.logging {
+            return;
+        }
         let ev = eventlog::event("cmd")
             .str("cmd", &name)
             .str("status", status)
@@ -258,6 +306,16 @@ impl Shell {
             ("explain", []) => self.explain(),
             ("ai", []) => self.ai_status(),
             ("ai", [s @ ("on" | "off")]) => self.ai_switch(s),
+            ("threads" | "ps", []) => {
+                println!("{:>3}  {:<10} {:<8} {:>9}  STACK USED", "ID", "NAME", "STATE", "RUNS");
+                for t in thread::list() {
+                    let stack = match t.stack {
+                        Some((used, size)) => format!("{} of {} KiB", used.div_ceil(1024), size / 1024),
+                        None => String::from("(boot stack)"),
+                    };
+                    println!("{:>3}  {:<10} {:<8} {:>9}  {stack}", t.id, t.name, t.state, t.runs);
+                }
+            }
             ("lspci", []) => {
                 for d in pci::scan() {
                     let irq = if d.irq != 0 && d.irq != 0xFF { format!(" (IRQ {})", d.irq) } else { String::new() };
@@ -1063,6 +1121,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("tftp get|put HOST FILE", "copy a file from / to a TFTP server"),
     ("arp", "neighbours learned on the local network"),
     ("lspci", "list PCI devices"),
+    ("threads", "what runs side by side inside the kernel"),
     ("slots", "A/B kernel slots: which one runs, last trial"),
     ("crash", "deliberately crash the kernel (tests crash reports)"),
     ("reboot, shutdown", "restart / power off"),
@@ -1196,7 +1255,7 @@ pub(crate) fn edit_distance(a: &str, b: &str) -> usize {
 }
 
 fn error(msg: &str) {
-    *LAST_ERROR.get() = Some(String::from(msg));
+    set_last_error(Some(msg));
     console::set_color(Color::LightRed, Color::Black);
     println!("{msg}");
     console::set_color(Color::LightGray, Color::Black);

@@ -26,7 +26,8 @@ Current version: **0.0.2** (see [Versioning](#versioning)).
 | N3 | Networking: UDP, DHCP (automatic address), DNS (names) | ✅ |
 | N4 | Networking: TCP connections (`nc`) | ✅ |
 | N5 | Networking: HTTP (`wget`), time (`ntp`), file transfer (`tftp`) | ✅ |
-| T, N6 | Cooperative threads, then network servers | planned |
+| T | Cooperative kernel threads, console sessions | ✅ |
+| N6 | Networking: servers | planned |
 
 The roadmap is `Docs/self-improving-os-plan.html`, the network plan is
 `Docs/network-stack-plan.html`; each phase is described below.
@@ -169,6 +170,8 @@ kernel/
   src/pci.rs           PCI: find devices, read their configuration (`lspci`)
   src/e1000.rs         Intel e1000 network card driver (polled descriptor rings)
   src/net.rs           card + beenet stack: polling, settings, TCP streams, HTTP / time / TFTP transfers
+  src/thread.rs        cooperative kernel threads: stacks, switching, waiting
+  src/session.rs       console sessions: a shell that is not on the real screen and keyboard
   src/rand.rs          random numbers (RDRAND, or a seeded generator)
   src/allocator.rs     kernel heap in free RAM from the Multiboot memory map
   src/console.rs       print!/println! to VGA + serial, line redraw helpers
@@ -259,7 +262,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `ai`,
-`slots`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `arp`, `lspci`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `arp`, `lspci`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Under the hood:** interrupts are enabled (IDT + remapped PIC; IRQ0 timer,
 IRQ1 keyboard, IRQ3 COM2 AI bridge, IRQ4 COM1 serial). Handlers queue raw bytes; the shell decodes them and sleeps with
@@ -735,6 +738,45 @@ directions, strangers and duplicates). `net-http.scn`, `net-time.scn` and
 `net-tftp.scn` run the commands against a web server, a time server and a TFTP
 server started by the test (`@http`, `@ntp`, `@tftp`); a 200 000-byte file
 goes out and back by TFTP unchanged.
+
+## Phase T: cooperative threads ✅
+
+The kernel can now do several things side by side:
+
+```
+bee:/$ threads
+ ID  NAME       STATE         RUNS  STACK USED
+  0  main       running       4211  (boot stack)
+  1  net        waiting       4198  3 of 256 KiB
+```
+
+- **`kernel/src/thread.rs`:** threads with their own 256 KiB stacks and a
+  small context-switch routine. They are *cooperative*: the CPU changes
+  thread only where one waits (for a key, the network, a timer) or ends,
+  never in the middle of something. That keeps the kernel's unlocked shared
+  state correct; the interrupt code is unchanged. When no thread has
+  anything to do the CPU sleeps until the next interrupt.
+  - Two rules for kernel code: don't keep a reference to shared state across
+    a call that waits, and nothing switches while the file system is in use
+    (the crash-report guard doubles as the lock).
+  - Every stack has a guard value, checked at each switch; a crash in a
+    thread other than `main` names the thread.
+  - A thread that never waits blocks the others. Up to 16 threads.
+- **The network has its own thread** (`net`), so the OS answers pings and
+  keeps TCP connections alive whatever the shell is doing, for example
+  while `ask` waits for the AI.
+- **Console sessions** (`kernel/src/session.rs`): a shell can run in a
+  thread with its output and input attached to buffers instead of the screen
+  and keyboard. The file system is shared between shells; each shell has its
+  own directory, history and error state. Nothing uses sessions yet except
+  the self-tests: they are the groundwork for the remote shell in N6.
+- `threads` (alias `ps`) lists what runs.
+
+Tests: three kernel self-tests (three threads taking strict turns, sleeping
+threads waking in deadline order while `main` keeps running, no switch
+while the file system is held, and a second shell that runs commands in its
+own session with its own directory). `threads.scn` sends a ping while `ask`
+waits for three seconds and requires the reply within one.
 
 ## Versioning
 

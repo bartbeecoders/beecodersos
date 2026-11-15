@@ -3,6 +3,7 @@
 
 use crate::ata::AtaDisk;
 use crate::crash;
+use crate::ring::Global;
 use core::ops::{Deref, DerefMut};
 use core::sync::atomic::Ordering;
 use alloc::boxed::Box;
@@ -13,8 +14,14 @@ pub type Fs = FileSystem<Box<dyn BlockDevice>>;
 
 const RAM_DISK_SIZE: usize = 4 * 1024 * 1024;
 
+/// The mounted file system. Threads take turns: none switches while it
+/// holds an `FsGuard` (see thread.rs).
+static FS: Global<Option<Fs>> = Global::new(None);
+static HANDLE: Global<Option<Storage>> = Global::new(None);
+
+/// A handle to the mounted file system; every shell has one.
+#[derive(Clone)]
 pub struct Storage {
-    fs: Fs,
     /// True when backed by a disk (changes survive a reboot).
     pub persistent: bool,
     /// Boot number from /system/boot_count (0 on a RAM disk).
@@ -26,7 +33,7 @@ impl Storage {
     /// report to disk (see `crash::record`).
     pub fn fs(&mut self) -> FsGuard<'_> {
         crash::FS_BUSY.fetch_add(1, Ordering::SeqCst);
-        FsGuard(&mut self.fs)
+        FsGuard(FS.get().as_mut().expect("no file system is mounted"))
     }
 }
 
@@ -51,7 +58,18 @@ impl DerefMut for FsGuard<'_> {
     }
 }
 
+/// A handle to the mounted file system, once `mount` has run.
+pub fn handle() -> Option<Storage> {
+    HANDLE.get().clone()
+}
+
 pub fn mount() -> Storage {
+    let storage = mount_any();
+    *HANDLE.get() = Some(storage.clone());
+    storage
+}
+
+fn mount_any() -> Storage {
     match AtaDisk::find() {
         Some(disk) => {
             let mut desc = format!("{} \"{}\", {} MiB", disk.position(), disk.model(), disk.sectors() / 2048);
@@ -70,7 +88,8 @@ pub fn mount() -> Storage {
                 Ok(Some((fs, boot))) => {
                     println!("[disk] {desc}: BeeFS mounted (boot #{boot})");
                     crash::PERSISTENT.store(true, Ordering::SeqCst);
-                    return Storage { fs, persistent: true, boot };
+                    *FS.get() = Some(fs);
+                    return Storage { persistent: true, boot };
                 }
                 Ok(None) => println!("[disk] {desc}: not BeeFS, left untouched (create one: make disk)"),
                 Err(e) => println!("[disk] {desc}: error: {e}"),
@@ -93,7 +112,8 @@ fn ram_disk() -> Storage {
         .expect("RAM disk format");
     let _ = fs.write_file("/welcome.txt", b"This is a RAM disk: changes are lost when you reboot.\n");
     println!("[ram]  using a {} MiB RAM disk (not persistent)", RAM_DISK_SIZE >> 20);
-    Storage { fs, persistent: false, boot: 0 }
+    *FS.get() = Some(fs);
+    Storage { persistent: false, boot: 0 }
 }
 
 fn mount_disk(mut disk: Box<dyn BlockDevice>) -> Result<Option<(Fs, u32)>, FsError> {

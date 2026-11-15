@@ -82,7 +82,7 @@ nav.toc a:hover { text-decoration: underline; }
 <h1>A network stack for BeeCodersOs</h1>
 <p class="lede">A plan to connect BeeCodersOs to the local network and the internet: a network card driver, a small TCP/IP stack of our own, and a set of basic protocols that make it useful from the shell.</p>
 <p class="meta">Plan v1 · 14 November 2026 · Starting point: BeeCodersOs 0.0.2 (phases 1–8 done).</p>
-<div class="callout"><b>Status:</b> N1 to N5 are done. The OS finds its e1000 card, gets its address, gateway and DNS server automatically (DHCP) or by hand, answers and sends pings, resolves names, opens TCP connections (<code>nc</code>), fetches web pages over plain HTTP (<code>wget</code>), sets its clock (<code>ntp</code>) and copies files with TFTP (<code>tftp</code>). The protocols live in the <code>beenet</code> crate with host unit tests, including TCP over a simulated lossy link. TCP listening already exists in the stack (the tests needed it), but the OS accepts no incoming connections. Next: cooperative threads (phase T), then N6 (servers).</div>
+<div class="callout"><b>Status:</b> N1 to N5 and phase T (threads) are done. The OS finds its e1000 card, gets its address, gateway and DNS server automatically (DHCP) or by hand, answers and sends pings, resolves names, opens TCP connections (<code>nc</code>), fetches web pages over plain HTTP (<code>wget</code>), sets its clock (<code>ntp</code>) and copies files with TFTP (<code>tftp</code>). The protocols live in the <code>beenet</code> crate with host unit tests, including TCP over a simulated lossy link. TCP listening already exists in the stack (the tests needed it), but the OS accepts no incoming connections. The kernel runs cooperative threads: the network has its own, and a shell can run in a console session, which is the groundwork for a remote shell. Next: N6 (servers).</div>
 
 <nav class="toc card">
 <b>Contents</b>
@@ -322,7 +322,7 @@ nav.toc a:hover { text-decoration: underline; }
 </div>
 
 <div class="phase">
-<h3>T — Cooperative threads (before N6) <span class="tag t-next">Next</span></h3>
+<h3>T — Cooperative threads (before N6) <span class="tag t-now">Done</span></h3>
 <p>Needed for servers, not for N1–N5. Details in <a href="#threads">section 6</a>.</p>
 <ul>
 <li>Kernel threads with their own stacks and a small context-switch routine.</li>
