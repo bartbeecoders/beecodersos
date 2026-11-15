@@ -1,5 +1,6 @@
-//! HTTP/1.1 client pieces (network phase N5): URLs, building a request and
-//! decoding a response as its bytes arrive. No sockets here: the caller moves
+//! HTTP/1.1 pieces. Client (network phase N5): URLs, building a request and
+//! decoding a response as its bytes arrive. Server (phase N6): reading a
+//! request, building a response head, escaping text for a page. No sockets here: the caller moves
 //! the bytes over a TCP connection.
 //!
 //! Plain HTTP only. `https://` is recognised so the caller can say so clearly.
@@ -376,6 +377,118 @@ impl Response {
     }
 }
 
+// --- the server side (phase N6) ---------------------------------------------------------
+
+/// A request's line and headers together may not be larger than this.
+pub const MAX_REQUEST_HEAD: usize = 8 * 1024;
+const MAX_TARGET: usize = 1024;
+
+/// What a client asked for. Headers are not kept: the server does not use them.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Request {
+    /// "GET", "HEAD", ...
+    pub method: String,
+    /// The path, decoded, starting with `/`, without the query.
+    pub path: String,
+}
+
+/// Collects a request as its bytes arrive.
+#[derive(Default)]
+pub struct RequestReader {
+    buf: Vec<u8>,
+}
+
+impl RequestReader {
+    pub fn new() -> RequestReader {
+        RequestReader::default()
+    }
+
+    /// Take the next received bytes; the request, once its head is complete.
+    pub fn feed(&mut self, data: &[u8]) -> Result<Option<Request>, HttpError> {
+        let from = self.buf.len().saturating_sub(3);
+        let room = (MAX_REQUEST_HEAD + 4).saturating_sub(self.buf.len());
+        self.buf.extend_from_slice(&data[..data.len().min(room)]);
+        match find_head_end(&self.buf[from..]) {
+            Some((i, _)) => parse_request(&self.buf[..from + i]).map(Some),
+            None if self.buf.len() > MAX_REQUEST_HEAD => Err(HttpError::HeadTooLarge),
+            None => Ok(None),
+        }
+    }
+}
+
+/// Parse a request's head (without the empty line that ends it).
+pub fn parse_request(head: &[u8]) -> Result<Request, HttpError> {
+    let text = core::str::from_utf8(head).map_err(|_| HttpError::BadResponse)?;
+    let line = text.split('\n').next().unwrap_or("").trim_end_matches('\r');
+    let mut parts = line.split(' ');
+    let (method, target, version) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+    let method_ok = !method.is_empty() && method.len() <= 10 && method.bytes().all(|b| b.is_ascii_uppercase());
+    if !method_ok || parts.next().is_some() || !version.starts_with("HTTP/1.") || target.len() > MAX_TARGET {
+        return Err(HttpError::BadResponse);
+    }
+    let raw_path = target.split(['?', '#']).next().unwrap_or("");
+    let path = percent_decode(raw_path).ok_or(HttpError::BadResponse)?;
+    if !path.starts_with('/') || path.chars().any(|c| c.is_control()) {
+        return Err(HttpError::BadResponse);
+    }
+    Ok(Request { method: String::from(method), path })
+}
+
+/// Undo `%20`-style encoding. None: a broken escape, or not UTF-8 afterwards.
+pub fn percent_decode(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = core::str::from_utf8(bytes.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// Encode a file name for use in a link.
+pub fn percent_encode(text: &str) -> String {
+    let mut out = String::new();
+    for b in text.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out += &format!("%{b:02X}");
+        }
+    }
+    out
+}
+
+/// Text made safe to put inside an HTML page.
+pub fn escape_html(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out += "&amp;",
+            '<' => out += "&lt;",
+            '>' => out += "&gt;",
+            '"' => out += "&quot;",
+            '\'' => out += "&#39;",
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// The head of a response; the connection is closed after the body.
+pub fn response_head(status: u16, reason: &str, content_type: &str, length: usize) -> String {
+    format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {length}\r\n\
+         Connection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n"
+    )
+}
+
 /// Where the empty line that ends the head starts, and how long that marker is.
 fn find_head_end(buf: &[u8]) -> Option<(usize, usize)> {
     (0..buf.len()).find_map(|i| {
@@ -524,6 +637,73 @@ mod tests {
             let data = [head, tail].concat();
             assert_eq!(decode(&data, 3).err(), Some(HttpError::BadChunk), "{:?}", String::from_utf8_lossy(tail));
         }
+    }
+
+    #[test]
+    fn server_reads_requests() {
+        let text = b"GET /files/my%20notes.txt?x=1 HTTP/1.1\r\nHost: bee\r\nAccept: */*\r\n\r\nignored";
+        for step in [1, 3, 7, 1000] {
+            let mut reader = RequestReader::new();
+            let mut got = None;
+            for piece in text.chunks(step) {
+                if let Some(r) = reader.feed(piece).unwrap() {
+                    got = Some(r);
+                    break;
+                }
+            }
+            let r = got.expect("a request");
+            assert_eq!((r.method.as_str(), r.path.as_str()), ("GET", "/files/my notes.txt"), "step {step}");
+        }
+        assert_eq!(parse_request(b"HEAD / HTTP/1.0").unwrap(), Request { method: "HEAD".into(), path: "/".into() });
+        // Cut off anywhere: not complete yet, never a wrong request.
+        for cut in 0..text.len() - 11 {
+            assert_eq!(RequestReader::new().feed(&text[..cut]), Ok(None), "cut at {cut}");
+        }
+    }
+
+    #[test]
+    fn server_refuses_bad_requests() {
+        let bad: [&[u8]; 12] = [
+            b"",
+            b"GET",
+            b"GET /",
+            b"get / HTTP/1.1",
+            b"GET / HTTP/2",
+            b"GET / HTTP/1.1 extra",
+            b"GET relative HTTP/1.1",
+            b"GET http://other/ HTTP/1.1",
+            b"GET /a%zz HTTP/1.1",
+            b"GET /a%2 HTTP/1.1",
+            b"GET /a%00b HTTP/1.1",
+            b"\xff\xfe / HTTP/1.1",
+        ];
+        for head in bad {
+            assert_eq!(parse_request(head), Err(HttpError::BadResponse), "{:?}", String::from_utf8_lossy(head));
+        }
+        assert_eq!(parse_request(b"GET /%ff HTTP/1.1"), Err(HttpError::BadResponse)); // not UTF-8
+        let long = format!("GET /{} HTTP/1.1", "a".repeat(MAX_TARGET));
+        assert_eq!(parse_request(long.as_bytes()), Err(HttpError::BadResponse));
+        // A client that never finishes its headers is cut off.
+        let mut reader = RequestReader::new();
+        let mut result = reader.feed(b"GET / HTTP/1.1\r\n");
+        for _ in 0..1000 {
+            if result.is_err() {
+                break;
+            }
+            result = reader.feed(b"X-Padding: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n");
+        }
+        assert_eq!(result, Err(HttpError::HeadTooLarge));
+    }
+
+    #[test]
+    fn server_text_helpers() {
+        assert_eq!(escape_html("<a href=\"x\">Tom & 'Jerry'</a>"), "&lt;a href=&quot;x&quot;&gt;Tom &amp; &#39;Jerry&#39;&lt;/a&gt;");
+        assert_eq!(percent_encode("my notes (1).txt"), "my%20notes%20%281%29.txt");
+        assert_eq!(percent_decode(&percent_encode("caf\u{e9} 100%/x")).as_deref(), Some("caf\u{e9} 100%/x"));
+        assert_eq!(percent_decode("%"), None);
+        let head = response_head(404, "Not Found", "text/plain", 12);
+        assert!(head.starts_with("HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 12\r\n"));
+        assert!(head.ends_with("\r\n\r\n"));
     }
 
     #[test]

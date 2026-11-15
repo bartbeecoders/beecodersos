@@ -22,6 +22,7 @@ mod crash;
 mod e1000;
 mod editor;
 mod eventlog;
+mod httpd;
 mod input;
 mod json;
 mod interrupts;
@@ -115,6 +116,9 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info: u32) -> ! {
     if bridge {
         aibridge::hello(); // beehive answers if it runs; see the `ai` command
         println!("[ai]   AI bridge on COM2 ('ai' for status)");
+    }
+    if let Some(port) = httpd::load() {
+        println!("[httpd] status page on port {port} ('httpd' for details)");
     }
     shell.boot_report();
     match slot_report {

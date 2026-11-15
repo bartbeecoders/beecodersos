@@ -448,7 +448,41 @@ pub fn tcp_connect(dst: Ipv4, port: u16) -> Result<TcpStream, &'static str> {
     }
 }
 
+/// Start accepting connections on `port` (phase N6: only services the user
+/// switched on call this; see httpd.rs).
+pub fn tcp_listen(port: u16) -> Result<(), &'static str> {
+    let net = NET.get().as_mut().ok_or(NetError::NoCard.message())?;
+    net.stack.tcp_listen(port).map_err(|e| e.message())
+}
+
+pub fn tcp_unlisten(port: u16) {
+    if let Some(net) = NET.get().as_mut() {
+        net.stack.tcp_unlisten(port);
+    }
+}
+
+/// The next connection a client opened to `port`, if one is waiting.
+pub fn tcp_accept(port: u16) -> Option<TcpStream> {
+    let net = NET.get().as_mut()?;
+    net.poll();
+    net.stack.tcp_accept(port).map(TcpStream)
+}
+
+/// Our IP address, if we have one.
+pub fn address() -> Option<Ipv4> {
+    NET.get().as_ref()?.stack.config().map(|c| c.ip)
+}
+
 impl TcpStream {
+    /// Send as much of `data` as fits in the send buffer now, without
+    /// waiting. Returns how many bytes were taken.
+    pub fn send_some(&self, data: &[u8]) -> Result<usize, &'static str> {
+        let net = NET.get().as_mut().ok_or(NetError::NoCard.message())?;
+        let n = net.stack.tcp_send(self.0, data, time::uptime_ms()).map_err(|e| e.message())?;
+        net.poll();
+        Ok(n)
+    }
+
     /// Send all of `data` (waits while the send buffer is full).
     pub fn send(&self, mut data: &[u8]) -> Result<(), &'static str> {
         while !data.is_empty() {

@@ -36,6 +36,12 @@ Scenario files (tests/scenarios/*.scn):
                                files hello.txt and big.bin (200 000 bytes): {tftp} is its
                                address. Fetching "compare:A:B" tells whether its files A and
                                B are identical
+    @forward                   (first lines, with @net) let the test reach the OS's port 80
+                               from the host (for `@request`)
+    @request METHOD PATH       (with @forward) send that HTTP request to the OS; the lines of
+                               the answer (status line, headers, body) are checked like a
+                               command's output. No answer: the one line "(no answer)".
+                               `@request raw TEXT` sends TEXT as it is (\r \n allowed)
 Without @wire or @net the machine has no network card.
     @net                       (first lines) connect the card to QEMU's built-in network: a
                                DHCP server (gives 10.0.2.15/24) and a gateway at 10.0.2.2
@@ -121,7 +127,7 @@ class Vm:
     """One QEMU run with the serial port on stdin/stdout."""
 
     def __init__(self, *, kernel_args=None, cdrom=None, disk=None, uefi=False, ai_port=None, bootdisk=None,
-                 wire=None, usernet=None):
+                 wire=None, usernet=None, forward=None):
         cmd = ["qemu-system-x86_64", "-m", "128M", "-display", "none", "-serial", "stdio",
                "-monitor", "none", "-no-reboot",
                "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04"]
@@ -143,7 +149,8 @@ class Vm:
                     "-device", f"e1000,netdev=n0,mac={WIRE_MAC}"]
         if usernet:  # QEMU's user-mode network; "isolated": cut off from the host and beyond
             restrict = "on" if usernet == "isolated" else "off"
-            cmd += ["-netdev", f"user,id=n0,restrict={restrict}", "-device", f"e1000,netdev=n0,mac={WIRE_MAC}"]
+            fwd = f",hostfwd=tcp:127.0.0.1:{forward}-:80" if forward else ""
+            cmd += ["-netdev", f"user,id=n0,restrict={restrict}{fwd}", "-device", f"e1000,netdev=n0,mac={WIRE_MAC}"]
             if USE_KVM:
                 # With KVM's in-kernel timer, QEMU's main loop sleeps up to a second, and its
                 # user-mode network only notices new host sockets when that loop wakes up.
@@ -287,7 +294,7 @@ def parse_scenario(path: Path):
         line = raw.rstrip()
         if not line or line.startswith("#"):
             continue
-        if line in ("@disk", "@ai", "@ai-offline", "@bootdisk", "@wire", "@net"):
+        if line in ("@disk", "@ai", "@ai-offline", "@bootdisk", "@wire", "@net", "@forward"):
             opts.add(line[1:])
         elif line.startswith("@dns "):
             opts.add("dns:" + line[5:])
@@ -297,6 +304,8 @@ def parse_scenario(path: Path):
         elif line.startswith("@deploy"):
             kind, _, extra = line[1:].partition(" ")
             steps.append((kind, extra.strip(), []))
+        elif line.startswith("@request "):
+            steps.append(("request", line[9:].strip(), []))
         elif line == "@reboot":
             steps.append(("reboot", "(reboot)", []))
         elif line.startswith("@signal "):
@@ -696,6 +705,26 @@ class Wire:
         self.sock.close()
 
 
+def http_request(port: int, request: str) -> list[str]:
+    """Send a request to the OS's web server (see @request); the answer's lines."""
+    if request.startswith("raw "):
+        data = request[4:].encode().decode("unicode_escape").encode("latin-1")
+    else:
+        data = f"{request} HTTP/1.1\r\nHost: test\r\n\r\n".encode()
+    answer = b""
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as conn:
+            conn.settimeout(8)
+            conn.sendall(data)
+            while piece := conn.recv(65536):
+                answer += piece
+    except OSError:
+        pass
+    if not answer:
+        return ["(no answer)"]
+    return [line.rstrip("\r") for line in answer.decode(errors="replace").split("\n")]
+
+
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -757,8 +786,9 @@ def test_scenario(path: Path):
             names["{tftp}"] = f"10.0.2.2:{servers[-1].port}"
         # The fake servers listen on the host, so the guest must be able to reach it.
         usernet = ("open" if servers else "isolated") if "net" in opts else None
+        forward = free_port() if "forward" in opts else None
         boot = lambda: Vm(disk=disk, ai_port=ai_port, bootdisk=bootdisk, wire=wire.ports if wire else None,
-                          usernet=usernet)
+                          usernet=usernet, forward=forward)
         vm = boot()
         try:
             boot_to_prompt(vm)
@@ -773,6 +803,11 @@ def test_scenario(path: Path):
                         wire.send(cmd)
                     else:
                         wire.expect(cmd, path.name, timeout=3 if kind == "frame" else 1)
+                    continue
+                if kind == "request":
+                    if not forward:
+                        raise TestFailure(f"{path.name}: @request needs @forward")
+                    check_output(path, f"@request {cmd}", http_request(forward, cmd), expectations)
                     continue
                 if kind == "reboot":
                     vm.shutdown()

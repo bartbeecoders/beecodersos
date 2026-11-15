@@ -7,7 +7,7 @@ use crate::vga::Color;
 use crate::aibridge::{self, Outcome};
 use crate::json::Obj;
 use crate::ring::Global;
-use crate::{allocator, bootslots, console, crash, eventlog, keyboard, net, pci, power, selftest, thread, time};
+use crate::{allocator, bootslots, httpd, console, crash, eventlog, keyboard, net, pci, power, selftest, thread, time};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -333,6 +333,21 @@ impl Shell {
             ("nslookup" | "host", [name]) => self.nslookup(name),
             ("nc", [host, port]) => self.nc(host, port, None),
             ("nc", [host, port, text @ ..]) => self.nc(host, port, Some(&text.join(" "))),
+            ("httpd", []) => match (httpd::port(), net::address()) {
+                (Some(port), Some(ip)) => {
+                    let shown = if port == httpd::DEFAULT_PORT { format!("{ip}") } else { format!("{ip}:{port}") };
+                    println!("status page: on, http://{shown}/ ({} requests answered)", httpd::answered());
+                }
+                (Some(port), None) => println!("status page: on, port {port}, but the network has no address yet (see net)"),
+                (None, _) => println!("status page: off (httpd on [PORT] starts it)"),
+            },
+            ("httpd", ["on"]) => self.httpd(Some(httpd::DEFAULT_PORT)),
+            ("httpd", ["on", port]) => match port.parse::<u16>() {
+                Ok(p) if p != 0 => self.httpd(Some(p)),
+                _ => error("usage: httpd on [PORT]   (port 1-65535)"),
+            },
+            ("httpd", ["off"]) => self.httpd(None),
+            ("httpd", _) => error("usage: httpd [on [PORT] | off]"),
             ("wget", [url]) => self.wget(url, None),
             ("wget", [url, file]) => self.wget(url, Some(file)),
             ("wget", _) => error("usage: wget URL [FILE]   (or: wget URL > FILE)"),
@@ -665,6 +680,24 @@ impl Shell {
                 }
             }
             net::idle(10); // one timer tick: data and keys are handled promptly
+        }
+    }
+
+    /// `httpd on [PORT]` / `httpd off`: the status page for the local network.
+    fn httpd(&mut self, port: Option<u16>) {
+        if let Err(e) = httpd::set(port, true) {
+            return error(&format!("httpd: {e}"));
+        }
+        let saved = if self.storage.persistent { " (saved)" } else { " (not saved: RAM disk)" };
+        match port {
+            Some(port) => {
+                println!("status page on, port {port}{saved}");
+                println!(
+                    "anyone who can reach this machine can read it, and the files in {}, without a password",
+                    httpd::PUBLIC_DIR
+                );
+            }
+            None => println!("status page off{saved}"),
         }
     }
 
@@ -1116,6 +1149,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("ping [-c N] HOST", "check that a machine answers"),
     ("nslookup NAME", "look up the address of a host name"),
     ("nc HOST PORT [TEXT]", "open a TCP connection: type lines, see the answers"),
+    ("httpd [on [PORT]|off]", "status page for the local network (off by default)"),
     ("wget URL [FILE]", "fetch a web address (http://): show it or save it"),
     ("ntp [SERVER]", "set the clock from a time server"),
     ("tftp get|put HOST FILE", "copy a file from / to a TFTP server"),

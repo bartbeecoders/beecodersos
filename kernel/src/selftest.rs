@@ -71,6 +71,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("net: two stacks ping each other (beenet in the kernel)", net_stack_ping),
     ("net: TCP connection between two stacks", net_stack_tcp),
     ("net: web addresses, time replies, host:port (phase N5)", net_clients),
+    ("httpd: saved setting", httpd_setting),
     ("threads: take turns, sleep, end", threads_take_turns),
     ("threads: no switch while the file system is in use", threads_respect_the_file_system),
     ("threads: a second shell runs in its own session", second_shell_session),
@@ -429,6 +430,17 @@ fn net_stack_ping() -> TestResult {
         }
     }
     check_eq!(a.take_event(), Some(Event::EchoReply { from: ip_b, id: 7, seq: 1, ttl: 64, len: 3 }));
+    Ok(())
+}
+
+fn httpd_setting() -> TestResult {
+    use crate::httpd::parse_setting;
+    check_eq!(parse_setting("on 8080\n"), Some(8080));
+    check_eq!(parse_setting("on"), Some(80));
+    // Anything unclear means off: the server never starts by accident.
+    for text in ["", "off", "off 80", "on 0", "on 99999", "on eighty", "on 80 extra", "yes", "ON"] {
+        check_eq!(parse_setting(text), None);
+    }
     Ok(())
 }
 

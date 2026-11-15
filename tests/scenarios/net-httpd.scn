@@ -1,0 +1,113 @@
+# Network phase N6: the status page (`httpd`), reached from the host like a
+# browser on the local network would. Off unless switched on.
+@net
+@disk
+@forward
+$ net dhcp
+~ ^address 10\.0\.2\.15/24 \(DHCP\)
+$ httpd
+status page: off (httpd on [PORT] starts it)
+# Off: the port is closed.
+@request GET /
+(no answer)
+$ httpd on
+status page on, port 80 (saved)
+anyone who can reach this machine can read it, and the files in /public, without a password
+$ threads
+~ httpd      waiting
+@request GET /
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Connection: close
+~ <title>BeeCodersOs status</title>
+~ <tr><th>version</th><td>[\d.]+ b\d+</td></tr>
+~ <tr><th>uptime</th><td>0m \d\ds</td></tr>
+~ <tr><th>storage</th><td>disk: \d+ of \d+ KiB used</td></tr>
+~ <tr><th>main</th><td>
+~ <tr><th>httpd</th><td>running
+# Recent events: command names and outcomes, never what was typed after them.
+~ <td>command threads: ok</td>
+~ <td>command httpd: ok</td>
+~ <td>command net: ok</td>
+!~ 10\.0\.2\.
+~ No files are shared\. Files put in /public appear here\.
+@request GET /status.json
+HTTP/1.1 200 OK
+Content-Type: application/json
+~ ^\{"os":"BeeCodersOs","version":"[\d.]+","build":"\d+","uptime_ms":\d+,"time":"[^"]+","slot":"","on_trial":false,"threads":3,"heap_used_kib":\d+\}$
+# Files: only what is in /public, by plain name.
+$ mkdir /public
+$ echo shared with the network > /public/hello.txt
+$ echo <b>not markup</b> > "/public/a b&c.txt"
+$ echo private > /secret.txt
+$ mkdir /public/sub
+$ echo deeper > /public/sub/inner.txt
+@request GET /files/hello.txt
+HTTP/1.1 200 OK
+Content-Type: text/plain; charset=utf-8
+Content-Length: 24
+shared with the network
+@request GET /
+~ <a href="/files/a%20b%26c\.txt">a b&amp;c\.txt</a></th><td>\d+ bytes</td>
+~ <a href="/files/hello\.txt">hello\.txt</a></th><td>24 bytes</td>
+!~ inner
+!~ secret
+@request GET /files/a%20b%26c.txt
+HTTP/1.1 200 OK
+<b>not markup</b>
+@request HEAD /files/hello.txt
+HTTP/1.1 200 OK
+Content-Length: 24
+!~ shared
+# No way out of /public, and nothing below it.
+@request GET /files/../secret.txt
+HTTP/1.1 404 Not Found
+!~ private
+@request GET /files/..%2Fsecret.txt
+HTTP/1.1 404 Not Found
+!~ private
+@request GET /files/sub/inner.txt
+HTTP/1.1 404 Not Found
+@request GET /files/sub
+HTTP/1.1 404 Not Found
+@request GET /files/
+HTTP/1.1 404 Not Found
+@request GET /secret.txt
+HTTP/1.1 404 Not Found
+@request GET /system/log/events.jsonl
+HTTP/1.1 404 Not Found
+# Nothing can be changed through it, and nonsense gets a short answer.
+@request POST /
+HTTP/1.1 405 Method Not Allowed
+@request DELETE /files/hello.txt
+HTTP/1.1 405 Method Not Allowed
+$ cat /public/hello.txt
+shared with the network
+@request raw this is not http\r\n\r\n
+HTTP/1.1 400 Bad Request
+@request raw GET /%zz HTTP/1.1\r\n\r\n
+HTTP/1.1 400 Bad Request
+# A client that connects and never finishes its request is dropped after 3 s;
+# the next one is served.
+@request raw GET / HTTP/1.1\r\nHost: slow
+(no answer)
+@request GET /status.json
+HTTP/1.1 200 OK
+$ httpd
+~ ^status page: on, http://10\.0\.2\.15/ \(\d+ requests answered\)$
+# The setting survives a reboot, in both directions.
+@reboot
+~ ^\[httpd\] status page on port 80
+$ net dhcp
+@request GET /status.json
+HTTP/1.1 200 OK
+$ httpd off
+status page off (saved)
+@request GET /
+(no answer)
+$ threads
+!~ httpd
+@reboot
+!~ httpd
+$ httpd on 0
+~ ^usage: httpd on \[PORT\]

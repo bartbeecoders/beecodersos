@@ -70,6 +70,8 @@ KVM when `/dev/kvm` is usable. No LLM, login or network is needed.
 - `kernel/src/interrupts.s`, `kernel/src/interrupts.rs` — IDT, exception handling
 - `kernel/src/allocator.rs` — kernel heap
 - `kernel/src/thread.rs` — context switch and scheduler
+- `kernel/src/httpd.rs` — what the status page exposes: off by default,
+  read-only, files from `/public` only, command names without arguments
 - `beefs/src/fs.rs` on-disk format (superblock, inode or directory layout):
   existing disks must keep working
 - `kernel/src/acpi.rs`, `kernel/src/power.rs` — power off / reset
@@ -107,14 +109,16 @@ directives (full list at the top of `tests/boot_test.py`): `@disk`, `@ai`,
 `@http` / `@ntp` / `@tftp` (web, time and TFTP test servers: `{http}`, `{ntp}`, `{tftp}`),
 `$& CMD` / `> TEXT` / `>^D` / `>^C` / `$wait` (type into a running command),
 `@reboot`, `@deploy [ARGS]`, `@deploy-crash ARGS`, `@signal REGEX`,
-`@frame HEXREGEX` / `@frame-soon` / `@send [Nx] HEX` (frames on the wire), `$ CMD`,
+`@frame HEXREGEX` / `@frame-soon` / `@send [Nx] HEX` (frames on the wire),
+`@forward` + `@request METHOD PATH` (HTTP requests from the host to the OS), `$ CMD`,
 `$! CMD` (must crash), `$^C CMD` (Ctrl+C after 1 s).
 
 Networking follows `Docs/network-stack-plan.html` (N1-N5 done: PCI, e1000,
 and in the `beenet` crate ARP, IPv4, ICMP, UDP, DHCP, DNS, TCP, and the client
 side of HTTP, SNTP and TFTP; commands `wget`, `ntp`, `tftp`, `net`,
-`ping`, `arp`, `nslookup`, `nc`). The OS must not listen on any TCP port
-before phase N6 (default deny inbound). Never log host names or addresses (privacy rule). Received packets
+`ping`, `arp`, `nslookup`, `nc`). Default deny inbound: the OS listens on
+a TCP port only for a service the user switched on (`httpd on`, saved in
+`/system/httpd`; `kernel/src/httpd.rs`), and such services start off. Never log host names or addresses (privacy rule). Received packets
 are untrusted: check every length, keep every table bounded, add a test with
 truncated input for every new parser.
 The card is polled by the `net` thread (`net::start_task`) and from `net`

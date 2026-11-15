@@ -30,6 +30,9 @@ pub fn poll_key() -> Option<Key> {
     if let Some(id) = session::current() {
         return session::poll_key(id);
     }
+    if !thread::on_console() {
+        return None; // a background thread: the keyboard is not its to read
+    }
     if acpi::take_power_button() {
         return Some(Key::PowerButton);
     }
@@ -40,6 +43,9 @@ pub fn poll_key() -> Option<Key> {
 pub fn pending() -> bool {
     if let Some(id) = session::current() {
         return session::pending(id);
+    }
+    if !thread::on_console() {
+        return false;
     }
     keyboard::pending() || serial::pending() || acpi::power_button_pending()
 }

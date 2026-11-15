@@ -316,6 +316,11 @@ pub fn current_name() -> String {
     scheduler().map_or_else(|| String::from("main"), |s| s.threads[s.current].name.clone())
 }
 
+/// True in the main thread: the one the real screen and keyboard belong to.
+pub fn on_console() -> bool {
+    current() == 0
+}
+
 /// The console session of the running thread, if it has one.
 pub fn current_session() -> Option<u32> {
     scheduler().and_then(|s| s.threads[s.current].session)

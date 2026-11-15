@@ -27,7 +27,7 @@ Current version: **0.0.2** (see [Versioning](#versioning)).
 | N4 | Networking: TCP connections (`nc`) | ✅ |
 | N5 | Networking: HTTP (`wget`), time (`ntp`), file transfer (`tftp`) | ✅ |
 | T | Cooperative kernel threads, console sessions | ✅ |
-| N6 | Networking: servers | planned |
+| N6 | Networking: status page (`httpd`) ✅; remote shell, network signals, kernel download | in progress |
 
 The roadmap is `Docs/self-improving-os-plan.html`, the network plan is
 `Docs/network-stack-plan.html`; each phase is described below.
@@ -171,6 +171,7 @@ kernel/
   src/e1000.rs         Intel e1000 network card driver (polled descriptor rings)
   src/net.rs           card + beenet stack: polling, settings, TCP streams, HTTP / time / TFTP transfers
   src/thread.rs        cooperative kernel threads: stacks, switching, waiting
+  src/httpd.rs         status page for the local network (off by default)
   src/session.rs       console sessions: a shell that is not on the real screen and keyboard
   src/rand.rs          random numbers (RDRAND, or a seeded generator)
   src/allocator.rs     kernel heap in free RAM from the Multiboot memory map
@@ -262,7 +263,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `ai`,
-`slots`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `arp`, `lspci`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `arp`, `lspci`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Under the hood:** interrupts are enabled (IDT + remapped PIC; IRQ0 timer,
 IRQ1 keyboard, IRQ3 COM2 AI bridge, IRQ4 COM1 serial). Handlers queue raw bytes; the shell decodes them and sleeps with
@@ -777,6 +778,43 @@ threads waking in deadline order while `main` keeps running, no switch
 while the file system is held, and a second shell that runs commands in its
 own session with its own directory). `threads.scn` sends a ping while `ask`
 waits for three seconds and requires the reply within one.
+
+## Networking — phase N6 (first part): the status page ✅
+
+```
+bee:/$ httpd on
+status page on, port 80 (saved)
+anyone who can reach this machine can read it, and the files in /public, without a password
+```
+
+Then open `http://ADDRESS/` (the address `net` shows) in a browser on the
+same network.
+
+- **Off by default.** `httpd on [PORT]` starts it, `httpd off` stops it, and
+  the choice is saved in `/system/httpd`. While it is off the OS listens on
+  no port at all.
+- **What it shows:** `/` is a page with the version, time, uptime, memory,
+  storage, A/B kernel slots, threads and the last 15 events (command names
+  and outcomes only). `/status.json` gives the main facts to programs.
+  `/files/NAME` serves the files in `/public`, and only those: no
+  subdirectories, no way to name a file outside it.
+- **Read-only, no password, no encryption:** GET and HEAD only. Anyone who
+  can reach the machine can read it, so put in `/public` only what may be
+  seen. In `vm1`'s default NAT network that means this PC only.
+- **Hardened against clients:** a request must arrive within 3 seconds and
+  fit in 8 KiB, a stalled download is dropped after 10 seconds, everything
+  put into the page is escaped, and client addresses are never logged.
+- It runs in a thread of its own (`kernel/src/httpd.rs`) and answers one
+  request at a time.
+
+Tests: host tests for the request reader (cut-off, malformed and endless
+requests). `net-httpd.scn` reaches the server from the host through a
+forwarded port (`@forward`, `@request`): the page and JSON, files, attempts
+to escape `/public`, methods other than GET, garbage, a client that never
+finishes its request, and the setting surviving a reboot.
+
+Still open in N6: the remote shell, sending signals to beehive over the
+network, and downloading a new kernel into the spare slot.
 
 ## Versioning
 
