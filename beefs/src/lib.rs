@@ -27,7 +27,10 @@ mod partition;
 
 pub use device::{Block, BlockDevice, RamDisk};
 pub use fs::{normalize, DirEntry, FileKind, FileSystem, FsStats, Metadata, MAX_FILE_SIZE};
-pub use partition::{find_beefs_partition, mbr_partitions, Partition, BEEFS_PARTITION_TYPE};
+pub use partition::{
+    crc32, find_beefs_gpt, find_beefs_partition, gpt_header, mbr_partitions, GptHeader, Partition, BEEFS_GPT_TYPE,
+    BEEFS_GPT_TYPE_TEXT, BEEFS_PARTITION_TYPE, GPT_MAX_ENTRIES,
+};
 
 use core::fmt;
 

@@ -235,9 +235,9 @@ ul.items { list-style: none; padding: 0; margin: 12px 0; }
 <p>A decision for the owner: a second partition on the USB stick (needs U3), or a partition on the internal disk (needs D1 and a safe way to create it).</p>
 <p class="facts">No code until decided.</p>
 </li>
-<li class="item" data-status="todo" id="D3">
+<li class="item" data-status="done" id="D3">
 <h4><span class="id">D3</span> GPT partition tables <span class="size">M</span> <span class="st"></span></h4>
-<p><code>beefs/src/partition.rs</code> reads MBR for the A/B boot disk; real disks use GPT.</p>
+<p><code>beefs/src/partition.rs</code> now reads GPT next to MBR. A BeeFS partition has the type <code>FE35CA6A-9309-4008-996D-254793C95A38</code>; the first one on a disk is used. The table is only believed when both its checksums are right; a damaged one means "no BeeFS here", and the disk is left alone. Checked against a table made by <code>sfdisk</code>, and by booting QEMU with such a disk on the SATA controller. Not done: the backup table at the end of the disk is not used when the first one is damaged, and there is no boot scenario with a GPT disk yet (it needs a new option in the protected test runner).</p>
 <p class="facts">Test: host unit tests in <code>beefs</code>.</p>
 </li>
 </ul>
@@ -293,9 +293,9 @@ ul.items { list-style: none; padding: 0; margin: 12px 0; }
 <p>Map memory above 4 GiB, let the heap grow beyond 64 MiB, and add a page allocator for driver buffers.</p>
 <p class="facts">Protected: <code>boot.s</code>, <code>allocator.rs</code>.</p>
 </li>
-<li class="item" data-status="todo" id="P3">
+<li class="item" data-status="doing" id="P3">
 <h4><span class="id">P3</span> PCI: bridges, PCIe configuration space, capability lists <span class="size">M</span> <span class="st"></span></h4>
-<p><code>pci.rs</code> already follows bridges, with the old port method. Still to do: the PCIe configuration space and the capability list, which MSI needs.</p>
+<p><code>pci.rs</code> already follows bridges, with the old port method. Done: the capability list (MSI, MSI-X, PCI Express, power management), shown by <code>lspci -v</code>. Still to do: the PCIe configuration space (registers above 255), when a driver needs it.</p>
 <p class="facts">Code: <code>kernel/src/pci.rs</code>.</p>
 </li>
 <li class="item" data-status="todo" id="P4">

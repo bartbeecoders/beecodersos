@@ -152,7 +152,7 @@ boot/limine.conf       Limine boot menu entry (ISO)
 beefs/                 BeeFS filesystem library (no_std + alloc, shared by kernel and host)
   src/device.rs        BlockDevice trait + RamDisk
   src/fs.rs            superblock, bitmap, inodes, directories, path ops (+ unit tests)
-  src/partition.rs     MBR partitions: BeeFS inside partition 2 of the boot disk
+  src/partition.rs     MBR and GPT partitions: BeeFS inside partition 2 of the boot disk, or in a GPT partition of a real disk
 beenet/                network stack library (no_std + alloc, no hardware access; unit-tested on the host)
   src/wire.rs          packet formats: Ethernet, ARP, IPv4, ICMP, internet checksum
   src/stack.rs         the stack: ARP cache, routing, ping, UDP sockets; frames in, frames out
@@ -252,7 +252,9 @@ At boot the kernel mounts the first disk containing BeeFS (incrementing
 `/system/boot_count` and appending to `/system/boot.log`): a disk on the
 legacy IDE ports, or a SATA disk on an AHCI controller (`kernel/src/ahci.rs`,
 for real hardware). On a partitioned boot disk (phase 8) it uses the BeeFS
-partition. Without one it uses a 4 MiB RAM disk. Disks without BeeFS are only
+partition; on a disk with a GPT, the first partition of type
+`FE35CA6A-9309-4008-996D-254793C95A38` (the table must have correct
+checksums). Without one it uses a 4 MiB RAM disk. Disks without BeeFS are only
 read and **never** formatted or written. Crash reports and the A/B kernel
 slots still work on IDE disks only.
 
@@ -293,7 +295,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `ai`,
-`slots`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Under the hood:** interrupts are enabled (IDT + remapped PIC; IRQ0 timer,
 IRQ1 keyboard, IRQ3 COM2 AI bridge, IRQ4 COM1 serial). Handlers queue raw bytes; the shell decodes them and sleeps with
@@ -580,7 +582,8 @@ TCP and HTTP). The OS now finds its network card and moves raw Ethernet frames;
 it has **no IP address yet** (that is N2/N3), so it cannot reach other machines.
 
 - **PCI** (`pci.rs`): scans the bus (following bridges), reads device IDs,
-  classes and base addresses. `lspci` lists the devices.
+  classes and base addresses. `lspci` lists the devices; `lspci -v` adds each
+  device's capability list (MSI, MSI-X, PCI Express, power management).
 - **e1000 driver** (`e1000.rs`): Intel 82540EM, the default card in QEMU and
   libvirt (`vm1` has one). Reset, MAC address, receive and transmit descriptor
   rings in heap memory, link status. It is **polled**: the 100 Hz timer wakes

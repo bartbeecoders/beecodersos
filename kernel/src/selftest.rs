@@ -67,6 +67,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("shell: calc expressions", shell_calc),
     ("slots: parse and patch limine.conf", slots_state),
     ("pci: config address and BAR decoding", pci_decoding),
+    ("pci: capability lists, also broken ones", pci_capability_lists),
     ("net: frames, MAC text, descriptor rings", net_basics),
     ("rand: generator", rand_generator),
     ("net: address settings", net_config),
@@ -468,6 +469,50 @@ fn slots_state() -> TestResult {
     check_eq!(bootslots::parse(&sector), Some(ok));
     sector[0] = b'x';
     check!(bootslots::parse(&sector).is_none());
+    Ok(())
+}
+
+fn pci_capability_lists() -> TestResult {
+    // A configuration space with three capabilities: MSI at 0x50, PCI
+    // Express at 0x70, power management at 0xC8.
+    let mut space = [0u8; 256];
+    space[0x06] = 1 << 4;
+    space[0x34] = 0x50;
+    space[0x50..0x52].copy_from_slice(&[pci::CAP_MSI, 0x70]);
+    space[0x70..0x72].copy_from_slice(&[pci::CAP_PCIE, 0xC8]);
+    space[0xC8..0xCA].copy_from_slice(&[pci::CAP_POWER, 0x00]);
+    let walk = |space: &[u8; 256]| pci::walk_capabilities(|offset| space[offset as usize]);
+    check_eq!(walk(&space), alloc::vec![(pci::CAP_MSI, 0x50), (pci::CAP_PCIE, 0x70), (pci::CAP_POWER, 0xC8)]);
+    // The low two bits of a pointer are not part of it.
+    space[0x34] = 0x53;
+    check_eq!(walk(&space).len(), 3);
+    // A list that points back into itself ends there.
+    space[0xC9] = 0x50;
+    check_eq!(walk(&space).len(), 3);
+    space[0x51] = 0x50;
+    check_eq!(walk(&space), alloc::vec![(pci::CAP_MSI, 0x50)]);
+    // A pointer into the standard header, or to the last byte, ends it too.
+    space[0x51] = 0x3C;
+    check_eq!(walk(&space).len(), 1);
+    space[0x51] = 0xFF;
+    space[0xFC] = 0x09;
+    space[0xFD] = 0xFC;
+    check_eq!(walk(&space), alloc::vec![(pci::CAP_MSI, 0x50), (0x09, 0xFC)]);
+    // No list at all: the status bit is off, or nothing answers.
+    space[0x06] = 0;
+    check!(walk(&space).is_empty());
+    check!(pci::walk_capabilities(|_| 0xFF).is_empty());
+    // Every pointer leads to another entry: the walk still ends.
+    let mut chain = [0u8; 256];
+    chain[0x06] = 1 << 4;
+    chain[0x34] = 0x40;
+    for at in (0x40..0x100).step_by(4) {
+        chain[at] = 0x09;
+        chain[at + 1] = if at == 0xFC { 0x40 } else { at as u8 + 4 };
+    }
+    check_eq!(walk(&chain).len(), pci::MAX_CAPABILITIES);
+    check_eq!(pci::capability_name(pci::CAP_MSIX), Some("MSI-X"));
+    check_eq!(pci::capability_name(0x77), None);
     Ok(())
 }
 

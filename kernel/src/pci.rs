@@ -112,7 +112,60 @@ pub fn decode_bar(low: u32, high: u32) -> Bar {
     }
 }
 
+/// Most capabilities one device can have: the list lives in 192 bytes of
+/// 4-byte-aligned entries, so a longer one goes in circles.
+pub const MAX_CAPABILITIES: usize = 48;
+
+/// Capability ids we name or use.
+pub const CAP_POWER: u8 = 0x01;
+pub const CAP_MSI: u8 = 0x05;
+pub const CAP_PCIE: u8 = 0x10;
+pub const CAP_MSIX: u8 = 0x11;
+
+/// A device's capability list: (id, offset in the configuration space) of
+/// each entry. `read` gives one byte of the configuration space. The list
+/// comes from the device, so it is not trusted: offsets outside the device's
+/// own area end it, and so does a list that points back into itself.
+pub fn walk_capabilities(read: impl Fn(u8) -> u8) -> Vec<(u8, u8)> {
+    let mut found = Vec::new();
+    // Status register bit 4: "has a capability list". Header type 2
+    // (CardBus bridges) keeps the pointer elsewhere: not supported.
+    if read(0x06) & 1 << 4 == 0 || read(0x0E) & 0x7F > 1 {
+        return found;
+    }
+    let mut at = read(0x34) & !3;
+    while at >= 0x40 && found.len() < MAX_CAPABILITIES && !found.iter().any(|&(_, seen)| seen == at) {
+        let id = read(at);
+        if id == 0xFF {
+            break; // nothing answers there
+        }
+        found.push((id, at));
+        at = read(at + 1) & !3;
+    }
+    found
+}
+
+pub fn capability_name(id: u8) -> Option<&'static str> {
+    Some(match id {
+        CAP_POWER => "power management",
+        CAP_MSI => "MSI",
+        CAP_PCIE => "PCI Express",
+        CAP_MSIX => "MSI-X",
+        0x09 => "vendor specific",
+        0x0A => "debug port",
+        0x0D => "bridge subsystem id",
+        0x12 => "SATA",
+        0x13 => "advanced features",
+        _ => return None,
+    })
+}
+
 impl Device {
+    /// (id, offset) of each capability: MSI, PCI Express, power management, ...
+    pub fn capabilities(&self) -> Vec<(u8, u8)> {
+        walk_capabilities(|offset| read8(self.bus, self.dev, self.func, offset))
+    }
+
     pub fn bar(&self, n: u8) -> Bar {
         let off = 0x10 + n * 4;
         let low = read32(self.bus, self.dev, self.func, off);

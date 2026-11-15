@@ -359,10 +359,22 @@ impl Shell {
                     println!("{:>3}  {:<10} {:<8} {:>9}  {stack}", t.id, t.name, t.state, t.runs);
                 }
             }
-            ("lspci", []) => {
+            ("lspci", options @ ([] | ["-v"])) => {
                 for d in pci::scan() {
                     let irq = if d.irq != 0 && d.irq != 0xFF { format!(" (IRQ {})", d.irq) } else { String::new() };
                     println!("{:02x}:{:02x}.{} {:04x}:{:04x} {}{irq}", d.bus, d.dev, d.func, d.vendor, d.device, d.class_name());
+                    if options.is_empty() {
+                        continue;
+                    }
+                    // What the device can do, for the drivers still to write.
+                    let names: Vec<String> = d
+                        .capabilities()
+                        .iter()
+                        .map(|&(id, _)| pci::capability_name(id).map(String::from).unwrap_or_else(|| format!("0x{id:02x}")))
+                        .collect();
+                    if !names.is_empty() {
+                        println!("        {}", names.join(", "));
+                    }
                 }
             }
             ("net" | "ifconfig", []) => match net::describe() {
@@ -1258,7 +1270,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("ntp [SERVER]", "set the clock from a time server"),
     ("tftp get|put HOST FILE", "copy a file from / to a TFTP server"),
     ("arp", "neighbours learned on the local network"),
-    ("lspci", "list PCI devices"),
+    ("lspci [-v]", "list PCI devices (-v: what each one can do)"),
     ("threads", "what runs side by side inside the kernel"),
     ("slots", "A/B kernel slots: which one runs, last trial"),
     ("crash", "deliberately crash the kernel (tests crash reports)"),

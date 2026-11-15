@@ -1,0 +1,13 @@
+# PCI capability lists: what each device can do (drivers todo, item P3).
+# The e1000e card has a list; the old chipset devices of the QEMU PC have none.
+@wire
+@e1000e
+$ lspci -v
+~ ^00:00\.0 8086:1237 Host bridge$
+~ ^00:0\d\.0 8086:10d3 Ethernet controller \(IRQ \d+\)$
+~ ^        power management, MSI, PCI Express, MSI-X$
+# Without -v: the plain list, one line per device.
+$ lspci
+~ ^00:0\d\.0 8086:10d3 Ethernet controller \(IRQ \d+\)$
+$ lspci -x
+~ lspci: wrong arguments
