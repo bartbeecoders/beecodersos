@@ -13,20 +13,20 @@
 
 use crate::input::{self, Key};
 use crate::json::{self, Obj, Object};
-use crate::port::{inb, outb};
 use crate::ring::{Global, Ring};
+use crate::uart::{Hardware, Uart, COM2};
 use crate::{thread, time};
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-const COM2: u16 = 0x2F8;
 /// Max time for beehive to acknowledge a request (it answers at once).
 const ACK_TIMEOUT_MS: u64 = 3_000;
 /// Max silence while an answer is being produced.
 const REPLY_TIMEOUT_MS: u64 = 120_000;
 const MAX_LINE: usize = 8192;
 
+static PORT: Global<Uart> = Global::new(Uart::new(COM2));
 static RX: Ring<4096> = Ring::new();
 static PRESENT: AtomicBool = AtomicBool::new(false);
 static STATE: Global<State> = Global::new(State { line: Vec::new(), peer: None, next_id: 1, status: None });
@@ -42,24 +42,11 @@ struct State {
 
 /// Detect and set up COM2. Returns true when the port exists.
 pub fn init() -> bool {
-    unsafe {
-        // A UART has a scratch register; missing hardware reads back 0xFF.
-        outb(COM2 + 7, 0x5A);
-        if inb(COM2 + 7) != 0x5A {
-            return false;
-        }
-        outb(COM2 + 1, 0x00); // interrupts off
-        outb(COM2 + 3, 0x80); // DLAB
-        outb(COM2, 0x01); // 115200 baud
-        outb(COM2 + 1, 0x00);
-        outb(COM2 + 3, 0x03); // 8N1
-        outb(COM2 + 2, 0xC7); // FIFOs on, cleared
-        outb(COM2 + 4, 0x0B); // DTR, RTS, OUT2 (IRQ gate)
-        while inb(COM2 + 5) & 0x01 != 0 {
-            inb(COM2);
-        }
-        outb(COM2 + 1, 0x01); // IRQ on received data
+    let port = PORT.get();
+    if !port.init(&mut Hardware) {
+        return false;
     }
+    port.enable_rx_interrupt(&mut Hardware);
     PRESENT.store(true, Ordering::SeqCst);
     true
 }
@@ -70,29 +57,21 @@ pub fn present() -> bool {
 
 /// Called from the IRQ3 handler.
 pub fn on_interrupt() {
-    unsafe {
-        while inb(COM2 + 5) & 0x01 != 0 {
-            RX.push(inb(COM2));
-        }
-    }
+    PORT.get().receive(&mut Hardware, |b| {
+        RX.push(b);
+    });
 }
 
 pub fn pending() -> bool {
     !RX.is_empty()
 }
 
-/// Send one JSON message (a line). Silently dropped without a COM2 port.
+/// Send one JSON message (a line). Silently dropped without a COM2 port,
+/// and cut short when the port is stuck: the OS never hangs on it.
 pub fn send(msg: &str) {
-    if !present() {
-        return;
-    }
     for b in msg.bytes().chain(core::iter::once(b'\n')) {
-        unsafe {
-            // Bounded wait: never hang the OS on a stuck port.
-            if (0..1_000_000).find(|_| inb(COM2 + 5) & 0x20 != 0).is_none() {
-                return;
-            }
-            outb(COM2, b);
+        if !PORT.get().send(&mut Hardware, b) {
+            return;
         }
     }
 }

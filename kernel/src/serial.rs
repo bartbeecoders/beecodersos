@@ -1,43 +1,33 @@
-//! 16550 UART driver on COM1 (0x3F8): output, plus interrupt-driven input so
-//! the terminal can be used from `qemu -serial stdio` / `-nographic`.
+//! The serial console on COM1 (0x3F8): output, plus interrupt-driven input so
+//! the terminal can be used from `qemu -serial stdio` / `-nographic`. The
+//! port itself is in uart.rs; a machine without COM1 works without it.
 
 use crate::input::Key;
-use crate::port::{inb, outb};
 use crate::ring::{Global, Ring};
+use crate::uart::{Hardware, Uart, COM1};
 use alloc::vec::Vec;
 
-const COM1: u16 = 0x3F8;
-
+static PORT: Global<Uart> = Global::new(Uart::new(COM1));
 static RX: Ring<256> = Ring::new();
 static DECODER: Global<SerialDecoder> = Global::new(SerialDecoder::new());
 
-pub fn init() {
-    unsafe {
-        outb(COM1 + 1, 0x00); // disable interrupts
-        outb(COM1 + 3, 0x80); // enable DLAB
-        outb(COM1, 0x01);     // divisor low  (115200 baud)
-        outb(COM1 + 1, 0x00); // divisor high
-        outb(COM1 + 3, 0x03); // 8N1, DLAB off
-        outb(COM1 + 2, 0xC7); // enable + clear FIFOs
-        outb(COM1 + 4, 0x0B); // DTR, RTS, OUT2 (OUT2 gates the IRQ line)
-    }
+/// Look for COM1 and set it up. Without it the OS simply has no serial console.
+pub fn init() -> bool {
+    PORT.get().init(&mut Hardware)
+}
+
+pub fn present() -> bool {
+    PORT.get().present()
 }
 
 /// Raise IRQ4 when a byte is received.
 pub fn enable_rx_interrupt() {
-    unsafe {
-        while inb(COM1 + 5) & 0x01 != 0 {
-            inb(COM1); // drop stale input
-        }
-        outb(COM1 + 1, 0x01);
-    }
+    PORT.get().enable_rx_interrupt(&mut Hardware);
 }
 
+/// Send a byte; dropped when there is no port or it is stuck (see uart.rs).
 pub fn write_byte(b: u8) {
-    unsafe {
-        while inb(COM1 + 5) & 0x20 == 0 {}
-        outb(COM1, b);
-    }
+    PORT.get().send(&mut Hardware, b);
 }
 
 pub fn write_str(s: &str) {
@@ -46,11 +36,9 @@ pub fn write_str(s: &str) {
 
 /// Called from the IRQ4 handler.
 pub fn on_interrupt() {
-    unsafe {
-        while inb(COM1 + 5) & 0x01 != 0 {
-            RX.push(inb(COM1));
-        }
-    }
+    PORT.get().receive(&mut Hardware, |b| {
+        RX.push(b);
+    });
 }
 
 pub fn pending() -> bool {

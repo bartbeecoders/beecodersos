@@ -50,6 +50,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("heap: alloc and free", heap_alloc_free),
     ("heap: 1 MiB buffer", heap_large_buffer),
     ("ring: order and overflow", ring_buffer),
+    ("serial port: missing or stuck hardware never hangs", uart_limits),
     ("serial: text and control keys", serial_decoder),
     ("serial: escape sequences and UTF-8", serial_escapes),
     ("keyboard: US layout", keyboard_us),
@@ -142,6 +143,81 @@ fn ring_buffer() -> TestResult {
     r.push(5);
     check_eq!([r.pop(), r.pop(), r.pop(), r.pop()], [Some(2), Some(3), Some(5), None]);
     check!(r.is_empty());
+    Ok(())
+}
+
+/// A made-up serial port at COM1 for `uart_limits`.
+struct FakePort {
+    /// Is there a chip at all? Without one every read gives 0xFF.
+    there: bool,
+    scratch: u8,
+    /// What the line status register says.
+    status: u8,
+    reads: usize,
+    sent: Vec<u8>,
+}
+
+impl crate::uart::Ports for FakePort {
+    fn read(&mut self, port: u16) -> u8 {
+        self.reads += 1;
+        match port - crate::uart::COM1 {
+            _ if !self.there => 0xFF,
+            5 => self.status,
+            7 => self.scratch,
+            _ => b'x',
+        }
+    }
+    fn write(&mut self, port: u16, value: u8) {
+        match port - crate::uart::COM1 {
+            0 if self.there => self.sent.push(value),
+            7 => self.scratch = value,
+            _ => {}
+        }
+    }
+}
+
+fn uart_limits() -> TestResult {
+    use crate::uart::{Uart, COM1, RECEIVE_LIMIT, SEND_SPINS};
+    let fake = |there, status| FakePort { there, scratch: 0, status, reads: 0, sent: Vec::new() };
+
+    // No port: found missing, and after that it costs nothing at all.
+    let (mut port, mut io) = (Uart::new(COM1), fake(false, 0));
+    check!(!port.init(&mut io));
+    io.reads = 0;
+    check!(!port.send(&mut io, b'a'));
+    port.receive(&mut io, |_| {});
+    port.enable_rx_interrupt(&mut io);
+    check_eq!(io.reads, 0);
+
+    // A working port: found, set up (the divisor is not data), bytes go out.
+    let (mut port, mut io) = (Uart::new(COM1), fake(true, 0x60));
+    check!(port.init(&mut io));
+    io.sent.clear();
+    check!(port.send(&mut io, b'a') && port.send(&mut io, b'b'));
+    check_eq!(io.sent.as_slice(), b"ab");
+
+    // A port that never becomes ready: one bounded wait, then no waiting...
+    io.status = 0x00;
+    io.reads = 0;
+    check!(!port.send(&mut io, b'c'));
+    check_eq!(io.reads, SEND_SPINS);
+    check!(!port.send(&mut io, b'd') && !port.send(&mut io, b'e'));
+    check_eq!(io.reads, SEND_SPINS + 2);
+    // ...until it works again by itself.
+    io.status = 0x20;
+    check!(port.send(&mut io, b'f'));
+    check_eq!(io.sent.as_slice(), b"abf");
+
+    // A port that claims to have data forever: reading stops.
+    io.status = 0x01;
+    let mut taken = 0;
+    port.receive(&mut io, |_| taken += 1);
+    check_eq!(taken, RECEIVE_LIMIT);
+
+    // The scratch register answers but the status reads as 0xFF, as empty
+    // port addresses do: not treated as a port.
+    let (mut port, mut io) = (Uart::new(COM1), fake(true, 0xFF));
+    check!(!port.init(&mut io));
     Ok(())
 }
 

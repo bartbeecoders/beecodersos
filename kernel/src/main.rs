@@ -43,6 +43,7 @@ mod storage;
 mod testmode;
 mod thread;
 mod time;
+mod uart;
 mod vga;
 
 use core::panic::PanicInfo;
@@ -64,6 +65,9 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info: u32) -> ! {
 
     if multiboot_magic != MULTIBOOT_BOOTLOADER_MAGIC {
         panic!("not started by a Multiboot bootloader (magic {:#x})", multiboot_magic);
+    }
+    if !serial::present() {
+        println!("[com1] no serial port found: screen and keyboard only");
     }
     bootargs::init(multiboot_info); // before the heap: it may reuse that memory
     if testmode::enabled() {

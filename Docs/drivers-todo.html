@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BeeCodersOs Drivers Todo</title>
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #ffffff; --surface-2: #f3f1ec; --text: #1d1b16; --muted: #6b665c;
+  --border: #e3dfd6; --accent: #b7791f; --accent-soft: #fdf3e1; --ok: #2f855a; --ok-soft: #e6f4ec;
+  --warn: #c05621; --warn-soft: #fdecdf; --risk: #c53030; --risk-soft: #fde8e8; --code: #f3f1ec;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15140f; --surface: #1d1b16; --surface-2: #26241d; --text: #ece8de; --muted: #a39d8f;
+    --border: #36332a; --accent: #e9b04f; --accent-soft: #2e2617; --ok: #68d391; --ok-soft: #1a2b21;
+    --warn: #f6ad55; --warn-soft: #2f2216; --risk: #fc8181; --risk-soft: #301c1c; --code: #26241d;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #15140f; --surface: #1d1b16; --surface-2: #26241d; --text: #ece8de; --muted: #a39d8f;
+  --border: #36332a; --accent: #e9b04f; --accent-soft: #2e2617; --ok: #68d391; --ok-soft: #1a2b21;
+  --warn: #f6ad55; --warn-soft: #2f2216; --risk: #fc8181; --risk-soft: #301c1c; --code: #26241d;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 920px; margin: 0 auto; padding: 48px 16px 96px; }
+h1 { font-size: 2.1rem; line-height: 1.2; margin: 0 0 8px; letter-spacing: -0.01em; }
+h2 { font-size: 1.45rem; margin: 56px 0 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+h3 { font-size: 1.1rem; margin: 28px 0 8px; }
+p, li { color: var(--text); }
+.lede { font-size: 1.12rem; color: var(--muted); margin: 0 0 24px; }
+.meta { font-size: .9rem; color: var(--muted); }
+code { font-family: ui-monospace, "JetBrains Mono", Menlo, monospace; font-size: .88em;
+  background: var(--code); padding: 1px 5px; border-radius: 4px; }
+  font-size: .85rem; line-height: 1.5; border: 1px solid var(--border); }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; margin: 16px 0; }
+.callout { background: var(--accent-soft); border-left: 4px solid var(--accent); border-radius: 6px; padding: 14px 18px; margin: 20px 0; }
+.tag { font-size: .75rem; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+table { width: 100%; border-collapse: collapse; font-size: .93rem; margin: 12px 0; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: .82rem; text-transform: uppercase; letter-spacing: .04em; }
+.table-wrap { overflow-x: auto; }
+nav.toc { font-size: .93rem; }
+nav.toc a { color: var(--accent); text-decoration: none; }
+nav.toc a:hover { text-decoration: underline; }
+
+
+.bar { height: 14px; background: var(--surface-2); border-radius: 999px; overflow: hidden; display: flex; margin: 10px 0 6px; }
+.bar i { display: block; height: 100%; }
+.bar .b-done { background: var(--ok); } .bar .b-check { background: var(--accent); } .bar .b-doing { background: var(--warn); }
+.counts { font-size: .92rem; color: var(--muted); }
+.tiers td:last-child { width: 40%; }
+.tiers .bar { margin: 4px 0; height: 10px; }
+ul.items { list-style: none; padding: 0; margin: 12px 0; }
+.item { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--border); border-radius: 8px; padding: 12px 16px; margin: 10px 0; }
+.item h4 { margin: 0 0 4px; font-size: 1rem; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.item p { margin: 4px 0; font-size: .95rem; }
+.item .facts { color: var(--muted); font-size: .88rem; }
+.id { font-family: ui-monospace, Menlo, monospace; font-size: .85rem; color: var(--muted); }
+.st, .size { font-size: .75rem; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.size { background: var(--surface-2); color: var(--muted); }
+.item[data-status="todo"] .st { background: var(--surface-2); color: var(--muted); }
+.item[data-status="todo"] .st::after { content: "To do"; }
+.item[data-status="doing"] { border-left-color: var(--warn); }
+.item[data-status="doing"] .st { background: var(--warn-soft); color: var(--warn); }
+.item[data-status="doing"] .st::after { content: "In progress"; }
+.item[data-status="check"] { border-left-color: var(--accent); }
+.item[data-status="check"] .st { background: var(--accent-soft); color: var(--accent); }
+.item[data-status="check"] .st::after { content: "Done, to confirm on the HP"; }
+.item[data-status="done"] { border-left-color: var(--ok); }
+.item[data-status="done"] .st { background: var(--ok-soft); color: var(--ok); }
+.item[data-status="done"] .st::after { content: "Done"; }
+.item[data-status="skip"] { opacity: .7; }
+.item[data-status="skip"] .st { background: var(--surface-2); color: var(--muted); }
+.item[data-status="skip"] .st::after { content: "Not planned"; }
+.yes { color: var(--ok); font-weight: 600; } .no { color: var(--risk); font-weight: 600; } .maybe { color: var(--warn); font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Drivers for real hardware</h1>
+<p class="lede">What BeeCodersOs needs before it is usable on a real PC, in the order to build it, with the state of each item.</p>
+<p class="meta">Target machine: HP EliteDesk 800 G1 (Intel Haswell, Q87 chipset) · started 15 November 2026 · BeeCodersOs 0.0.3</p>
+
+<div class="callout"><b>Where we are:</b> the USB stick (<code>tools/usbstick.py</code>) boots on the HP in legacy BIOS mode; build 0.0.2 printed its hello line and stopped. Version 0.0.3 b1 removes the most likely cause (the serial port, items S1 to S3). <b>Next: boot 0.0.3 on the HP</b> and note below what the screen shows.</div>
+
+<h2 id="progress">Progress</h2>
+<div class="card">
+<div class="bar" id="bar-all"></div>
+<p class="counts" id="count-all">Open this page in a browser to see the totals.</p>
+<div class="table-wrap"><table class="tiers" id="tier-table"></table></div>
+</div>
+
+<p><b>How to track:</b> every item below carries its state in the page source, as <code>data-status</code> on its <code>&lt;li&gt;</code>. Change that one word and the label, the colours and the totals above follow.</p>
+<div class="table-wrap"><table>
+<tr><th>data-status</th><th>Meaning</th></tr>
+<tr><td><code>todo</code></td><td>Not started</td></tr>
+<tr><td><code>doing</code></td><td>Being worked on</td></tr>
+<tr><td><code>check</code></td><td>Merged and tested in QEMU, not yet seen working on the HP</td></tr>
+<tr><td><code>done</code></td><td>Seen working on the HP (or cannot differ there)</td></tr>
+<tr><td><code>skip</code></td><td>Not planned; left out of the totals</td></tr>
+</table></div>
+<p>Sizes: S = about a day, M = a few days, L = a week or more, XL = several weeks. "Protected" means the change touches a file on the protected list in <code>CLAUDE.md</code> and needs approval first.</p>
+
+<h2 id="log">Log of boots on the HP</h2>
+<div class="table-wrap"><table>
+<tr><th>Date</th><th>Build</th><th>What happened</th></tr>
+<tr><td>15 Nov 2026</td><td>0.0.2</td><td>Legacy boot from the USB stick: hello line, then nothing.</td></tr>
+<tr><td></td><td>0.0.3 b1</td><td><i>to do: boot it and write down the last line on the screen</i></td></tr>
+</table></div>
+
+<h2 id="hang">Why 0.0.2 stopped after the hello line</h2>
+<p>The hello line is the first thing the kernel prints; the next line (<code>[mem] ...</code>) never appeared. So the stop is in what runs in between (<code>kernel/src/main.rs</code>):</p>
+<div class="table-wrap"><table>
+<tr><th>Suspect</th><th>Why</th><th>Likelihood</th></tr>
+<tr><td>Writing to the serial port</td><td>Every character also went to COM1, waiting for the port without a limit. The hello line reaches the screen first; the first character for the serial port then waits forever on a port that never reports ready.</td><td>Highest. Fixed by S1.</td></tr>
+<tr><td>Reading the boot arguments, setting up the heap</td><td>Both read the bootloader's memory information. A fault here comes before the interrupt table exists, so the machine freezes or resets without a message.</td><td>Lower. B1 would show it.</td></tr>
+<tr><td>The bootloader check</td><td>Prints a message when it fails, unless that message was itself stuck in the serial wait.</td><td>Low.</td></tr>
+</table></div>
+<p>This is from reading the code, not from the machine: only a boot of 0.0.3 on the HP confirms it.</p>
+
+<h2 id="today">What exists today</h2>
+<p>The hardware column for the HP is from the model's specifications. Once the OS reaches its prompt there, <code>lspci</code> gives the real device numbers: put them here.</p>
+<div class="table-wrap"><table>
+<tr><th>Hardware</th><th>Driver</th><th>On the HP</th></tr>
+<tr><td>Screen: VGA text mode, 80x25</td><td><code>vga.rs</code></td><td><span class="maybe">Legacy BIOS boot only</span></td></tr>
+<tr><td>Keyboard: PS/2 controller</td><td><code>keyboard.rs</code></td><td><span class="maybe">PS/2 keyboard; USB only if the BIOS imitates PS/2</span></td></tr>
+<tr><td>Serial ports COM1, COM2</td><td><code>uart.rs</code>, <code>serial.rs</code>, <code>aibridge.rs</code></td><td><span class="maybe">If the machine has the port; works without since 0.0.3</span></td></tr>
+<tr><td>Interrupt controller (PIC), timer (PIT), clock (RTC)</td><td><code>interrupts.rs</code>, <code>time.rs</code></td><td><span class="yes">Expected to work</span></td></tr>
+<tr><td>ACPI: power button, power off</td><td><code>acpi.rs</code>, <code>power.rs</code></td><td><span class="maybe">To be seen (P5)</span></td></tr>
+<tr><td>PCI: device list</td><td><code>pci.rs</code></td><td><span class="maybe">Devices behind bridges: to be checked (P3)</span></td></tr>
+<tr><td>Disk: ATA on the legacy IDE ports</td><td><code>ata.rs</code></td><td><span class="no">No: the SATA controller is in AHCI mode (D1)</span></td></tr>
+<tr><td>Network: Intel e1000 (82540EM)</td><td><code>e1000.rs</code></td><td><span class="no">No: the machine has an I217-LM (N1)</span></td></tr>
+<tr><td>Memory: first 4 GiB mapped, 64 MiB heap</td><td><code>boot.s</code>, <code>allocator.rs</code></td><td><span class="yes">Works</span>, most RAM unused (P2)</td></tr>
+</table></div>
+
+<h2 id="items">The list</h2>
+
+<h3 id="tier-0" data-tier="Tier 0: get past the hello line">Tier 0: get past the hello line</h3>
+<p>The kernel waited on hardware without a time limit. On a PC where that hardware is missing or behaves differently, the boot hangs without a word.</p>
+<ul class="items" data-tier="Tier 0: get past the hello line">
+<li class="item" data-status="check" id="S1">
+<h4><span class="id">S1</span> Serial port: detect it, never wait forever <span class="size">S</span> <span class="st"></span></h4>
+<p>Every printed character also goes to COM1. The old code waited for the port to be ready with no limit, which is the most likely reason the HP stops right after the hello line. Now the port is detected at start (COM1 and COM2), output to a missing port is skipped, and a port that does not become ready costs one short wait and is then left alone until it works again.</p>
+<p class="facts">Code: <code>kernel/src/uart.rs</code> (new, shared), <code>serial.rs</code>, <code>aibridge.rs</code>. Tests: self-test "serial port: missing or stuck hardware never hangs"; a boot in QEMU with <code>-serial none</code>. Shipped in 0.0.3 b1.</p>
+</li>
+<li class="item" data-status="check" id="S2">
+<h4><span class="id">S2</span> Serial port: reading never loops forever <span class="size">S</span> <span class="st"></span></h4>
+<p>The interrupt handlers and the start-up emptied the receive buffer in a loop that only ended when the port said "empty". They now stop after 256 bytes per call.</p>
+<p class="facts">Code: <code>kernel/src/uart.rs</code>. Test: same self-test. Shipped in 0.0.3 b1.</p>
+</li>
+<li class="item" data-status="check" id="S3">
+<h4><span class="id">S3</span> Say so when there is no serial port <span class="size">S</span> <span class="st"></span></h4>
+<p>The boot prints <code>[com1] no serial port found: screen and keyboard only</code>, so the screen shows which case the machine is in.</p>
+<p class="facts">Code: <code>kernel/src/main.rs</code>. Shipped in 0.0.3 b1.</p>
+</li>
+<li class="item" data-status="todo" id="B1">
+<h4><span class="id">B1</span> Boot progress on the screen <span class="size">S</span> <span class="st"></span></h4>
+<p>Print a short marker before each step of the boot (<code>[boot] heap</code>, <code>[boot] interrupts</code>, ...). If the HP still stops, the last line names the step.</p>
+<p class="facts">Code: <code>kernel/src/main.rs</code>. Do this next if S1 does not get the HP to its prompt.</p>
+</li>
+<li class="item" data-status="todo" id="B2">
+<h4><span class="id">B2</span> Keyboard controller: waits with a limit <span class="size">S</span> <span class="st"></span></h4>
+<p><code>keyboard::init</code> empties the PS/2 controller in a loop; a controller that is missing reads as "always full".</p>
+<p class="facts">Code: <code>kernel/src/keyboard.rs</code>. Test: a self-test with made-up ports, as for the serial port.</p>
+</li>
+<li class="item" data-status="todo" id="B3">
+<h4><span class="id">B3</span> IDE disk probe: give up when there is no controller <span class="size">S</span> <span class="st"></span></h4>
+<p><code>ata.rs</code> waits while the disk says "busy"; an empty port address reads as "always busy". Check that the probe gives up, and add a limit where it does not.</p>
+<p class="facts">Code: <code>kernel/src/ata.rs</code>. Test: QEMU <code>-machine q35</code> has no legacy IDE ports.</p>
+</li>
+</ul>
+
+<h3 id="tier-A" data-tier="Tier A: a usable prompt">Tier A: a usable prompt</h3>
+<ul class="items" data-tier="Tier A: a usable prompt">
+<li class="item" data-status="todo" id="A1">
+<h4><span class="id">A1</span> PS/2 keyboard on the real controller <span class="size">S</span> <span class="st"></span></h4>
+<p>Check that a PS/2 keyboard types at the prompt, and that a USB keyboard works through the BIOS's PS/2 imitation ("USB legacy support"). Fix what the real controller does differently from QEMU's.</p>
+<p class="facts">Code: <code>kernel/src/keyboard.rs</code>. Can only be confirmed on the HP.</p>
+</li>
+<li class="item" data-status="todo" id="A2">
+<h4><span class="id">A2</span> Framebuffer console <span class="size">M</span> <span class="st"></span></h4>
+<p>Draw text ourselves on the graphics framebuffer the bootloader hands over, with a built-in bitmap font. Unlocks UEFI boot (which has no text mode), more than 80x25 characters, and the DisplayPort outputs. No graphics-card driver is needed.</p>
+<p class="facts">Code: <code>vga.rs</code>, <code>console.rs</code>, <code>boot.s</code> (protected: Multiboot header). Test: the UEFI ISO boot gets a screen.</p>
+</li>
+</ul>
+
+<h3 id="tier-B" data-tier="Tier B: storage">Tier B: storage</h3>
+<p>Until this tier is done the OS runs from a RAM disk on the HP: nothing survives a reboot.</p>
+<ul class="items" data-tier="Tier B: storage">
+<li class="item" data-status="todo" id="D1">
+<h4><span class="id">D1</span> AHCI (SATA) driver <span class="size">L</span> <span class="st"></span></h4>
+<p>The machine's disks hang on an Intel AHCI controller. Read and write sectors on one port, and offer BeeFS the same block interface <code>ata.rs</code> gives it. The rule stays: never write to a disk that is not BeeFS.</p>
+<p class="facts">Test: QEMU <code>-device ahci</code>; the existing disk scenarios run on it. Fully testable without the HP.</p>
+</li>
+<li class="item" data-status="todo" id="D2">
+<h4><span class="id">D2</span> Where BeeFS lives on the real machine <span class="size">S</span> <span class="st"></span></h4>
+<p>A decision for the owner: a second partition on the USB stick (needs U3), or a partition on the internal disk (needs D1 and a safe way to create it).</p>
+<p class="facts">No code until decided.</p>
+</li>
+<li class="item" data-status="todo" id="D3">
+<h4><span class="id">D3</span> GPT partition tables <span class="size">M</span> <span class="st"></span></h4>
+<p><code>beefs/src/partition.rs</code> reads MBR for the A/B boot disk; real disks use GPT.</p>
+<p class="facts">Test: host unit tests in <code>beefs</code>.</p>
+</li>
+</ul>
+
+<h3 id="tier-C" data-tier="Tier C: network">Tier C: network</h3>
+<ul class="items" data-tier="Tier C: network">
+<li class="item" data-status="todo" id="N1">
+<h4><span class="id">N1</span> Intel I217-LM network card (e1000e family) <span class="size">L</span> <span class="st"></span></h4>
+<p>Close to our e1000 driver in its send and receive rings, but the chip talks to a separate PHY and has its own start-up and power quirks.</p>
+<p class="facts">Test: QEMU <code>-device e1000e</code> emulates a related chip: it covers the rings, not the I217's PHY part, which can only be tried on the HP.</p>
+</li>
+<li class="item" data-status="todo" id="N2">
+<h4><span class="id">N2</span> Receive by interrupt <span class="size">M</span> <span class="st"></span></h4>
+<p>The card is polled every 10 ms now. Already an open item of network phase N6; natural once P1 exists.</p>
+<p class="facts">Protected: <code>interrupts.rs</code>.</p>
+</li>
+</ul>
+
+<h3 id="tier-D" data-tier="Tier D: USB">Tier D: USB</h3>
+<p>The largest block of work. Without it there is no keyboard under UEFI and no USB stick as a disk.</p>
+<ul class="items" data-tier="Tier D: USB">
+<li class="item" data-status="todo" id="U1">
+<h4><span class="id">U1</span> xHCI host controller (USB 3) <span class="size">XL</span> <span class="st"></span></h4>
+<p>On this chipset it can drive all the USB ports. Memory-mapped registers, command and event rings, device slots.</p>
+<p class="facts">Needs P1 (or polling) and P3. Test: QEMU <code>-device qemu-xhci</code>.</p>
+</li>
+<li class="item" data-status="todo" id="U2">
+<h4><span class="id">U2</span> USB core and keyboard <span class="size">L</span> <span class="st"></span></h4>
+<p>Find devices, read their descriptors, hubs, and the keyboard protocol.</p>
+<p class="facts">Test: QEMU <code>-device usb-kbd</code>.</p>
+</li>
+<li class="item" data-status="todo" id="U3">
+<h4><span class="id">U3</span> USB mass storage <span class="size">M</span> <span class="st"></span></h4>
+<p>Sticks and USB disks as block devices.</p>
+<p class="facts">Test: QEMU <code>-device usb-storage</code>.</p>
+</li>
+<li class="item" data-status="skip" id="U4">
+<h4><span class="id">U4</span> EHCI host controller (USB 2) <span class="size">L</span> <span class="st"></span></h4>
+<p>Only if xHCI turns out not to cover the ports we use.</p>
+</li>
+</ul>
+
+<h3 id="tier-E" data-tier="Tier E: platform">Tier E: platform</h3>
+<p>Not drivers for one device, but what the drivers above stand on. Most of these touch protected files.</p>
+<ul class="items" data-tier="Tier E: platform">
+<li class="item" data-status="todo" id="P1">
+<h4><span class="id">P1</span> APIC, I/O APIC and MSI <span class="size">L</span> <span class="st"></span></h4>
+<p>The modern interrupt controllers. Needed for MSI, which xHCI, AHCI and the network card prefer, and for more than one CPU core.</p>
+<p class="facts">Protected: <code>interrupts.rs</code>, <code>interrupts.s</code>.</p>
+</li>
+<li class="item" data-status="todo" id="P2">
+<h4><span class="id">P2</span> More memory <span class="size">M</span> <span class="st"></span></h4>
+<p>Map memory above 4 GiB, let the heap grow beyond 64 MiB, and add a page allocator for driver buffers.</p>
+<p class="facts">Protected: <code>boot.s</code>, <code>allocator.rs</code>.</p>
+</li>
+<li class="item" data-status="todo" id="P3">
+<h4><span class="id">P3</span> PCI: bridges, PCIe configuration space, capability lists <span class="size">M</span> <span class="st"></span></h4>
+<p><code>pci.rs</code> uses the old port method; real machines put devices behind bridges, and MSI needs the capability list.</p>
+<p class="facts">Code: <code>kernel/src/pci.rs</code>.</p>
+</li>
+<li class="item" data-status="todo" id="P4">
+<h4><span class="id">P4</span> A better timer <span class="size">M</span> <span class="st"></span></h4>
+<p>HPET or the local APIC timer, and the CPU's own counter calibrated against it.</p>
+<p class="facts">Code: <code>kernel/src/time.rs</code>.</p>
+</li>
+<li class="item" data-status="todo" id="P5">
+<h4><span class="id">P5</span> ACPI on real firmware <span class="size">M</span> <span class="st"></span></h4>
+<p>Check power off, reset and the power button on the HP; real tables are larger and stranger than QEMU's.</p>
+<p class="facts">Protected: <code>acpi.rs</code>, <code>power.rs</code>.</p>
+</li>
+<li class="item" data-status="skip" id="P6">
+<h4><span class="id">P6</span> More than one CPU core <span class="size">XL</span> <span class="st"></span></h4>
+<p>Nothing needs it yet.</p>
+</li>
+</ul>
+
+<h3 id="tier-F" data-tier="Tier F: nice to have">Tier F: nice to have</h3>
+<ul class="items" data-tier="Tier F: nice to have">
+<li class="item" data-status="todo" id="X1">
+<h4><span class="id">X1</span> Mouse (PS/2, later USB) <span class="size">M</span> <span class="st"></span></h4>
+<p>Nothing uses a mouse yet.</p>
+</li>
+<li class="item" data-status="skip" id="X2">
+<h4><span class="id">X2</span> Sound (Intel HD Audio) <span class="size">L</span> <span class="st"></span></h4>
+<p>No use for it yet.</p>
+</li>
+<li class="item" data-status="skip" id="X3">
+<h4><span class="id">X3</span> Intel HD Graphics driver <span class="size">XL</span> <span class="st"></span></h4>
+<p>Not needed: A2 uses the framebuffer the firmware set up.</p>
+</li>
+<li class="item" data-status="skip" id="X4">
+<h4><span class="id">X4</span> NVMe disks <span class="size">M</span> <span class="st"></span></h4>
+<p>Not in this machine; useful for newer ones.</p>
+</li>
+</ul>
+
+<h2 id="host">The host connection on real hardware</h2>
+<p>In the VM, beehive (AI, signals, deploys) talks to the OS over COM2. A real PC has at most one serial port and no host around it. So on the HP:</p>
+<ul>
+<li>AI features and signals need the network path (the open N6 item "signals over the network"), which needs N1 first.</li>
+<li>Deploying a new kernel means writing the stick again with <code>tools/usbstick.py</code>, until the kernel download (N6) and D2 exist.</li>
+<li>The A/B slots and rollback need the boot disk layout on a real disk (D1, D2, D3).</li>
+</ul>
+
+<h2 id="order">Suggested order</h2>
+<ol>
+<li><b>S1 to S3</b> (done in QEMU), then <b>B1 to B3</b>: reach the prompt on the HP and write down what <code>lspci</code> shows.</li>
+<li><b>A1</b>: type at the prompt.</li>
+<li><b>D1</b>: a disk. The largest gain for the effort, and fully testable in QEMU.</li>
+<li><b>N1</b>: network, which brings back the path to beehive.</li>
+<li><b>A2</b>: framebuffer console, then UEFI boot.</li>
+<li><b>P1, P3</b>, then <b>U1 to U3</b>: USB.</li>
+</ol>
+
+</main>
+<script>
+// Totals from the items' data-status: the page source is the only place to edit.
+(function () {
+  var kinds = ["done", "check", "doing"];
+  function count(items) {
+    var c = { done: 0, check: 0, doing: 0, todo: 0, total: 0 };
+    items.forEach(function (li) {
+      var s = li.dataset.status;
+      if (s === "skip" || !(s in c)) return;
+      c[s] += 1; c.total += 1;
+    });
+    return c;
+  }
+  function bar(c) {
+    return kinds.map(function (k) {
+      return c.total ? '<i class="b-' + k + '" style="width:' + (100 * c[k] / c.total) + '%"></i>' : "";
+    }).join("");
+  }
+  function text(c) {
+    return c.done + " done, " + c.check + " to confirm on the HP, " + c.doing + " in progress, " + c.todo + " to do (of " + c.total + ")";
+  }
+  var all = count(Array.from(document.querySelectorAll(".item")));
+  document.getElementById("bar-all").innerHTML = bar(all);
+  document.getElementById("count-all").textContent = text(all);
+  var rows = "<tr><th>Tier</th><th>State</th><th></th></tr>";
+  document.querySelectorAll("ul.items").forEach(function (ul) {
+    var c = count(Array.from(ul.querySelectorAll(".item")));
+    rows += "<tr><td>" + ul.dataset.tier + "</td><td>" + text(c) + '</td><td><div class="bar">' + bar(c) + "</div></td></tr>";
+  });
+  document.getElementById("tier-table").innerHTML = rows;
+})();
+</script>
+</body>
+</html>

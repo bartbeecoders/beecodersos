@@ -6,7 +6,7 @@ people miss, an AI turns that into small tested changes that a person
 approves, and each new kernel is tried in a spare slot and rolled back
 automatically if it fails.
 
-Current version: **0.0.2** (see [Versioning](#versioning)).
+Current version: **0.0.3** (see [Versioning](#versioning)).
 
 ## At a glance
 
@@ -63,6 +63,7 @@ assembler and linked with the bundled `rust-lld`.
 | Rules for AI agents (and humans) changing the code | `CLAUDE.md` |
 | Roadmap | `Docs/self-improving-os-plan.html` |
 | Network stack plan (phases N1–N6, threads) | `Docs/network-stack-plan.html` |
+| Drivers for real hardware: todo list with progress | `Docs/drivers-todo.html` |
 | Backlog and review reports | `Docs/backlog/` (see its README) |
 | Tool options | `--help` of `tools/beehive/beehive.py`, `tools/evolve/evolve.py`, `tools/bootdisk.py`, `tools/deploy.py`, `tools/usbstick.py`, `tools/bee_report.py`, `tests/boot_test.py` |
 | Shell commands | `help` in the OS |
@@ -130,6 +131,9 @@ shows nothing; only the serial port talks). The OS knows a PS/2 keyboard
 (or a USB keyboard the firmware presents as one), a disk on the legacy IDE
 ports and an Intel e1000 network card; without those it runs from a RAM
 disk and without a network. A disk that is not BeeFS is never written to.
+A serial port is not needed: the kernel detects COM1 and COM2 and never
+waits on one that is missing or stuck. What is still to be written for real
+hardware, and how far it is, is in `Docs/drivers-todo.html`.
 (double-check `/dev/sdX`!). Limine loads the kernel with the Multiboot 1 protocol
 (`boot/limine.conf`).
 
@@ -198,7 +202,8 @@ kernel/
   src/console.rs       print!/println! to VGA + serial, line redraw helpers
   src/keyboard.rs      PS/2 keyboard driver + scancode decoder (modifiers, dead keys)
   src/layouts.rs       keyboard layouts (US, Belgian Period)
-  src/serial.rs        16550 UART (COM1) output + interrupt-driven input
+  src/uart.rs          16550 serial port: detection, sending and receiving with limits
+  src/serial.rs        serial console on COM1: output + interrupt-driven input
   src/input.rs         unified key events, sleeps (hlt) until input arrives
   src/editor.rs        line editor with history
   src/shell.rs         BeeShell commands (incl. `calc`, the first change made by the improvement loop)
@@ -887,9 +892,9 @@ downloading a new kernel into the spare slot.
 ## Versioning
 
 `OS_VERSION` at the top of the `Makefile` is the release, set by hand (now
-**0.0.2**). `BUILD_NUMBER` goes up by one on every build that has changed
+**0.0.3**). `BUILD_NUMBER` goes up by one on every build that has changed
 sources; when you raise `OS_VERSION`, reset `BUILD_NUMBER` to 1. Both show on
-the boot banner and with `version`, e.g. `BeeCodersOs 0.0.2 b6`. A/B slots and
+the boot banner and with `version`, e.g. `BeeCodersOs 0.0.3 b6`. A/B slots and
 backlog items record the build they shipped in.
 
 ## Next phases

@@ -24,7 +24,7 @@
 # BUILD_NUMBER file and is bumped automatically whenever a build sees changed
 # sources (not after `make clean`, and not when nothing changed).
 
-OS_VERSION := 0.0.2
+OS_VERSION := 0.0.3
 BUILD_NUMBER_FILE := BUILD_NUMBER
 BUILD_STAMP := build/.build-stamp
 SOURCES    := $(shell find kernel/src beefs/src beenet/src boot -type f) \
