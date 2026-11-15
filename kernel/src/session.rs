@@ -2,7 +2,7 @@
 //!
 //! A thread started with a session (see `thread::spawn`) prints into the
 //! session's output buffer and reads its keys from the session's input queue.
-//! Whoever owns the session (a test now, a network connection in phase N6)
+//! Whoever owns the session (a test, or the remote shell in remote.rs)
 //! feeds keys in and takes the output out.
 
 use crate::input::Key;
@@ -60,6 +60,25 @@ pub fn type_text(id: u32, text: &str) {
         if s.input.len() < MAX_INPUT {
             s.input.push_back(if c == '\n' { Key::Enter } else { Key::Char(c) });
         }
+    }
+}
+
+/// One key for the session (the remote shell's input).
+pub fn push_key(id: u32, key: Key) {
+    if let Some(s) = find(id) {
+        if s.input.len() < MAX_INPUT {
+            s.input.push_back(key);
+        }
+    }
+}
+
+/// The owner is gone: forget what was typed, stop whatever command is
+/// running (Ctrl+C) and take no more input, so the shell ends.
+pub fn hang_up(id: u32) {
+    if let Some(s) = find(id) {
+        s.input.clear();
+        s.input.push_back(Key::Ctrl('c'));
+        s.closed = true;
     }
 }
 

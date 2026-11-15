@@ -82,7 +82,7 @@ nav.toc a:hover { text-decoration: underline; }
 <h1>A network stack for BeeCodersOs</h1>
 <p class="lede">A plan to connect BeeCodersOs to the local network and the internet: a network card driver, a small TCP/IP stack of our own, and a set of basic protocols that make it useful from the shell.</p>
 <p class="meta">Plan v1 · 14 November 2026 · Starting point: BeeCodersOs 0.0.2 (phases 1–8 done).</p>
-<div class="callout"><b>Status:</b> N1 to N5 and phase T (threads) are done. The OS finds its e1000 card, gets its address, gateway and DNS server automatically (DHCP) or by hand, answers and sends pings, resolves names, opens TCP connections (<code>nc</code>), fetches web pages over plain HTTP (<code>wget</code>), sets its clock (<code>ntp</code>) and copies files with TFTP (<code>tftp</code>). The protocols live in the <code>beenet</code> crate with host unit tests, including TCP over a simulated lossy link. TCP listening already exists in the stack (the tests needed it), but the OS accepts no incoming connections. The kernel runs cooperative threads: the network has its own, and a shell can run in a console session, which is the groundwork for a remote shell. N6 has started: the status page (<code>httpd</code>, off by default) is done; the remote shell, signals over the network and the kernel download are open.</div>
+<div class="callout"><b>Status:</b> N1 to N5 and phase T (threads) are done. The OS finds its e1000 card, gets its address, gateway and DNS server automatically (DHCP) or by hand, answers and sends pings, resolves names, opens TCP connections (<code>nc</code>), fetches web pages over plain HTTP (<code>wget</code>), sets its clock (<code>ntp</code>) and copies files with TFTP (<code>tftp</code>). The protocols live in the <code>beenet</code> crate with host unit tests, including TCP over a simulated lossy link. TCP listening already exists in the stack (the tests needed it), but the OS accepts no incoming connections. The kernel runs cooperative threads: the network has its own, and a shell can run in a console session, which is the groundwork for a remote shell. N6 has started: the status page (<code>httpd</code>) and the remote shell (<code>remote</code>), both off by default, are done; signals over the network and the kernel download are open.</div>
 
 <nav class="toc card">
 <b>Contents</b>
@@ -338,7 +338,7 @@ nav.toc a:hover { text-decoration: underline; }
 <ul>
 <li><b>Done:</b> TCP passive open (listen and accept), on top of cooperative threads (phase T).</li>
 <li><b>Done:</b> <code>httpd</code>: status page (version, uptime, slot state, threads, recent events) and read-only files from <code>/public</code>, for the LAN. Off by default.</li>
-<li>Remote shell with a password, off by default.</li>
+<li><b>Done:</b> <code>remote</code>: a remote shell, Telnet style. Off by default, not encrypted, password always required and made up by the OS, one session, slow guessing, changes only from the local console.</li>
 <li><b>Signals over the network:</b> wishes, crashes and health reports sent to beehive over TCP as an alternative to COM2.</li>
 <li><b>Kernel download:</b> fetch a new kernel into the spare A/B slot over HTTP or TFTP and try it, with the phase 8 rollback as the safety net. This is the roadmap's "the OS drives its own improvement" step, and it should wait for a signature check on the downloaded kernel.</li>
 <li>Interrupt-driven receive, if polling every 10 ms proves too slow (needs approval: it touches the protected interrupt code).</li>

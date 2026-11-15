@@ -1,0 +1,137 @@
+# Network phase N6: the remote shell (`remote`), used from the host like a
+# Telnet client on the local network would. Off unless switched on; a
+# password the OS made up is always required.
+@net
+@disk
+@forward
+@tcp
+$ net dhcp
+~ ^address 10\.0\.2\.15/24 \(DHCP\)
+$ remote
+remote shell: off (remote on [PORT] starts it)
+# Off: the port is closed.
+@remote
+(no answer)
+$ remote on
+remote shell on, port 23 (saved)
+~ ^password: [a-hjkmnp-z2-9]{4}-[a-hjkmnp-z2-9]{4}-[a-hjkmnp-z2-9]{4}   \(shown only now; 'remote password' makes a new one\)$
+~ ^not encrypted: the password and all that is typed can be read on the network
+@capture pw ^password: (\S+)
+$ threads
+~ remote     waiting
+# Three wrong passwords (an empty one too): no shell, and the door closes.
+@remote | nope | abcd-efgh-jkmn
+BeeCodersOs remote shell (not encrypted)
+~ ^password: $
+wrong password
+~ ^password: $
+wrong password
+~ ^password: $
+wrong password
+!~ logged in
+!~ bee:
+# Someone who says nothing gets nothing but the question.
+@remote
+BeeCodersOs remote shell (not encrypted)
+~ ^password: $
+!~ bee:
+# The right password: a shell of its own, with its own directory.
+@remote {pw} | echo hello from afar | mkdir /far | cd /far | pwd | echo kept > note.txt | cat /nope | calc 6 * 7 | exit
+BeeCodersOs remote shell (not encrypted)
+~ ^password: $
+logged in ('exit' ends the session)
+bee:/$ echo hello from afar
+hello from afar
+bee:/$ mkdir /far
+bee:/$ cd /far
+bee:/far$ pwd
+/far
+bee:/far$ echo kept > note.txt
+bee:/far$ cat /nope
+/nope: no such file or directory
+bee:/far$ calc 6 * 7
+42
+bee:/far$ exit
+# What is typed as the password is never sent back.
+!~ [a-z2-9]{4}-[a-z2-9]{4}-[a-z2-9]{4}
+# The local shell went on by itself, and sees what the remote one did.
+$ pwd
+/
+[remote] login to the remote shell
+[remote] wrong password on the remote shell (3 times)
+$ cat /far/note.txt
+kept
+# From a remote session the service can be looked at, not changed.
+@remote {pw} | remote | remote off | remote password | remote on 99 | ^D
+logged in ('exit' ends the session)
+bee:/$ remote
+remote shell: on, telnet 10.0.2.15
+since boot: 2 logins, 3 wrong passwords; someone is connected now
+bee:/$ remote off
+remote: this can only be changed on the machine's own console
+bee:/$ remote password
+remote: this can only be changed on the machine's own console
+bee:/$ remote on 99
+remote: this can only be changed on the machine's own console
+!~ shown only now
+# Ctrl+C drops a line; a client that just disappears in the middle of a
+# command leaves nothing running.
+@remote {pw} | ^C | nc {echo}
+~ ^bee:/\$ \^C$
+~ ^connected to 10\.0\.2\.2 port \d+
+$ pwd
+[remote] login to the remote shell (2 times)
+$ threads
+!~ remote-shell
+~ remote     waiting
+$ remote
+remote shell: on, telnet 10.0.2.15
+since boot: 3 logins, 3 wrong passwords; nobody is connected
+# It stays on across a reboot, with the same password.
+@reboot
+~ ^\[remote\] remote shell on port 23, not encrypted \('remote' for details\)$
+$ net dhcp
+~ ^address 10\.0\.2\.15/24 \(DHCP\)
+@remote {pw} | cat /far/note.txt | exit
+logged in ('exit' ends the session)
+kept
+# A new password: the old one no longer works.
+$ remote password
+~ ^password: [a-hjkmnp-z2-9]{4}-[a-hjkmnp-z2-9]{4}-[a-hjkmnp-z2-9]{4}   \(shown only now
+!~ not encrypted
+@capture new ^password: (\S+)
+@remote {pw}
+wrong password
+!~ logged in
+@remote {new} | exit
+logged in ('exit' ends the session)
+# Another port.
+$ remote on 2323
+remote shell on, port 2323 (saved)
+password: as before ('remote password' makes a new one)
+@remote
+(no answer)
+$ remote
+remote shell: on, telnet 10.0.2.15 2323
+$ remote on 0
+usage: remote on [PORT]   (port 1-65535)
+$ remote maybe
+usage: remote [on [PORT] | off | password]
+# Off again: the port is closed, the thread is gone.
+$ remote on
+$ remote off
+remote shell off (saved)
+@remote {new}
+(no answer)
+$ threads
+!~ remote
+# The log knows that logins happened: no passwords, no addresses.
+$ cat /system/log/events.jsonl
+~ "ev":"remote","state":"login","count":1
+~ "ev":"remote","state":"refused","count":3
+!~ [a-z2-9]{4}-[a-z2-9]{4}-[a-z2-9]{4}
+!~ 10\.0\.2\.
+@reboot
+!~ \[remote\]
+@remote {new}
+(no answer)

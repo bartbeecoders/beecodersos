@@ -7,7 +7,7 @@ use crate::vga::Color;
 use crate::aibridge::{self, Outcome};
 use crate::json::Obj;
 use crate::ring::Global;
-use crate::{allocator, bootslots, httpd, console, crash, eventlog, keyboard, net, pci, power, selftest, thread, time};
+use crate::{allocator, bootslots, httpd, remote, session, console, crash, eventlog, keyboard, net, pci, power, selftest, thread, time};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -59,6 +59,11 @@ pub struct Shell {
     last_crash: Option<crash::Report>,
     /// Record commands in the event log (off for the self-tests' shell).
     logging: bool,
+    /// In a console session: show what is typed (the remote shell; a test
+    /// that types whole lines does not need it).
+    echo: bool,
+    /// In a console session: `exit` was typed.
+    leave: bool,
 }
 
 impl Shell {
@@ -71,7 +76,14 @@ impl Shell {
             last_failure: None,
             last_crash: None,
             logging: true,
+            echo: false,
+            leave: false,
         }
+    }
+
+    /// The shell of a remote session (remote.rs): it shows what is typed.
+    pub fn remote(storage: Storage) -> Self {
+        Shell { echo: true, ..Shell::new(storage) }
     }
 
     /// A shell whose commands are not recorded in the event log.
@@ -80,16 +92,35 @@ impl Shell {
     }
 
     /// Run in a console session (see session.rs): read command lines from
-    /// its input until it is closed. No line editing: the other end does that.
+    /// its input until it is closed or `exit` is typed. Line editing is
+    /// minimal: Backspace, and Ctrl+C to drop the line.
     pub fn run_session(&mut self) {
-        loop {
+        use crate::input::Key;
+        while !self.leave {
             self.prompt();
             let mut line = String::new();
             loop {
                 match crate::input::read_key() {
-                    crate::input::Key::Enter => break,
-                    crate::input::Key::Char(c) => line.push(c),
-                    crate::input::Key::Ctrl('d') => {
+                    Key::Enter => break,
+                    Key::Char(c) => {
+                        line.push(c);
+                        if self.echo {
+                            print!("{c}");
+                        }
+                    }
+                    Key::Backspace => {
+                        if line.pop().is_some() && self.echo {
+                            print!("\x08 \x08");
+                        }
+                    }
+                    Key::Ctrl('c') => {
+                        line.clear();
+                        if self.echo {
+                            print!("^C");
+                        }
+                        break;
+                    }
+                    Key::Ctrl('d') => {
                         set_last_error(None);
                         return;
                     }
@@ -99,6 +130,7 @@ impl Shell {
             println!();
             self.run_line(&line);
         }
+        set_last_error(None);
     }
 
     /// At boot: report a crash from the previous boot and log this boot.
@@ -155,6 +187,17 @@ impl Shell {
             println!("[net]  {text}");
             let ev = eventlog::event("net").str("state", kind).finish();
             eventlog::write(&mut self.storage.fs(), ev);
+        }
+        let (logins, failures) = remote::take_news();
+        for (count, state, text) in
+            [(logins, "login", "login to the remote shell"), (failures, "refused", "wrong password on the remote shell")]
+        {
+            if count > 0 {
+                let times = if count == 1 { String::new() } else { format!(" ({count} times)") };
+                println!("[remote] {text}{times}");
+                let ev = eventlog::event("remote").str("state", state).num("count", count as i64).finish();
+                eventlog::write(&mut self.storage.fs(), ev);
+            }
         }
     }
 
@@ -348,6 +391,15 @@ impl Shell {
             },
             ("httpd", ["off"]) => self.httpd(None),
             ("httpd", _) => error("usage: httpd [on [PORT] | off]"),
+            ("remote", []) => self.remote_status(),
+            ("remote", ["on"]) => self.remote_command(Some(Some(remote::DEFAULT_PORT))),
+            ("remote", ["on", port]) => match port.parse::<u16>() {
+                Ok(p) if p != 0 => self.remote_command(Some(Some(p))),
+                _ => error("usage: remote on [PORT]   (port 1-65535)"),
+            },
+            ("remote", ["off"]) => self.remote_command(Some(None)),
+            ("remote", ["password"]) => self.remote_command(None),
+            ("remote", _) => error("usage: remote [on [PORT] | off | password]"),
             ("wget", [url]) => self.wget(url, None),
             ("wget", [url, file]) => self.wget(url, Some(file)),
             ("wget", _) => error("usage: wget URL [FILE]   (or: wget URL > FILE)"),
@@ -389,6 +441,7 @@ impl Shell {
                 self.log_power("shutdown");
                 power::shutdown()
             }
+            ("exit" | "logout" | "quit", _) if session::current().is_some() => self.leave = true,
             ("exit" | "logout" | "quit", _) => {
                 println!("BeeShell is the system console; use 'shutdown' or 'reboot'.")
             }
@@ -698,6 +751,56 @@ impl Shell {
                 );
             }
             None => println!("status page off{saved}"),
+        }
+    }
+
+    fn remote_status(&self) {
+        let Some(port) = remote::port() else {
+            return println!("remote shell: off (remote on [PORT] starts it)");
+        };
+        let (logins, failures, connected) = remote::counters();
+        let how = match net::address() {
+            Some(ip) if port == remote::DEFAULT_PORT => format!("telnet {ip}"),
+            Some(ip) => format!("telnet {ip} {port}"),
+            None => format!("port {port}, but the network has no address yet (see net)"),
+        };
+        println!("remote shell: on, {how}");
+        println!(
+            "since boot: {logins} logins, {failures} wrong passwords; {}",
+            if connected { "someone is connected now" } else { "nobody is connected" }
+        );
+    }
+
+    /// `remote on [PORT]` / `remote off` (Some) or `remote password` (None).
+    /// Only from the machine's own console: a remote session can't open the
+    /// door wider or change the lock.
+    fn remote_command(&mut self, switch: Option<Option<u16>>) {
+        if session::current().is_some() {
+            return error("remote: this can only be changed on the machine's own console");
+        }
+        let saved = if self.storage.persistent { " (saved)" } else { " (not saved: RAM disk)" };
+        let password = match switch {
+            Some(port) => match remote::set(port) {
+                Ok(password) => {
+                    match port {
+                        Some(port) => println!("remote shell on, port {port}{saved}"),
+                        None => return println!("remote shell off{saved}"),
+                    }
+                    password
+                }
+                Err(e) => return error(&format!("remote: {e}")),
+            },
+            None => match remote::change_password() {
+                Ok(password) => Some(password),
+                Err(e) => return error(&format!("remote: {e}")),
+            },
+        };
+        match password {
+            Some(p) => println!("password: {p}   (shown only now; 'remote password' makes a new one)"),
+            None => println!("password: as before ('remote password' makes a new one)"),
+        }
+        if switch.is_some() {
+            println!("not encrypted: the password and all that is typed can be read on the network; use it on your own network only");
         }
     }
 
@@ -1150,6 +1253,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("nslookup NAME", "look up the address of a host name"),
     ("nc HOST PORT [TEXT]", "open a TCP connection: type lines, see the answers"),
     ("httpd [on [PORT]|off]", "status page for the local network (off by default)"),
+    ("remote [on|off]", "remote shell with a password, not encrypted (off by default)"),
     ("wget URL [FILE]", "fetch a web address (http://): show it or save it"),
     ("ntp [SERVER]", "set the clock from a time server"),
     ("tftp get|put HOST FILE", "copy a file from / to a TFTP server"),

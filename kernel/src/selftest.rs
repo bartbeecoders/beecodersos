@@ -72,6 +72,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("net: TCP connection between two stacks", net_stack_tcp),
     ("net: web addresses, time replies, host:port (phase N5)", net_clients),
     ("httpd: saved setting", httpd_setting),
+    ("remote shell: setting and password check", remote_shell_guard),
     ("threads: take turns, sleep, end", threads_take_turns),
     ("threads: no switch while the file system is in use", threads_respect_the_file_system),
     ("threads: a second shell runs in its own session", second_shell_session),
@@ -430,6 +431,36 @@ fn net_stack_ping() -> TestResult {
         }
     }
     check_eq!(a.take_event(), Some(Event::EchoReply { from: ip_b, id: 7, seq: 1, ttl: 64, len: 3 }));
+    Ok(())
+}
+
+fn remote_shell_guard() -> TestResult {
+    use crate::remote::{new_password, parse_setting, password_matches};
+    check_eq!(parse_setting("on\n"), Some(23));
+    check_eq!(parse_setting("on 2323"), Some(2323));
+    for text in ["", "off", "on 0", "on 70000", "on 23 extra", "yes"] {
+        check_eq!(parse_setting(text), None);
+    }
+    // Made-up passwords: the right shape, only clear characters, never twice the same.
+    let (a, b) = (new_password(), new_password());
+    check!(a != b);
+    for p in [&a, &b] {
+        check_eq!(p.len(), 14);
+        for (i, c) in p.chars().enumerate() {
+            check_eq!(c == '-', i == 4 || i == 9);
+            check!(c == '-' || (c.is_ascii_lowercase() || c.is_ascii_digit()) && !"01ilo".contains(c));
+        }
+    }
+    check!(password_matches(&a, &a));
+    check!(password_matches(&a.replace('-', "").to_ascii_uppercase(), &a)); // typed without dashes, in capitals
+    check!(!password_matches(&b, &a));
+    check!(!password_matches(&a[..13], &a));
+    check!(!password_matches(&format!("{a}x"), &a));
+    check!(!password_matches("", &a));
+    // No password, or a damaged file: nothing matches, not even the same text.
+    check!(!password_matches("", ""));
+    check!(!password_matches("abc", "abc"));
+    check!(!password_matches("", "-- -"));
     Ok(())
 }
 

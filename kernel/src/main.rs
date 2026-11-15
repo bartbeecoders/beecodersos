@@ -23,6 +23,7 @@ mod e1000;
 mod editor;
 mod eventlog;
 mod httpd;
+mod remote;
 mod input;
 mod json;
 mod interrupts;
@@ -119,6 +120,9 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info: u32) -> ! {
     }
     if let Some(port) = httpd::load() {
         println!("[httpd] status page on port {port} ('httpd' for details)");
+    }
+    if let Some(port) = remote::load() {
+        println!("[remote] remote shell on port {port}, not encrypted ('remote' for details)");
     }
     shell.boot_report();
     match slot_report {

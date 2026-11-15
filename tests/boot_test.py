@@ -36,12 +36,19 @@ Scenario files (tests/scenarios/*.scn):
                                files hello.txt and big.bin (200 000 bytes): {tftp} is its
                                address. Fetching "compare:A:B" tells whether its files A and
                                B are identical
-    @forward                   (first lines, with @net) let the test reach the OS's port 80
-                               from the host (for `@request`)
+    @forward                   (first lines, with @net) let the test reach the OS's ports 80
+                               (for `@request`) and 23 (for `@remote`) from the host
     @request METHOD PATH       (with @forward) send that HTTP request to the OS; the lines of
                                the answer (status line, headers, body) are checked like a
                                command's output. No answer: the one line "(no answer)".
                                `@request raw TEXT` sends TEXT as it is (\r \n allowed)
+    @capture NAME REGEX        remember group 1 of REGEX in the last command's output: {NAME}
+                               in later commands and `@remote` lines becomes that text
+    @remote LINE | LINE ...    (with @forward) connect to the OS's remote shell and type
+                               these lines one by one (^C / ^D: those keys); everything it
+                               sent is checked like a command's output. Telnet option bytes
+                               are left out. No answer: the one line "(no answer)".
+                               `@remote` alone only connects and listens
 Without @wire or @net the machine has no network card.
     @net                       (first lines) connect the card to QEMU's built-in network: a
                                DHCP server (gives 10.0.2.15/24) and a gateway at 10.0.2.2
@@ -127,7 +134,7 @@ class Vm:
     """One QEMU run with the serial port on stdin/stdout."""
 
     def __init__(self, *, kernel_args=None, cdrom=None, disk=None, uefi=False, ai_port=None, bootdisk=None,
-                 wire=None, usernet=None, forward=None):
+                 wire=None, usernet=None, forward=None, forward_shell=None):
         cmd = ["qemu-system-x86_64", "-m", "128M", "-display", "none", "-serial", "stdio",
                "-monitor", "none", "-no-reboot",
                "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04"]
@@ -150,6 +157,7 @@ class Vm:
         if usernet:  # QEMU's user-mode network; "isolated": cut off from the host and beyond
             restrict = "on" if usernet == "isolated" else "off"
             fwd = f",hostfwd=tcp:127.0.0.1:{forward}-:80" if forward else ""
+            fwd += f",hostfwd=tcp:127.0.0.1:{forward_shell}-:23" if forward_shell else ""
             cmd += ["-netdev", f"user,id=n0,restrict={restrict}{fwd}", "-device", f"e1000,netdev=n0,mac={WIRE_MAC}"]
             if USE_KVM:
                 # With KVM's in-kernel timer, QEMU's main loop sleeps up to a second, and its
@@ -306,6 +314,10 @@ def parse_scenario(path: Path):
             steps.append((kind, extra.strip(), []))
         elif line.startswith("@request "):
             steps.append(("request", line[9:].strip(), []))
+        elif line == "@remote" or line.startswith("@remote "):
+            steps.append(("remote", line[8:].strip(), []))
+        elif line.startswith("@capture "):
+            steps.append(("capture", line[9:].strip(), []))
         elif line == "@reboot":
             steps.append(("reboot", "(reboot)", []))
         elif line.startswith("@signal "):
@@ -725,6 +737,42 @@ def http_request(port: int, request: str) -> list[str]:
     return [line.rstrip("\r") for line in answer.decode(errors="replace").split("\n")]
 
 
+def remote_talk(port: int, items: list[str]) -> list[str]:
+    """Type lines into the OS's remote shell (see @remote); the lines of all it sent."""
+    answer = b""
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as conn:
+            def listen(quiet: float, first: float) -> bool:
+                """Read until nothing came for `quiet` s (waiting up to `first` s for
+                the first byte). False when the OS closed the connection."""
+                nonlocal answer
+                conn.settimeout(first)
+                while True:
+                    try:
+                        piece = conn.recv(65536)
+                    except TimeoutError:
+                        return True
+                    if not piece:
+                        return False
+                    answer += piece
+                    conn.settimeout(quiet)
+
+            is_open = listen(0.5, 5)
+            for item in items:
+                if not is_open:
+                    break
+                conn.sendall({"^C": b"\x03", "^D": b"\x04"}.get(item, item.encode() + b"\r\n"))
+                is_open = listen(0.5, 5)
+            if is_open:
+                listen(1.5, 1.5)
+    except OSError:
+        pass
+    answer = re.sub(rb"\xff[\xfb-\xfe].", b"", answer)  # Telnet options
+    if not answer:
+        return ["(no answer)"]
+    return [line.rstrip("\r") for line in answer.decode(errors="replace").split("\n")]
+
+
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -787,9 +835,11 @@ def test_scenario(path: Path):
         # The fake servers listen on the host, so the guest must be able to reach it.
         usernet = ("open" if servers else "isolated") if "net" in opts else None
         forward = free_port() if "forward" in opts else None
+        forward_shell = free_port() if "forward" in opts else None
         boot = lambda: Vm(disk=disk, ai_port=ai_port, bootdisk=bootdisk, wire=wire.ports if wire else None,
-                          usernet=usernet, forward=forward)
+                          usernet=usernet, forward=forward, forward_shell=forward_shell)
         vm = boot()
+        out = []
         try:
             boot_to_prompt(vm)
             if wire:
@@ -808,6 +858,21 @@ def test_scenario(path: Path):
                     if not forward:
                         raise TestFailure(f"{path.name}: @request needs @forward")
                     check_output(path, f"@request {cmd}", http_request(forward, cmd), expectations)
+                    continue
+                if kind == "remote":
+                    if not forward_shell:
+                        raise TestFailure(f"{path.name}: @remote needs @forward")
+                    for name, value in names.items():
+                        cmd = cmd.replace(name, value)
+                    items = [item.strip() for item in cmd.split("|")] if cmd else []
+                    check_output(path, "@remote", remote_talk(forward_shell, items), expectations)
+                    continue
+                if kind == "capture":
+                    name, _, pattern = cmd.partition(" ")
+                    found = next((m for m in (re.search(pattern, line) for line in out) if m), None)
+                    if not found:
+                        raise TestFailure(f"{path.name}: @capture {name}: nothing in the last output matches {pattern}")
+                    names["{%s}" % name] = found.group(1)
                     continue
                 if kind == "reboot":
                     vm.shutdown()

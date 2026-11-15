@@ -23,6 +23,7 @@ pub mod http;
 pub mod sntp;
 mod stack;
 mod tcp;
+pub mod telnet;
 pub mod tftp;
 pub mod wire;
 

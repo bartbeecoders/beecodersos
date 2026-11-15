@@ -74,7 +74,8 @@ pub(crate) fn decode_for_test(bytes: &[u8]) -> Vec<Key> {
     bytes.iter().filter_map(|&b| d.feed(b)).collect()
 }
 
-struct SerialDecoder {
+/// Bytes to keys; also used for the remote shell's input (remote.rs).
+pub(crate) struct SerialDecoder {
     esc: [u8; 8],
     esc_len: usize,
     utf8: [u8; 4],
@@ -83,11 +84,11 @@ struct SerialDecoder {
 }
 
 impl SerialDecoder {
-    const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         SerialDecoder { esc: [0; 8], esc_len: 0, utf8: [0; 4], utf8_len: 0, last_cr: false }
     }
 
-    fn feed(&mut self, b: u8) -> Option<Key> {
+    pub(crate) fn feed(&mut self, b: u8) -> Option<Key> {
         let after_cr = core::mem::take(&mut self.last_cr);
         if self.esc_len > 0 {
             return self.feed_escape(b);
