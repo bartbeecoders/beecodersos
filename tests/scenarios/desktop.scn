@@ -1,13 +1,10 @@
 # The graphical desktop: a light blue background and the terminal in a
-# window. The screenshots check real pixels: the background in the corners
-# (a8d0f0), the window's title bar (3a6ea5) and the black inside of the terminal.
-$ desktop
-desktop: off ('desktop on' starts it)
-$ desktop on
-desktop on
-@screenshot 1920x1080 pixels 0,0=a8d0f0 1919,1079=a8d0f0 30,540=a8d0f0 960,78=3a6ea5 1800,990=000000
+# window. It is on by default. The screenshots check real pixels: the
+# background in the corners (a8d0f0), the window's title bar (3a6ea5) and
+# the black inside of the terminal.
 $ desktop
 desktop: on, the terminal window has 221x56 characters ('desktop off' ends it)
+@screenshot 1920x1080 pixels 0,0=a8d0f0 1919,1079=a8d0f0 30,540=a8d0f0 960,78=3a6ea5 1800,990=000000
 $ display
 mode: 1920x1080, 32 bits per pixel
 text: 221x56 characters (8x16 font)
@@ -34,12 +31,17 @@ text: 114x39 characters (8x16 font)
 desktop: on
 @screenshot 1024x768 pixels 0,0=a8d0f0 1023,767=a8d0f0 512,56=3a6ea5
 
-# Off: the terminal has the whole screen again.
+# Off: the terminal has the whole screen again, and keeps its text.
 $ desktop off
-desktop off
+desktop off (RAM disk: not kept after reboot)
 $ display
 text: 128x48 characters (8x16 font)
 desktop: off
 @screenshot 1024x768 text
+$ desktop
+desktop: off ('desktop on' starts it)
+$ desktop on
+desktop on (RAM disk: not kept after reboot)
+@screenshot 1024x768 pixels 0,0=a8d0f0 1023,767=a8d0f0 512,56=3a6ea5
 $ desktop sideways
 usage: desktop [on | off]

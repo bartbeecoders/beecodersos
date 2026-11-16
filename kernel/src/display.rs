@@ -6,12 +6,13 @@
 //! `DRIVERS`; when none finds its hardware the VGA text screen stays.
 //! Plan: Docs/display-driver-plan.html.
 //!
-//! Boot flags: `display=bochs|text` picks a driver (`text`: none), and
-//! `mode=1920x1080` asks for a size.
+//! Boot flags: `display=bochs|bootfb|text` picks a driver (`text`: none), and
+//! `mode=1920x1080` asks for a size (from a driver that can set one).
 //!
 //! Add a driver: a file with a `probe` function, and one line in `DRIVERS`.
 
 use crate::ring::Global;
+use crate::bootfb::{self, Boot};
 use crate::{bochs, bootargs, pci};
 use alloc::boxed::Box;
 use alloc::format;
@@ -112,8 +113,9 @@ pub trait DisplayDriver {
 
 type Probe = fn(&[pci::Device]) -> Option<Box<dyn DisplayDriver>>;
 
-/// Tried from top to bottom; the first that finds its hardware wins.
-const DRIVERS: &[(&str, Probe)] = &[("bochs", bochs::probe)];
+/// Tried from top to bottom; the first that finds its hardware wins. A
+/// driver that can set modes comes before the one that cannot.
+const DRIVERS: &[(&str, Probe)] = &[("bochs", bochs::probe), ("bootfb", bootfb::probe)];
 
 /// Asked for when no `mode=` flag says otherwise, then these in turn.
 pub const DEFAULT_MODE: (u32, u32) = (1920, 1080);
@@ -157,12 +159,21 @@ pub fn usable(addr: u64, mode: &Mode) -> bool {
 pub fn init() -> (Option<Target>, Vec<String>) {
     let mut notes = Vec::new();
     let mut choice = bootargs::value("display");
+    let boot = bootfb::boot();
+    if let Boot::Unusable(why) = boot {
+        notes.push(format!("the bootloader's graphics mode cannot be used: {why} ({})", bootfb::describe_raw()));
+    }
     if choice == Some("text") {
-        return (None, notes);
+        if boot == Boot::Text {
+            return (None, notes);
+        }
+        // Staying on a text screen that is not there would leave the screen black.
+        notes.push(String::from("display=text: the bootloader started a graphics mode, so there is no text screen"));
+        choice = None;
     }
     if let Some(name) = choice {
         if !DRIVERS.iter().any(|(n, _)| *n == name) {
-            notes.push(format!("display={name}: no such driver (bochs, text); choosing one myself"));
+            notes.push(format!("display={name}: no such driver (bochs, bootfb, text); choosing one myself"));
             choice = None;
         }
     }
@@ -179,6 +190,12 @@ pub fn init() -> (Option<Target>, Vec<String>) {
             continue;
         }
         let Some(mut driver) = probe(&devices) else { continue };
+        // A driver that takes over a mode has one already.
+        if let Some(mode) = driver.mode() {
+            let target = Target { framebuffer: driver.framebuffer(), mode };
+            *DRIVER.get() = Some(driver);
+            return (Some(target), notes);
+        }
         let sizes = wanted.into_iter().chain([DEFAULT_MODE]).chain(SMALLER_MODES.iter().copied());
         for (width, height) in sizes {
             match driver.set_mode(width, height) {

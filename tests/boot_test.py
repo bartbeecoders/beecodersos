@@ -5,7 +5,9 @@ the serial port. Exits 0 when every test passes, 1 otherwise.
     tests/boot_test.py all                 everything below (what `make check` runs)
     tests/boot_test.py selftest            in-kernel self-tests (`selftest` boot flag)
     tests/boot_test.py scenarios [FILE..]  shell scenarios in tests/scenarios/*.scn
-    tests/boot_test.py iso                 boot build/beecoders.iso (BIOS) and shut down
+    tests/boot_test.py iso                 boot build/beecoders.iso (BIOS) and shut down; once more
+                                           with a graphics card only the bootloader can set up
+                                           (the `bootfb` display driver), checking the picture
     tests/boot_test.py iso-uefi            same with OVMF (skipped if OVMF is missing)
 
 Options: -v (print all serial output), --no-kvm (pure emulation).
@@ -1032,15 +1034,36 @@ def test_scenario(path: Path):
                 hive.wait()
 
 
-def test_iso(uefi=False):
+def test_iso(uefi=False, bootfb=False):
+    """Boot the ISO through Limine. With `bootfb` the graphics card is a Cirrus: the kernel
+    has no driver for it, so the screen must come from the framebuffer the bootloader set
+    up (VBE under BIOS, GOP under UEFI), and the desktop must really be on it."""
     if not ISO.exists():
         raise TestFailure(f"{ISO} missing: run `make iso`")
-    vm = Vm(cdrom=ISO, uefi=uefi)
+    vm = Vm(cdrom=ISO, uefi=uefi, vga="cirrus" if bootfb else None, qmp=free_port() if bootfb else None)
     try:
         boot_to_prompt(vm)
         out = vm.command("version")
         if not any(l.startswith("BeeCodersOs ") for l in out):
             raise TestFailure("`version` printed:\n" + "\n".join(out))
+        if bootfb:
+            shown = vm.command("display")
+            mode = next((l for l in shown if l.startswith("mode: ")), "no mode")
+            if "driver: bootfb" not in shown:
+                raise TestFailure("`display` should show the bootfb driver, it printed:\n" + "\n".join(shown))
+            with tempfile.TemporaryDirectory(prefix="beetest-") as tmp:
+                deadline = time.monotonic() + 3
+                while True:
+                    width, height, pixels = vm.screenshot(Path(tmp) / "screen.ppm")
+                    corners = {pixels[3 * i:3 * i + 3].hex() for i in (0, width - 1, width * height - 1)}
+                    if f"mode: {width}x{height}," in mode and corners == {"a8d0f0"}:  # wm::BACKGROUND
+                        break
+                    if time.monotonic() > deadline:
+                        raise TestFailure(f"the screen is {width}x{height} with corners {sorted(corners)}; expected "
+                                          f"the desktop background (a8d0f0) and `{mode}`")
+                    time.sleep(0.3)
+            vm.shutdown()
+            return f"bootfb, {mode}"
         vm.shutdown()
         return out[0]
     finally:
@@ -1072,9 +1095,11 @@ def main():
         tests += [(f"scenario {f.stem}", lambda f=f: test_scenario(f)) for f in files]
     if args.suite in ("all", "iso"):
         tests.append(("iso (BIOS)", test_iso))
+        tests.append(("iso (BIOS, bootloader's framebuffer)", lambda: test_iso(bootfb=True)))
     if args.suite in ("all", "iso-uefi"):
         if OVMF_CODE.exists():
             tests.append(("iso (UEFI)", lambda: test_iso(uefi=True)))
+            tests.append(("iso (UEFI, bootloader's framebuffer)", lambda: test_iso(uefi=True, bootfb=True)))
         else:
             print(f"skip  iso (UEFI): {OVMF_CODE} not found")
 

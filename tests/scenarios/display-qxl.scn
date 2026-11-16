@@ -1,7 +1,7 @@
 # The QXL card (what vm1 has) takes the same driver, and `mode=` on the
 # kernel command line chooses the resolution at boot.
 @vga qxl
-@args mode=1024x768
+@args mode=1024x768 desktop=off
 $ display
 driver: bochs
 mode: 1024x768, 32 bits per pixel

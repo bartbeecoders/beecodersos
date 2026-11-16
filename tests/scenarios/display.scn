@@ -1,6 +1,8 @@
 # The graphics console (display driver plan, phase G1): on QEMU's standard
 # graphics card the bochs driver sets 1920x1080 at boot, and text is drawn
 # with the built-in font. The screenshots check what a monitor would show.
+# The desktop is off here: this is about the full-screen console.
+@args desktop=off
 $ display
 driver: bochs
 mode: 1920x1080, 32 bits per pixel

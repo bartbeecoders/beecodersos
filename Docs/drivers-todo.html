@@ -113,6 +113,7 @@ ul.items { list-style: none; padding: 0; margin: 12px 0; }
 <tr><td>15 Nov 2026</td><td>0.0.3 b3</td><td>SATA driver works: <code>[disk] SATA port 0 "OCZ-AGILITY3", 114473 MiB: not BeeFS, left untouched</code>. Keyboard types. ACPI found (power button on IRQ 9, power off S5, reset register). No supported network card. <code>lspci</code>: see the device table below.</td></tr>
 <tr><td>15 Nov 2026</td><td>0.0.3 b5</td><td>Network card found: <code>Intel I217-LM</code>, link up at 1000 Mb/s full duplex, PHY answers (<code>015400a4</code>), 85 frames received from the network. But no DHCP answer after 8 requests: either our frames do not reach the wire, or the answers are not accepted.</td></tr>
 <tr><td>15 Nov 2026</td><td>0.0.3 b6</td><td>With a fixed address: <code>on the wire: 0 sent (16 stuck), 4120 received</code>. The card receives but takes no frame from the transmit queue.</td></tr>
+<tr><td>16 Nov 2026</td><td>0.0.3 b24</td><td>Graphics work: the HP boots to the desktop with the terminal window, drawn in the mode the bootloader set up (<code>bootfb</code> driver). <code>display</code> shows the monitor's own resolution, and typing works. Not noted: the resolution itself, and whether this was legacy BIOS or UEFI boot.</td></tr>
 <tr><td>15 Nov 2026</td><td>0.0.3 b7</td><td>Network works: DHCP gives an address, and the HP answers a ping from another machine (4 of 4, about 9 ms). b7 tells the management firmware that a driver has taken over, keeps the chip's own bits in the transmit control register, and sets the usual queue thresholds; which of the three was needed is not known.</td></tr>
 <tr><td></td><td>next build</td><td><i>to do: the output of <code>net</code>, above all the line <code>on the wire: N sent (N stuck), ...</code>; if there is still no address, try <code>net static</code> with a free address of your network and <code>ping</code> the router</i></td></tr>
 </table></div>
@@ -132,7 +133,7 @@ ul.items { list-style: none; padding: 0; margin: 12px 0; }
 <div class="table-wrap"><table>
 <tr><th>Address</th><th>Device</th><th>What it is</th><th>Driver</th></tr>
 <tr><td><code>00:00.0</code></td><td><code>0c00</code></td><td>Host bridge (Haswell)</td><td>none needed</td></tr>
-<tr><td><code>00:02.0</code></td><td><code>0412</code></td><td>Graphics: HD Graphics 4600</td><td>VGA text now; A2 later</td></tr>
+<tr><td><code>00:02.0</code></td><td><code>0412</code></td><td>Graphics: HD Graphics 4600</td><td>works through the bootloader's framebuffer (A2); no driver of our own (X3)</td></tr>
 <tr><td><code>00:03.0</code></td><td><code>0c0c</code></td><td>Sound over DisplayPort / HDMI</td><td>X2, not planned</td></tr>
 <tr><td><code>00:14.0</code></td><td><code>8c31</code></td><td>USB 3 controller (xHCI)</td><td>U1</td></tr>
 <tr><td><code>00:16.0</code></td><td><code>8c3a</code></td><td>Management engine interface</td><td>none planned</td></tr>
@@ -205,9 +206,9 @@ ul.items { list-style: none; padding: 0; margin: 12px 0; }
 <p>Seen working on the HP: commands can be typed at the prompt.</p>
 <p class="facts">Which kind of keyboard (PS/2, or USB through the BIOS) was not noted. Under UEFI a USB keyboard will need U1 and U2.</p>
 </li>
-<li class="item" data-status="todo" id="A2">
+<li class="item" data-status="done" id="A2">
 <h4><span class="id">A2</span> Framebuffer console <span class="size">M</span> <span class="st"></span></h4>
-<p>Draw text ourselves on the graphics framebuffer the bootloader hands over, with a built-in bitmap font. Unlocks UEFI boot (which has no text mode), more than 80x25 characters, and the DisplayPort outputs. No graphics-card driver is needed. Worked out in <a href="display-driver-plan.html">the display driver plan</a> (phases G1 and G2). G1 is done: the console draws its own text at 1920x1080 in QEMU. The HP needs G2 (the framebuffer from the bootloader).</p>
+<p>Draw text ourselves on the graphics framebuffer the bootloader hands over, with a built-in bitmap font. Unlocks UEFI boot (which has no text mode), more than 80x25 characters, and the DisplayPort outputs. No graphics-card driver is needed. Worked out in <a href="display-driver-plan.html">the display driver plan</a> (phases G1 and G2). G1 and G2 are done in QEMU: the console draws its own text at 1920x1080 on QEMU's cards, and in the bootloader's graphics mode on any other card, under legacy BIOS and UEFI. <b>Seen working on the HP</b> (16 Nov 2026, b24): it boots to the desktop with the terminal window, and <code>display</code> shows the monitor's own resolution.</p>
 <p class="facts">Code: <code>vga.rs</code>, <code>console.rs</code>, <code>boot.s</code> (protected: Multiboot header). Test: the UEFI ISO boot gets a screen.</p>
 </li>
 </ul>

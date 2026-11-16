@@ -1,0 +1,21 @@
+# The desktop is on by default, and `desktop off` / `desktop on` are
+# remembered on the disk for the next boot.
+@disk
+$ desktop
+desktop: on, the terminal window has 221x56 characters ('desktop off' ends it)
+$ cat /system/desktop
+/system/desktop: no such file or directory
+$ desktop off
+desktop off (saved)
+$ cat /system/desktop
+off
+@reboot
+$ desktop
+desktop: off ('desktop on' starts it)
+@screenshot 1920x1080 text
+$ desktop on
+desktop on (saved)
+@reboot
+$ desktop
+desktop: on, the terminal window has 221x56 characters ('desktop off' ends it)
+@screenshot 1920x1080 pixels 0,0=a8d0f0 1919,1079=a8d0f0 960,78=3a6ea5

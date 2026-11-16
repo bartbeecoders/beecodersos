@@ -15,6 +15,8 @@ use alloc::vec::Vec;
 use beefs::{normalize, FileKind, FsError};
 
 const LAYOUT_FILE: &str = "/system/keyboard";
+/// "on" or "off": the desktop (`desktop on` / `desktop off`). No file: on.
+const DESKTOP_FILE: &str = "/system/desktop";
 /// Contains "off" when the AI features are switched off (`ai off`).
 const AI_SWITCH: &str = "/system/ai";
 /// Network settings: "dhcp", "none" or "static IP/PREFIX [GATEWAY]", and
@@ -163,6 +165,28 @@ impl Shell {
                 keyboard::set_layout(l);
             }
         }
+    }
+
+    /// Follow the desktop choice saved on disk, if any (default: on).
+    pub fn load_desktop(&mut self) {
+        let data = self.storage.fs().read_file(DESKTOP_FILE).ok();
+        console::apply_desktop_setting(data.as_deref().and_then(|d| core::str::from_utf8(d).ok()));
+    }
+
+    /// `desktop on` / `desktop off`: switch, and remember it for the next boot.
+    fn desktop(&mut self, state: &str) {
+        if let Err(e) = console::set_desktop(state == "on") {
+            return error(&format!("desktop {state}: {e}"));
+        }
+        let mut fs = self.storage.fs();
+        let saved = fs.mkdir_all("/system").and_then(|_| fs.write_file(DESKTOP_FILE, format!("{state}\n").as_bytes()));
+        drop(fs);
+        let note = match (saved, self.storage.persistent) {
+            (Ok(()), true) => " (saved)",
+            (Ok(()), false) => " (RAM disk: not kept after reboot)",
+            (Err(_), _) => " (could not save)",
+        };
+        println!("desktop {state}{note}");
     }
 
     pub fn run(&mut self) -> ! {
@@ -467,10 +491,7 @@ impl Shell {
                 println!("desktop: on, the terminal window has {cols}x{rows} characters ('desktop off' ends it)")
             }
             ("desktop", []) => println!("desktop: off ('desktop on' starts it)"),
-            ("desktop", [state @ ("on" | "off")]) => match console::set_desktop(*state == "on") {
-                Ok(()) => println!("desktop {state}"),
-                Err(e) => error(&format!("desktop {state}: {e}")),
-            },
+            ("desktop", [state @ ("on" | "off")]) => self.desktop(state),
             ("desktop", _) => error("usage: desktop [on | off]"),
             ("slots", []) => match bootslots::describe() {
                 Some(text) => println!("{text}"),
@@ -1305,7 +1326,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("lspci [-v]", "list PCI devices (-v: what each one can do)"),
     ("threads", "what runs side by side inside the kernel"),
     ("display [mode WxH]", "screen: driver and resolution; change it; 'display test': color bars"),
-    ("desktop [on|off]", "graphical desktop: the terminal in a window"),
+    ("desktop [on|off]", "graphical desktop: the terminal in a window (on by default; saved)"),
     ("slots", "A/B kernel slots: which one runs, last trial"),
     ("crash", "deliberately crash the kernel (tests crash reports)"),
     ("reboot, shutdown", "restart / power off"),

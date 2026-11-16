@@ -139,11 +139,10 @@ hardware, and how far it is, is in `Docs/drivers-todo.html`.
 (double-check `/dev/sdX`!). Limine loads the kernel with the Multiboot 1 protocol
 (`boot/limine.conf`).
 
-> UEFI note: UEFI firmware has no VGA text mode, so on UEFI real hardware all
-> output (and the terminal) only appears on the serial port; the keyboard still
-> works. In QEMU the `bochs` display driver gives a screen under UEFI too. For
-> real hardware this is phase G2 of `Docs/display-driver-plan.html`.
-> BIOS/CSM boots show everything on screen.
+> UEFI note: UEFI firmware has no VGA text mode. The kernel asks the bootloader
+> for a graphics mode and draws its own console in it (the `bootfb` display
+> driver, see the display sections below), so UEFI boots have a screen too.
+> The boot menu's second entry, "text screen", only works in legacy BIOS boot.
 
 Or by hand: `qemu-system-x86_64 -enable-kvm -kernel build/beecoders.elf`
 
@@ -206,6 +205,7 @@ kernel/
   src/console.rs       print!/println! to the screen + serial, line redraw helpers
   src/display.rs       display drivers: the interface, the list, `display=` / `mode=` flags
   src/bochs.rs         display driver for the Bochs/QEMU graphics card (sets any resolution)
+  src/bootfb.rs        display driver for the framebuffer the bootloader set up (any card, fixed mode)
   src/fbcon.rs         framebuffer console: text drawn as pixels, for any resolution
   src/font.rs          the 8x16 console font (Spleen, BSD license), generated table
   src/gfx.rs           drawing on a framebuffer: rectangles and characters, always clipped
@@ -935,7 +935,8 @@ framebuffer, at any resolution.
   Spleen 8x16 font (`kernel/src/font.rs`). No heap, no waiting: it works
   during a panic too.
 - **`display`** shows driver, resolution and size in characters;
-  **`display mode WIDTHxHEIGHT`** changes the resolution (not saved yet);
+  **`display mode WIDTHxHEIGHT`** changes the resolution (not saved yet; the
+  text on screen stays);
   **`display test`** shows color bars until Enter, then tells how long drawing
   the whole screen took.
 - **Boot flags:** `display=text` keeps the text screen (the way back if graphics
@@ -946,22 +947,59 @@ framebuffer, at any resolution.
   QEMU (`@screenshot`), on the standard card, on QXL, without a supported card
   (`@vga`) and with `display=text` (`@args`).
 
-Not yet: real hardware and UEFI still have no graphics (phase G2: the
-bootloader's framebuffer), and there is one font size.
+Not yet: one font size only, and `display mode` is not saved.
+
+## Display — phase G2: the bootloader's framebuffer (real hardware, UEFI) ✅
+
+```
+[disp] driver: bootfb, mode: 1024x768, 24 bits per pixel, text: 114x39 characters (8x16 font), desktop: on
+```
+
+Graphics on machines we have no graphics-card driver for, which is every real
+one. The bootloader sets the mode and the kernel draws in it.
+
+- **The request** (`kernel/src/boot.s`): the Multiboot header asks for
+  1920x1080 with 32 bits per pixel. Limine gets it from the firmware (VBE in
+  legacy BIOS boot, GOP in UEFI boot), or the nearest mode the firmware has.
+- **`bootfb` driver** (`kernel/src/bootfb.rs`): reads where the framebuffer is
+  from the Multiboot info and checks it before use: a pixel format we can
+  draw (32, 24 or 16 bits), lines that hold their pixels, everything below
+  4 GiB. If it fails a check, the boot log says what the bootloader offered.
+  The mode is fixed: `display mode` says so.
+- **Order:** `bochs` first (it can change the mode), then `bootfb`, then the
+  text screen. `display=bootfb` insists on the bootloader's mode.
+- **First boot lines:** in a graphics mode there is no text screen, so what
+  is printed before the driver starts is kept and shown once it has.
+- **Way back:** the ISO's boot menu now waits 3 seconds and has a second
+  entry, "text screen", for the 80x25 screen (legacy BIOS boot only). Under
+  UEFI `display=text` cannot work; the kernel says so and uses graphics.
+- **Tests:** a self-test feeds the parser good, wrong, cut-off and random
+  bootloader data. `make check` boots the ISO two more times with a graphics
+  card only the bootloader can set up (BIOS: 1024x768 with 24 bits; UEFI:
+  800x600) and checks the desktop on a screenshot.
+- QEMU's own `-kernel` loader cannot set a mode and prints
+  `multiboot knows VBE. we don't` at every start: harmless, the `bochs`
+  driver takes over there.
+
+Seen working on the HP (EliteDesk 800 G1): it boots to the desktop at the
+monitor's own resolution. Not done: a framebuffer above 4 GiB (reported, not
+used), and the A/B boot disk has no "text screen" menu entry.
 
 ## Graphical desktop: a terminal in a window ✅
 
 ```
-bee:/$ desktop on
-desktop on
 bee:/$ desktop
 desktop: on, the terminal window has 221x56 characters ('desktop off' ends it)
+bee:/$ desktop off
+desktop off (saved)
 ```
 
-`desktop on` turns the screen into a desktop: a light blue background and one
-window, the terminal. `desktop off` gives the terminal the whole screen again.
-It needs a graphics mode (see the display section above); on the text screen
-it says so.
+With a graphics mode (see the display section above) the OS starts as a
+desktop: a light blue background and one window, the terminal. `desktop off`
+gives the terminal the whole screen again, `desktop on` brings the desktop
+back; the text in the terminal stays. The choice is saved in
+`/system/desktop` and used at the next boot. On the text screen there is no
+desktop.
 
 - **Drawing** (`kernel/src/gfx.rs`): filled rectangles and characters on the
   framebuffer. Every position is checked, so nothing is written outside it.
@@ -970,8 +1008,9 @@ it says so.
   owner draws in. The top window has the focus (a blue title bar; others gray).
 - **Terminal** (the only app): the framebuffer console drawn in the window's
   content area. Everything works as before: colors, scrolling, line editing.
-- The boot flag `desktop` starts with the desktop on. `desktop on` is not
-  saved: after a restart the terminal is full screen again.
+- The boot flags `desktop=off` and `desktop=on` decide for one boot, whatever
+  was saved. The screen is set up before the disk is read, so a machine with
+  the desktop switched off shows it for a moment while booting.
 - **No mouse yet**, so windows cannot be moved or clicked and the close box
   does nothing. A USB mouse is U5 in `Docs/drivers-todo.html`; it needs the
   USB host controller and USB core first (U1, U2).

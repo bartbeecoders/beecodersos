@@ -12,10 +12,11 @@
 //!               a machine where the interrupt line misbehaves)
 //!   `nic=chipset` tests: start the network card the way a chipset card
 //!               (Intel I217) is started, whatever card it is
-//!   `display=bochs|text` which display driver to use (`text`: none, the
+//!   `display=bochs|bootfb|text` which display driver to use (`text`: none, the
 //!               80x25 VGA text screen); see display.rs
 //!   `mode=1920x1080` the screen resolution to ask the display driver for
-//!   `desktop`   start with the desktop on (a graphics mode is needed)
+//!   `desktop=on|off` the desktop for this boot, whatever was saved (plain
+//!               `desktop` means on); see console::desktop_choice
 
 use crate::ring::Global;
 

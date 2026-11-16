@@ -68,10 +68,12 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("slots: parse and patch limine.conf", slots_state),
     ("pci: config address and BAR decoding", pci_decoding),
     ("display: sizes, boot flags, pixel formats, framebuffer checks", display_basics),
+    ("display: the bootloader's framebuffer, also wrong and cut short", bootfb_parsing),
     ("display: text drawn as pixels in every pixel format", fbcon_drawing),
     ("display: wrap, scroll, clear and cursor on a framebuffer", fbcon_screen),
     ("display: odd framebuffer sizes never write outside", fbcon_bounds),
     ("desktop: rectangles and drawing stay inside the screen", gfx_canvas),
+    ("desktop: on by default, boot flag before saved choice", desktop_setting),
     ("desktop: where the terminal window goes", wm_layout),
     ("desktop: background, window frames, terminal inside its window", wm_drawing),
     ("pci: capability lists, also broken ones", pci_capability_lists),
@@ -1258,6 +1260,90 @@ fn wm_drawing() -> TestResult {
         }
         check_eq!(t.pixel(0, 0) == format.encode(wm::BACKGROUND), false); // the last window covers it
         check!(t.untouched_outside());
+    }
+    Ok(())
+}
+
+fn desktop_setting() -> TestResult {
+    let choice = console::desktop_choice;
+    // Nothing said: on.
+    check!(choice("", None) && choice("test slot=a", None));
+    // The saved choice; anything that is not "off" means on.
+    check!(!choice("test", Some("off")) && !choice("test", Some(" off\n")));
+    check!(choice("test", Some("on\n")) && choice("test", Some("")) && choice("test", Some("offline")));
+    // A boot flag wins over what was saved.
+    check!(choice("test desktop=on", Some("off")) && choice("desktop", Some("off")));
+    check!(!choice("test desktop=off", Some("on")) && !choice("desktop=off", None));
+    // Other words that only look like the flag change nothing.
+    check!(!choice("nodesktop desktops=off", Some("off")) && choice("desktops=off", None));
+    Ok(())
+}
+
+fn bootfb_parsing() -> TestResult {
+    use crate::bootfb::{parse, Boot, INFO_LEN};
+    use crate::display::{usable, Mode, PixelFormat::*};
+    // A Multiboot info with a framebuffer: 1920x1080, 32 bits, at 0xE0000000.
+    let info = |addr: u64, pitch: u32, width: u32, height: u32, bits: u8, kind: u8, masks: [u8; 6]| {
+        let mut b = vec![0u8; INFO_LEN];
+        b[0..4].copy_from_slice(&(1u32 << 12 | 0x47).to_le_bytes());
+        b[88..96].copy_from_slice(&addr.to_le_bytes());
+        b[96..100].copy_from_slice(&pitch.to_le_bytes());
+        b[100..104].copy_from_slice(&width.to_le_bytes());
+        b[104..108].copy_from_slice(&height.to_le_bytes());
+        b[108] = bits;
+        b[109] = kind;
+        b[112..118].copy_from_slice(&masks);
+        b
+    };
+    const BGRX: [u8; 6] = [16, 8, 8, 8, 0, 8];
+    let hd = |format, pitch| Mode { width: 1920, height: 1080, pitch, format };
+    let good = info(0xE000_0000, 7680, 1920, 1080, 32, 1, BGRX);
+    check_eq!(parse(&good), Boot::Graphics(0xE000_0000, hd(Xrgb8888, 7680)));
+    check_eq!(parse(&info(0xE000_0000, 7680, 1920, 1080, 32, 1, [0, 8, 8, 8, 16, 8])), Boot::Graphics(0xE000_0000, hd(Xbgr8888, 7680)));
+    check_eq!(parse(&info(0xE000_0000, 5760, 1920, 1080, 24, 1, BGRX)), Boot::Graphics(0xE000_0000, hd(Rgb888, 5760)));
+    check_eq!(parse(&info(0xE000_0000, 3840, 1920, 1080, 16, 1, [11, 5, 5, 6, 0, 5])), Boot::Graphics(0xE000_0000, hd(Rgb565, 3840)));
+    check_eq!(parse(&info(0xE000_0000, 8192, 1920, 1080, 32, 1, BGRX)), Boot::Graphics(0xE000_0000, hd(Xrgb8888, 8192)));
+    // No framebuffer, or the text screen.
+    let mut no_flag = good.clone();
+    no_flag[1] = 0;
+    check_eq!(parse(&no_flag), Boot::Text);
+    check_eq!(parse(&info(0xB8000, 160, 80, 25, 16, 2, [0; 6])), Boot::Text);
+    check_eq!(parse(&[]), Boot::Text);
+    check_eq!(parse(&[0xFF, 0xFF]), Boot::Text);
+    // A graphics mode we must not draw in.
+    let unusable = |b: &[u8]| matches!(parse(b), Boot::Unusable(_));
+    check!(unusable(&info(0xE000_0000, 7680, 1920, 1080, 32, 0, BGRX))); // colors from a palette
+    check!(unusable(&info(0xE000_0000, 7680, 1920, 1080, 32, 7, BGRX))); // no such type
+    check!(unusable(&info(0xE000_0000, 7680, 1920, 1080, 32, 1, [8, 8, 16, 8, 24, 8]))); // odd color order
+    check!(unusable(&info(0xE000_0000, 1920, 1920, 1080, 8, 1, BGRX)));
+    check!(unusable(&info(0xE000_0000, 3840, 1920, 1080, 15, 1, [10, 5, 5, 5, 0, 5])));
+    check!(unusable(&info(0xE000_0000, 7680, 1920, 1080, 0, 1, BGRX)));
+    check!(unusable(&info(0xE000_0000, 7679, 1920, 1080, 32, 1, BGRX))); // lines too short
+    check!(unusable(&info(0xE000_0000, 0, 1920, 1080, 32, 1, BGRX)));
+    check!(unusable(&info(0xE000_0000, 7680, 0, 1080, 32, 1, BGRX)));
+    check!(unusable(&info(0xE000_0000, 7680, 1920, 0, 32, 1, BGRX)));
+    check!(unusable(&info(0, 7680, 1920, 1080, 32, 1, BGRX)));
+    check!(unusable(&info(0x1_0000_0000, 7680, 1920, 1080, 32, 1, BGRX))); // above 4 GiB
+    check!(unusable(&info(0xFFFF_0000, 7680, 1920, 1080, 32, 1, BGRX))); // runs past 4 GiB
+    check!(unusable(&info(u64::MAX, u32::MAX, u32::MAX, u32::MAX, 32, 1, BGRX)));
+    // Cut short at any length: never a framebuffer.
+    for len in 0..INFO_LEN {
+        check!(!matches!(parse(&good[..len]), Boot::Graphics(..)));
+    }
+    check!(unusable(&good[..INFO_LEN - 1]));
+    // Nonsense: whatever comes out as usable passes the framebuffer check.
+    let mut seed = 0x1234_5678u32;
+    for _ in 0..2000 {
+        let mut b = good.clone();
+        for byte in b[88..].iter_mut() {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            if seed >> 28 < 3 {
+                *byte = (seed >> 16) as u8;
+            }
+        }
+        if let Boot::Graphics(addr, mode) = parse(&b) {
+            check!(usable(addr, &mode));
+        }
     }
     Ok(())
 }

@@ -5,15 +5,21 @@
 //! The screen is the VGA text screen (vga.rs) until `start_display` finds a
 //! display driver; from then on it is the framebuffer console (fbcon.rs),
 //! over the whole screen or inside the terminal window of the desktop (wm.rs).
+//!
+//! When the bootloader started a graphics mode there is no text screen: what
+//! is printed before `start_display` only reaches the serial port, and is
+//! shown on screen afterwards from a small buffer (`EARLY`).
 
 use crate::display::{self, DisplayError, Target};
 use crate::fbcon::{self, FbCon};
 use crate::font::{GLYPH_HEIGHT, GLYPH_WIDTH};
 use crate::gfx::Canvas;
 use crate::ring::Global;
+use crate::bootfb::{self, Boot};
 use crate::{bootargs, serial, session, vga, wm};
 use alloc::format;
 use alloc::string::String;
+use alloc::vec::Vec;
 use core::fmt::{self, Write};
 
 /// What characters are drawn on. Both kinds offer the same operations.
@@ -97,6 +103,10 @@ static CELLS: Global<[u16; fbcon::MAX_CELLS]> = Global::new([0; fbcon::MAX_CELLS
 /// The desktop, when it is on: the console is then its terminal window.
 static DESKTOP: Global<Option<wm::Desktop>> = Global::new(None);
 
+/// The first text printed while the screen is the text screen, to show it
+/// again when the bootloader's graphics mode hid that screen.
+static EARLY: Global<([u8; 1024], usize)> = Global::new(([0; 1024], 0));
+
 pub fn init() {
     serial::init();
     SCREEN.get().clear();
@@ -118,12 +128,22 @@ pub fn start_display() -> String {
 
     let (target, notes) = display::init();
     if let Some(target) = target {
-        lay_out(target, bootargs::has("desktop"));
+        // The disk is not mounted yet: the saved choice is applied later
+        // (`apply_desktop_setting`).
+        lay_out(target, desktop_choice(bootargs::cmdline(), None));
         if let Screen::Graphics(screen) = SCREEN.get() {
-            for (i, cell) in saved.iter().enumerate() {
-                screen.put_cell(i / vga::WIDTH, i % vga::WIDTH, *cell);
+            if bootfb::boot() == Boot::Text {
+                for (i, cell) in saved.iter().enumerate() {
+                    screen.put_cell(i / vga::WIDTH, i % vga::WIDTH, *cell);
+                }
+                screen.set_pos(row, col);
+            } else {
+                // The text screen was never visible: print the early lines again.
+                let (text, len) = EARLY.get();
+                let text = &text[..*len];
+                let valid = core::str::from_utf8(text).map_or_else(|e| e.valid_up_to(), |s| s.len());
+                screen.write_str(core::str::from_utf8(&text[..valid]).unwrap_or(""));
             }
-            screen.set_pos(row, col);
             screen.set_attr(attr);
             screen.sync_cursor();
         }
@@ -156,10 +176,39 @@ pub fn size() -> (usize, usize) {
     (screen.width(), screen.height())
 }
 
-/// Put an empty console on the framebuffer: over the whole screen, or with
-/// `desktop` in the terminal window of a new desktop. Returns whether the
-/// desktop is on now (a screen too small for a window gets none).
+/// Should the desktop be on? A boot flag decides first (`desktop=off`,
+/// `desktop=on` or just `desktop`), then what was saved (`/system/desktop`:
+/// "on" or "off"); without either it is on.
+pub fn desktop_choice(cmdline: &str, saved: Option<&str>) -> bool {
+    match bootargs::value_in(cmdline, "desktop") {
+        Some("off") => return false,
+        Some(_) => return true,
+        None if cmdline.split_whitespace().any(|w| w == "desktop") => return true,
+        None => {}
+    }
+    saved.map(str::trim) != Some("off")
+}
+
+/// After the disk is mounted: follow the saved choice (the screen was laid
+/// out before the disk could be read). `saved` is the content of the
+/// settings file, if there is one. Nothing happens on the text screen.
+pub fn apply_desktop_setting(saved: Option<&str>) {
+    let wanted = desktop_choice(bootargs::cmdline(), saved);
+    if wanted != desktop_on() {
+        let _ = set_desktop(wanted);
+    }
+}
+
+/// Put a console on the framebuffer: over the whole screen, or with
+/// `desktop` in the terminal window of a new desktop. The text of the
+/// console before it moves along (its last lines, if the new one is smaller).
+/// Returns whether the desktop is on now (a screen too small for a window
+/// gets none).
 fn lay_out(target: Target, desktop: bool) -> bool {
+    let old = match SCREEN.get() {
+        Screen::Graphics(s) if s.width() > 0 => Some((Vec::from(s.cells()), s.width(), s.pos(), s.attr())),
+        _ => None,
+    };
     let canvas = Canvas::new(target.framebuffer, target.mode);
     let frame = if desktop { wm::terminal_frame(canvas.width(), canvas.height()) } else { None };
     let mut screen = match frame {
@@ -177,12 +226,23 @@ fn lay_out(target: Target, desktop: bool) -> bool {
         }
     };
     screen.clear();
+    if let Some((cells, cols, (row, col), attr)) = old {
+        let skip = (row + 1).saturating_sub(screen.height());
+        for r in skip..=row {
+            for c in 0..cols {
+                screen.put_cell(r - skip, c, cells[r * cols + c]);
+            }
+        }
+        screen.set_pos(row.saturating_sub(skip), col);
+        screen.set_attr(attr);
+        screen.sync_cursor();
+    }
     *SCREEN.get() = Screen::Graphics(screen);
     frame.is_some()
 }
 
-/// Change the resolution (`display mode`). The screen starts empty again;
-/// the desktop stays on if the new screen has room for it.
+/// Change the resolution (`display mode`). The desktop stays on if the new
+/// screen has room for it.
 pub fn set_display_mode(width: u32, height: u32) -> Result<(), DisplayError> {
     let target = display::set_mode(width, height)?;
     lay_out(target, desktop_on());
@@ -193,8 +253,7 @@ pub fn desktop_on() -> bool {
     DESKTOP.get().is_some()
 }
 
-/// Switch the desktop on or off (`desktop on` / `desktop off`). The
-/// terminal starts empty.
+/// Switch the desktop on or off (`desktop on` / `desktop off`).
 pub fn set_desktop(on: bool) -> Result<(), &'static str> {
     let target = display::target().ok_or("the desktop needs a graphics mode, and this is the text screen (see display)")?;
     if lay_out(target, on) == on {
@@ -265,6 +324,12 @@ impl Write for Console {
         let screen = SCREEN.get();
         screen.write_str(s);
         screen.sync_cursor();
+        if let Screen::Text(_) = screen {
+            let (early, len) = EARLY.get();
+            let n = s.len().min(early.len() - *len);
+            early[*len..*len + n].copy_from_slice(&s.as_bytes()[..n]);
+            *len += n;
+        }
         for b in s.bytes() {
             if b == b'\n' {
                 serial::write_byte(b'\r');

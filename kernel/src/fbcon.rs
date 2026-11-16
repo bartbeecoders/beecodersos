@@ -90,6 +90,15 @@ impl<'a> FbCon<'a> {
         self.attr = (bg as u8) << 4 | fg as u8;
     }
 
+    pub fn attr(&self) -> u8 {
+        self.attr
+    }
+
+    /// Every cell, line after line (`width()` cells per line).
+    pub fn cells(&self) -> &[u16] {
+        &self.cells[..self.cols * self.rows]
+    }
+
     pub fn set_attr(&mut self, attr: u8) {
         self.attr = attr;
     }

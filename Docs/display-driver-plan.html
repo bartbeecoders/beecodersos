@@ -82,7 +82,7 @@ nav.toc a:hover { text-decoration: underline; }
 <h1>A display driver for BeeCodersOs</h1>
 <p class="lede">A plan to move the screen from 80x25 VGA text to a graphics framebuffer at up to 1920x1080, in virtual machines and on real hardware, with display drivers as interchangeable modules.</p>
 <p class="meta">Plan v1 · 15 November 2026 · Starting point: BeeCodersOs 0.0.3 · covers items A2 and X3 of <a href="drivers-todo.html">the drivers todo</a>.</p>
-<div class="callout"><b>Status:</b> G1 is done (0.0.3 b17): in QEMU the OS sets 1920x1080 itself and draws its console with the Spleen font; <code>display</code> shows and changes the mode; the tests take real screenshots. Your answers are in <a href="#need">section 5</a>. <b>Next: G2</b>, but see the note there about the USB keyboard under UEFI.</div>
+<div class="callout"><b>Status:</b> G1 and G2 are done. The OS sets 1920x1080 itself on QEMU's cards, and on any other card it draws in the mode the bootloader set up. <b>Seen working on the HP</b> (16 November 2026, b24): it boots to the desktop and <code>display</code> shows the monitor's own resolution, so the firmware offers it and G5 (a driver of our own for the Intel card) is not needed. Since G1 there is also a desktop with a terminal window, on by default. Next: G3 (speed, a larger font, saved settings).</div>
 
 <nav class="toc card">
 <b>Contents</b>
@@ -286,7 +286,7 @@ static DRIVERS: &amp;[(&amp;str, fn(&amp;BootInfo, &amp;[pci::Device]) -&gt; Opt
 </div>
 
 <div class="phase">
-<h3>G2 — The bootloader's framebuffer: the HP and UEFI <span class="tag t-next">Next</span></h3>
+<h3>G2 — The bootloader's framebuffer: the HP and UEFI <span class="tag t-now">Done</span></h3>
 <ul>
 <li><code>boot.s</code> (protected): the Multiboot header asks for a 1920x1080x32 graphics mode.</li>
 <li><code>bootfb.rs</code>: read the framebuffer fields from the Multiboot info and check them before use: non-zero size, bytes per line large enough for the width, 16, 24 or 32 bits, whole area below 4 GiB, no overflow. Anything odd: text screen and a message.</li>
@@ -294,6 +294,7 @@ static DRIVERS: &amp;[(&amp;str, fn(&amp;BootInfo, &amp;[pci::Device]) -&gt; Opt
 <li>A framebuffer above 4 GiB (possible on some UEFI machines): report it and stay on serial/text. Mapping it is a small follow-up if a real machine needs it.</li>
 </ul>
 <p class="meta">About 250 lines. Protected: <code>boot.s</code>, <code>tools/bootdisk.py</code>. This closes A2 in the drivers todo.</p>
+<p class="meta"><b>How it went:</b> <code>boot.s</code> got the nine header fields and nothing else. <code>tools/bootdisk.py</code> was not touched: the header already asks for 1920x1080, so no <code>resolution:</code> line is needed, and the boot disk has no text-mode entry (vm1 uses the bochs driver). Found on the way: the six color bytes in the Multiboot info sit at offset 112, two bytes later than the table in the Multiboot text says; bootloaders follow the C header. When the bootloader's mode cannot be used, the boot log now prints what was offered (size, bits, color layout), so a photo of the HP's screen or its serial log is enough to see why. With <code>display=text</code> in a graphics boot the kernel uses graphics anyway instead of leaving the screen black. Tested automatically by booting the ISO with a Cirrus card, which only the bootloader can set up: 1024x768 with 24 bits under BIOS, 800x600 with 32 bits under UEFI, each checked on a screenshot. The text-screen menu entry was tried by hand (BIOS: text screen; UEFI: graphics with a note).</p>
 <div class="done"><b>Done when:</b> the UEFI ISO boot shows the prompt on screen (today it shows nothing), the BIOS ISO boot with <code>display=bootfb</code> does too, and the HP boots from the USB stick into a graphics console and <code>display</code> reports its mode.</div>
 </div>
 

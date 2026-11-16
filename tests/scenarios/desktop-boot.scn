@@ -1,6 +1,11 @@
-# `desktop` on the kernel command line starts with the desktop on. On the
-# text screen there is no desktop.
-@args desktop mode=1280x720
+# Boot flags decide about the desktop for one boot: `desktop=off` here.
+# (`desktop` or `desktop=on` force it on; see desktop-saved.scn.)
+@args desktop=off mode=1280x720
+$ desktop
+desktop: off ('desktop on' starts it)
+@screenshot 1280x720 text
+$ desktop on
+desktop on (RAM disk: not kept after reboot)
 $ desktop
 desktop: on, the terminal window has 147x37 characters ('desktop off' ends it)
 @screenshot 1280x720 pixels 0,0=a8d0f0 1279,719=a8d0f0 640,52=3a6ea5

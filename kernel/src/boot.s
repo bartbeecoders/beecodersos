@@ -14,7 +14,7 @@
  */
 
 .set MB_MAGIC,    0x1BADB002
-.set MB_FLAGS,    0x00000003          /* page-align modules + provide memory map */
+.set MB_FLAGS,    0x00000007          /* page-align modules + provide memory map + set a video mode */
 .set MB_CHECKSUM, -(MB_MAGIC + MB_FLAGS)
 
 /* ------------------------------------------------------------------------- */
@@ -23,6 +23,11 @@
     .long MB_MAGIC
     .long MB_FLAGS
     .long MB_CHECKSUM
+    .long 0, 0, 0, 0, 0                  /* load addresses: unused, the kernel is an ELF file */
+    .long 0                              /* video mode: 0 = graphics (a linear framebuffer)   */
+    .long 1920                           /* preferred width                                    */
+    .long 1080                           /* preferred height                                   */
+    .long 32                             /* preferred bits per pixel                           */
 
 /* ------------------------------------------------------------------------- */
 .section .bss
