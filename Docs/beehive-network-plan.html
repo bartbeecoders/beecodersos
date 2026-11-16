@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BeeCodersOs Beehive Link</title>
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #ffffff; --surface-2: #f3f1ec; --text: #1d1b16; --muted: #6b665c;
+  --border: #e3dfd6; --accent: #b7791f; --accent-soft: #fdf3e1; --ok: #2f855a; --ok-soft: #e6f4ec;
+  --warn: #c05621; --warn-soft: #fdecdf; --risk: #c53030; --risk-soft: #fde8e8; --code: #f3f1ec;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15140f; --surface: #1d1b16; --surface-2: #26241d; --text: #ece8de; --muted: #a39d8f;
+    --border: #36332a; --accent: #e9b04f; --accent-soft: #2e2617; --ok: #68d391; --ok-soft: #1a2b21;
+    --warn: #f6ad55; --warn-soft: #2f2216; --risk: #fc8181; --risk-soft: #301c1c; --code: #26241d;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #15140f; --surface: #1d1b16; --surface-2: #26241d; --text: #ece8de; --muted: #a39d8f;
+  --border: #36332a; --accent: #e9b04f; --accent-soft: #2e2617; --ok: #68d391; --ok-soft: #1a2b21;
+  --warn: #f6ad55; --warn-soft: #2f2216; --risk: #fc8181; --risk-soft: #301c1c; --code: #26241d;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 920px; margin: 0 auto; padding: 48px 16px 96px; }
+h1 { font-size: 2.1rem; line-height: 1.2; margin: 0 0 8px; letter-spacing: -0.01em; }
+h2 { font-size: 1.45rem; margin: 56px 0 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+h3 { font-size: 1.1rem; margin: 28px 0 8px; }
+p, li { color: var(--text); }
+.lede { font-size: 1.12rem; color: var(--muted); margin: 0 0 24px; }
+.meta { font-size: .9rem; color: var(--muted); }
+code { font-family: ui-monospace, "JetBrains Mono", Menlo, monospace; font-size: .88em;
+  background: var(--code); padding: 1px 5px; border-radius: 4px; }
+pre { background: var(--code); padding: 14px 16px; border-radius: 8px; overflow-x: auto;
+  font-size: .85rem; line-height: 1.5; border: 1px solid var(--border); }
+pre code { background: none; padding: 0; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; margin: 16px 0; }
+.callout { background: var(--accent-soft); border-left: 4px solid var(--accent); border-radius: 6px; padding: 14px 18px; margin: 20px 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.phase { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px 22px; margin: 18px 0; }
+.phase h3 { margin-top: 0; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.tag { font-size: .75rem; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.t-now { background: var(--ok-soft); color: var(--ok); }
+.t-next { background: var(--accent-soft); color: var(--accent); }
+.t-later { background: var(--surface-2); color: var(--muted); }
+.done { font-size: .92rem; background: var(--surface-2); border-radius: 6px; padding: 10px 14px; margin-top: 12px; }
+.done b { color: var(--ok); }
+table { width: 100%; border-collapse: collapse; font-size: .93rem; margin: 12px 0; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: .82rem; text-transform: uppercase; letter-spacing: .04em; }
+.table-wrap { overflow-x: auto; }
+.lvl { font-weight: 700; white-space: nowrap; }
+.l0 { color: var(--ok); } .l1 { color: var(--ok); } .l2 { color: var(--warn); } .l3 { color: var(--risk); }
+.diagram { width: 100%; height: auto; display: block; margin: 8px 0; }
+.diagram text { font-family: system-ui, sans-serif; fill: var(--text); }
+.diagram .muted { fill: var(--muted); }
+.diagram .box { fill: var(--surface); stroke: var(--border); stroke-width: 1.5; }
+.diagram .box-a { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+.diagram .zone { fill: var(--surface-2); stroke: var(--border); stroke-dasharray: 5 4; }
+.diagram .line { stroke: var(--muted); stroke-width: 1.6; fill: none; }
+.diagram .line-a { stroke: var(--accent); stroke-width: 2; fill: none; }
+.loop { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 14px 0; }
+.loop span.step { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; font-weight: 600; font-size: .92rem; }
+.loop span.arrow { color: var(--muted); }
+ol.steps li { margin-bottom: 6px; }
+nav.toc { font-size: .93rem; }
+nav.toc a { color: var(--accent); text-decoration: none; }
+nav.toc a:hover { text-decoration: underline; }
+
+.tier { font-weight: 700; white-space: nowrap; }
+.t1 { color: var(--ok); } .t2 { color: var(--accent); } .t3 { color: var(--warn); } .t4 { color: var(--muted); }
+.rec { background: var(--ok-soft); border-left: 4px solid var(--ok); border-radius: 6px; padding: 12px 16px; margin: 14px 0; }
+.diagram .box-ok { fill: var(--ok-soft); stroke: var(--ok); stroke-width: 1.5; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Beehive over the network</h1>
+<p class="lede">A plan to let BeeCodersOs reach beehive, the AI host, over the local network instead of a serial cable: so a real machine like the HP, which has no serial port, gets <code>ask</code>, <code>explain</code>, wishes and crash reports too.</p>
+<p class="meta">Plan v1 · 16 November 2026 · Starting point: BeeCodersOs 0.0.3 b33 · the open item "signals over the network" of <a href="network-stack-plan.html">network phase N6</a>.</p>
+<div class="callout"><b>Status:</b> H1, H2 and H3 are built and work in QEMU (16 November 2026): beehive listens for paired machines, the OS connects with <code>ai connect</code>, and the link survives a beehive restart and a reboot. <b>Not tried on the HP yet.</b> H4 (a new kernel over the link) is not built: its design is in <a href="#h4">section 5</a> and needs three answers from you first. All six decisions below were taken as recommended.</div>
+
+<nav class="toc card">
+<b>Contents</b>
+<ol>
+<li><a href="#summary">Summary and recommendations</a></li>
+<li><a href="#start">What we have and what is missing</a></li>
+<li><a href="#arch">How it works</a></li>
+<li><a href="#trust">Who may talk to beehive</a></li>
+<li><a href="#phases">Phases H1–H4</a></li>
+<li><a href="#testing">Testing</a></li>
+<li><a href="#risks">Risks and guardrails</a></li>
+<li><a href="#decisions">Decisions for you</a></li>
+</ol>
+</nav>
+
+<h2 id="summary">1. Summary and recommendations</h2>
+<p>Today beehive connects to a VM's second serial port, which QEMU offers on the host as a local socket. Nothing leaves the host. A real machine has no such socket, so the link has to cross the network, and that changes one thing fundamentally: <b>beehive gets a door on the LAN</b>. Whoever can open it can spend your AI budget and put text into the improvement loop. Most of this plan is about that door.</p>
+<div class="loop">
+  <span class="step">shell: ask, wish, crash</span><span class="arrow">→</span>
+  <span class="step">aibridge</span><span class="arrow">→</span>
+  <span class="step">COM2 <i>or</i> TCP</span><span class="arrow">→</span>
+  <span class="step">beehive</span><span class="arrow">→</span>
+  <span class="step">LLM</span>
+</div>
+<div class="rec">
+<b>Recommended choices</b>
+<ul>
+<li><b>The OS connects out; beehive listens.</b> The OS keeps its rule "nothing listens unless switched on", and a machine behind any router can reach the host.</li>
+<li><b>Same messages as today.</b> The JSON lines of the serial link (<code>hello</code>, <code>ask</code>, <code>line</code>, <code>signal</code>, ...) travel unchanged inside a TCP connection. The shell commands do not change at all.</li>
+<li><b>Pairing with a key, proved without sending it.</b> Each machine gets its own key from beehive, typed into the OS once. Both sides prove they know it with a keyed hash (HMAC-SHA-256), and every later message carries such a hash too, so nobody on the LAN can pretend to be the HP, pretend to be beehive, or change a message on the way.</li>
+<li><b>Not encrypted.</b> Questions and answers can be read by someone listening on your LAN, like the remote shell and the status page today. Real encryption needs TLS, which the network plan postponed. This is stated in the OS when the link is switched on.</li>
+<li><b>Off by default on both sides.</b> beehive only listens with <code>--listen</code>; the OS only connects after <code>ai connect</code>. The kill switch <code>ai off</code> closes the connection.</li>
+<li><b>The serial link stays</b> for VMs and the tests, exactly as it is.</li>
+</ul>
+</div>
+<p>Four phases, H1 to H4. H1 is on the host only, H2 is the OS side and works in QEMU, H3 makes it dependable and brings it to the HP. H4, downloading a new kernel over this link, is named but not planned here.</p>
+
+<h2 id="start">2. What we have and what is missing</h2>
+<div class="grid">
+<div class="card"><b>Already there</b>
+<ul>
+<li>The protocol: JSON lines, request ids, cancel, signals (<code>kernel/src/aibridge.rs</code>)</li>
+<li>TCP client, DNS and DHCP in the OS, working on the HP</li>
+<li>Threads, so a connection can be kept alive in the background</li>
+<li>Random numbers (RDRAND) for keys and challenges</li>
+<li>Signals are saved in <code>/system/inbox</code> first and sent when beehive is there</li>
+<li>beehive: budget per day, logs, backends with every tool switched off</li>
+<li>The pattern of the remote shell: a secret the OS keeps in <code>/system</code>, changes only from the local console</li>
+</ul>
+</div>
+<div class="card"><b>Missing</b>
+<ul>
+<li>beehive can only connect to a local socket; it cannot listen</li>
+<li>Any idea of <i>which</i> machine is talking: today it is "whoever is on that socket"</li>
+<li><code>aibridge.rs</code> is tied to COM2: bytes come from an interrupt, go out through the serial port</li>
+<li>A hash function (SHA-256) in the OS</li>
+<li>A place to save the key on the HP: it runs from a RAM disk (drivers todo D2, D3)</li>
+<li>Commands to connect, and to see the state of the link</li>
+</ul>
+</div>
+</div>
+
+<h2 id="arch">3. How it works</h2>
+<div class="card">
+<svg class="diagram" viewBox="0 0 860 330" role="img" aria-label="The HP and other machines connect over the local network to a listening beehive on the development PC; virtual machines keep their serial link; beehive talks to the LLM and writes signals for the improvement loop.">
+  <rect class="zone" x="10" y="14" width="300" height="302" rx="10"/>
+  <text x="24" y="36" font-weight="700" font-size="14">BeeCodersOs</text>
+  <rect class="box" x="24" y="50" width="272" height="44" rx="8"/>
+  <text x="38" y="70" font-weight="600" font-size="13">shell: ask, explain, wish, crash, health</text>
+  <text x="38" y="86" class="muted" font-size="12">unchanged</text>
+  <rect class="box-a" x="24" y="108" width="272" height="60" rx="8"/>
+  <text x="38" y="128" font-weight="600" font-size="13">aibridge.rs</text>
+  <text x="38" y="145" class="muted" font-size="12">messages, request ids, timeouts</text>
+  <text x="38" y="160" class="muted" font-size="12">one link at a time: serial or network</text>
+  <rect class="box" x="24" y="184" width="126" height="56" rx="8"/>
+  <text x="38" y="206" font-weight="600" font-size="13">COM2</text>
+  <text x="38" y="224" class="muted" font-size="12">VMs, tests</text>
+  <rect class="box-ok" x="162" y="184" width="134" height="56" rx="8"/>
+  <text x="176" y="206" font-weight="600" font-size="13">hive thread (new)</text>
+  <text x="176" y="224" class="muted" font-size="12">connect, prove, retry</text>
+  <rect class="box" x="162" y="254" width="134" height="46" rx="8"/>
+  <text x="176" y="274" font-weight="600" font-size="13">beenet TCP</text>
+  <text x="176" y="290" class="muted" font-size="12">e1000 / I217</text>
+
+  <path class="line" d="M87 240 V282 H360 V226 H520"/>
+  <text x="330" y="300" class="muted" font-size="12">QEMU socket, on the host only</text>
+  <path class="line-a" d="M296 277 H340 V140 H520"/>
+  <text x="352" y="132" font-size="12" font-weight="600">TCP on the LAN, port 4560</text>
+  <text x="352" y="158" class="muted" font-size="12">paired, every message signed</text>
+
+  <rect class="zone" x="520" y="14" width="330" height="302" rx="10"/>
+  <text x="534" y="36" font-weight="700" font-size="14">Development PC</text>
+  <rect class="box-ok" x="534" y="108" width="302" height="50" rx="8"/>
+  <text x="548" y="128" font-weight="600" font-size="13">beehive --listen (new)</text>
+  <text x="548" y="146" class="muted" font-size="12">only paired machines, limits per machine</text>
+  <rect class="box" x="534" y="200" width="302" height="50" rx="8"/>
+  <text x="548" y="220" font-weight="600" font-size="13">beehive links to VM serial ports</text>
+  <text x="548" y="238" class="muted" font-size="12">as today</text>
+  <rect class="box-a" x="534" y="50" width="302" height="44" rx="8"/>
+  <text x="548" y="70" font-weight="600" font-size="13">LLM backend, budget, logs</text>
+  <text x="548" y="86" class="muted" font-size="12">unchanged; the API key never leaves this box</text>
+  <rect class="box" x="534" y="264" width="302" height="38" rx="8"/>
+  <text x="548" y="288" font-size="13">signals.jsonl → make report, make evolve</text>
+</svg>
+</div>
+
+<h3>In the OS</h3>
+<ul>
+<li><b><code>aibridge.rs</code> gets two ways out.</b> Today it writes bytes to COM2 and reads them from a ring the serial interrupt fills. The network way uses the same ring for incoming bytes and a small bounded queue for outgoing lines. Everything above (request ids, timeouts, <code>ask</code>, <code>explain</code>, signals) stays as it is.</li>
+<li><b>A <code>hive</code> thread</b> owns the connection: it connects, does the proof (below), moves bytes between the socket and the two queues, and connects again when the link drops, waiting longer each time (2 s up to 1 minute). It never holds an <code>FsGuard</code> while waiting and fetches global state again after every wait, as the thread rules say.</li>
+<li><b>Which link is used:</b> the network one when <code>ai connect</code> was given, otherwise COM2 when the port exists. Never both at once: answers carry a request id, not a link.</li>
+<li><b>Commands:</b> <code>ai connect HOST[:PORT] KEY</code> (saved), <code>ai disconnect</code>, and <code>ai</code> shows the link: which kind, connected or why not, how long. Changing them works from the local console only, like the remote shell's settings.</li>
+<li><b>Saved in</b> <code>/system/hive</code>: host, port, the machine's name and its key.</li>
+<li><b>Privacy:</b> the event log records "hive connected" and "hive lost" with a reason, never the address or the key.</li>
+</ul>
+
+<h3>On the host</h3>
+<ul>
+<li><code>beehive.py pair NAME</code> makes a key for one machine, stores it in beehive's state folder (readable by you only) and prints the line to type in the OS.</li>
+<li><code>beehive.py --listen ADDRESS:PORT</code> opens the door. Without it beehive behaves exactly as today. No default address: you name the LAN address, so it never listens on a network by accident.</li>
+<li><code>beehive.py unpair NAME</code> removes a key; <code>beehive.py machines</code> lists them with when each was last seen.</li>
+<li>A network machine is served by the same code as a serial link (<code>dispatch</code>, the backends, the logs), so the rule "text from a VM never runs a command on the host" holds unchanged. Records in <code>signals.jsonl</code> get the machine's name where the serial ones have the socket.</li>
+</ul>
+
+<h2 id="trust">4. Who may talk to beehive</h2>
+<p>The proof, once per connection. <code>K</code> is the machine's key; neither side ever sends it.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Step</th><th>Who</th><th>Message</th><th>What it shows</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>OS</td><td><code>{"type":"hello","name":"hp","nonce":A,"version":..,"build":..}</code></td><td>Which machine wants in. <code>A</code> is a fresh random number.</td></tr>
+<tr><td>2</td><td>beehive</td><td><code>{"type":"challenge","nonce":B}</code></td><td>Sent for unknown names too, so a stranger cannot find out which names exist.</td></tr>
+<tr><td>3</td><td>OS</td><td><code>{"type":"auth","mac":HMAC(K, "os" A B)}</code></td><td>The OS knows the key. Wrong: beehive closes the connection.</td></tr>
+<tr><td>4</td><td>beehive</td><td><code>{"type":"welcome","mac":HMAC(K, "hive" B A),..}</code></td><td>beehive knows the key too: the OS is not talking to an impostor.</td></tr>
+<tr><td>5</td><td>both</td><td>Every later line carries <code>"n"</code> (a counter) and <code>"mac"</code>, made with a key for this connection: <code>HMAC(K, "session" A B)</code>.</td><td>A line that was changed, repeated, or put in by someone else is dropped and the connection closed.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Because both random numbers go into every proof, a recording of an old connection is useless.</p>
+<h3>What this does and does not protect</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Someone on your LAN wants to ...</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td>use your AI budget, or send fake wishes and crash reports</td><td class="lvl l0">Stopped: no key, no service</td></tr>
+<tr><td>learn the key by listening</td><td class="lvl l0">Stopped: the key is never sent</td></tr>
+<tr><td>pretend to be beehive and feed the OS made-up answers</td><td class="lvl l0">Stopped: step 4 and the signed lines</td></tr>
+<tr><td>change a question or an answer on the way</td><td class="lvl l0">Stopped: the line's hash no longer fits</td></tr>
+<tr><td>guess the key</td><td class="lvl l0">Stopped: 100 random bits; after 5 wrong tries from one address beehive ignores it for a minute</td></tr>
+<tr><td>read your questions, the answers, wishes and crash reports</td><td class="lvl l2">Possible. Not encrypted until TLS exists.</td></tr>
+<tr><td>keep beehive busy with connections</td><td class="lvl l1">Limited: few connections at once, 10 s to finish the proof, short lines only before it</td></tr>
+<tr><td>read the key from the machine's disk, having the machine</td><td class="lvl l2">Possible. Then: <code>beehive.py unpair NAME</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Text from the OS stays what it is today: data. A paired machine can ask questions and file wishes; it cannot make beehive run anything, and the improvement loop treats wishes as requests a person approves.</p>
+
+<h2 id="phases">5. Phases</h2>
+<p>Named H1–H4 (H for hive). Each ends with a test for "done". Sizes are rough estimates of new code.</p>
+
+<div class="phase">
+<h3>H1 — beehive listens <span class="tag t-now">Done</span></h3>
+<ul>
+<li><code>pair</code>, <code>unpair</code>, <code>machines</code>; keys in <code>~/.local/state/beehive/machines.json</code>, mode 600.</li>
+<li><code>--listen</code>: accept, the proof of section 4, signed lines, then the existing <code>dispatch</code>.</li>
+<li>Limits: 8 connections, 10 s for the proof, 8192 bytes per line (as in the OS), the wait after wrong tries, one connection per machine name (a new one replaces the old).</li>
+<li>Budget: the daily limit stays one total; added is a limit per machine (default: the same number), so one machine cannot use up the day for all.</li>
+<li>Logs: connections by machine name and outcome; never the key, never a proof.</li>
+</ul>
+<p class="meta">About 250 lines in <code>tools/beehive/beehive.py</code> and its tests in <code>tests/test_beehive.py</code>. Both are protected. No change in the OS: nothing is visible to it yet.</p>
+<div class="done"><b>Done when:</b> a small test client (in the tests) pairs, asks the fake backend a question and files a signal; and the same client with a wrong key, a changed line, a repeated line, an oversized line or no proof at all gets nothing.</div>
+</div>
+
+<div class="phase">
+<h3>H2 — The OS connects <span class="tag t-now">Done</span></h3>
+<ul>
+<li><b>SHA-256 and HMAC</b> in the <code>beenet</code> crate, with the published test values, so they are tested on the host first. Also there: building and checking the proof and the signed lines, with tests for cut-off and nonsense input.</li>
+<li><code>aibridge.rs</code>: the two ways out; the <code>hive</code> thread; the kill switch closes the connection and stops the thread from connecting.</li>
+<li><code>ai connect</code>, <code>ai disconnect</code>, the link's state in <code>ai</code>; settings in <code>/system/hive</code>; a warning when switching on that the link is not encrypted.</li>
+<li>README: commands, the new files, how to pair.</li>
+</ul>
+<p class="meta">About 600 lines including tests. Protected: the kill switch (<code>ai off</code>, <code>/system/ai</code>) is touched so that it also covers the network link; <code>tests/boot_test.py</code> gets a directive that starts a listening beehive.</p>
+<div class="done"><b>Done when:</b> in QEMU with its built-in network, <code>ask</code> is answered over TCP by the fake backend, a wish arrives in <code>signals.jsonl</code> under the machine's name, a wrong key gives a clear message in <code>ai</code>, and <code>ai off</code> ends the connection.</div>
+</div>
+
+<div class="phase">
+<h3>H3 — Dependable, and on the HP <span class="tag t-now">Done in QEMU, HP to try</span></h3>
+<ul>
+<li>Reconnect after beehive restarts, the cable is pulled, or the address changes (DHCP): wishes filed meanwhile wait in the inbox and are sent after the next connect. A short "still there?" message every 30 s notices a dead link.</li>
+<li>An <code>ask</code> that was running when the link dropped ends with "the connection to the AI host was lost", not a two-minute wait.</li>
+<li>The status page shows the link's state (connected or not; no address).</li>
+<li><b>The HP:</b> pair it and use it. Until BeeFS lives on a disk there (D2, D3), <code>ai connect</code> has to be typed again after every restart.</li>
+</ul>
+<p class="meta">About 250 lines.</p>
+<div class="done"><b>Done when:</b> on the HP, <code>ask</code> gets an answer, a wish shows up in <code>make report</code> under the name "hp", and stopping and starting beehive needs no action on the HP.</div>
+<p class="meta"><b>How H1 to H3 went:</b> built as planned, with these differences. A sealed line is written as <code>MAC N JSON</code> (hash and counter in front of the JSON text) instead of as fields inside the JSON: both sides then hash exactly the bytes that travel, with no question of how JSON is written out. <code>ai connect</code> takes the machine's name too (<code>ai connect HOST[:PORT] NAME KEY</code>) and tells at once whether it worked. <code>beehive.py --connect none</code> serves the network only. The command to connect waits up to five seconds for the outcome; a wrong key says "refused". Found on the way: the kernel's blocking network calls read the console's keys to notice Ctrl+C, also when a background thread made the call; a background thread no longer does. <b>Not done:</b> the link's state on the status page (<code>httpd.rs</code> is protected and the gain is small), and the trial on the HP.</p>
+</div>
+
+<div class="phase" id="h4">
+<h3>H4 — A new kernel over the link <span class="tag t-later">Designed, not built: three answers needed</span></h3>
+<p>The network plan's "kernel download": the OS fetches a new kernel into the spare slot and tries it, with the A/B rollback as the net. Nothing in H1 to H3 lets the host push anything into the OS; H4 is the first thing that would. What looking at the code showed:</p>
+<ul>
+<li><b>The kernel cannot write a kernel file today.</b> By design it only rewrites two lines of <code>limine.conf</code> in place, "so the FAT file system never changes shape" (<code>bootslots.rs</code>). A deploy is done by the host with the VM switched off: <code>tools/bootdisk.py</code> rebuilds the whole FAT partition. H4 needs the kernel to write a file there for the first time.</li>
+<li><b>The safest way to do that:</b> <code>bootdisk.py create</code> gives each slot a file of fixed size (say 4 MiB, filled up with zeros), so the kernel only overwrites the contents of blocks that already belong to the file and changes nothing in the FAT. A kernel larger than the slot is refused. Existing boot disks (vm1) have to be made again once.</li>
+<li><b>Checking what came in:</b> beehive sends the kernel in pieces over the sealed link, then its SHA-256 and build number. The link already proves the sender has the pairing key; the kernel checks the hash of what it wrote before it marks the slot "pending". There is no signature of a person or a build machine: whoever has a machine's pairing key and beehive's place on the network can give that machine a kernel. A real signature needs public-key cryptography, which we do not have and should not write ourselves.</li>
+<li><b>Who starts it:</b> the OS asks (<code>update</code>, typed on its console), beehive only answers with what you put ready (<code>beehive.py offer KERNEL</code>). beehive can never start it.</li>
+<li><b>Where it helps:</b> only on a machine that boots from an A/B boot disk. That is vm1, which already has <code>make deploy</code>. The HP boots from the USB stick's ISO and has no slots, so H4 does nothing for it until the HP has a boot disk of its own (drivers todo D2, D3).</li>
+</ul>
+<p class="meta">About 500 lines. Protected: <code>bootslots.rs</code>, <code>tools/bootdisk.py</code>, <code>tools/deploy.py</code> (unchanged, but its tests must keep passing), beehive. A mistake here can leave a machine that does not boot, which is why it is not built without your answers:</p>
+<ol>
+<li><b>Is "the pairing key vouches for the kernel" enough?</b> It is as strong as today's <code>make deploy</code>, where whoever can write the disk image decides. The alternative is to wait for real signatures.</li>
+<li><b>May the boot disk's layout change</b> (fixed-size slot files), with vm1's disk made again?</li>
+<li><b>Now, or after the HP has a boot disk?</b> Until then H4 only repeats, over the network, what <code>make deploy</code> does for vm1.</li>
+</ol>
+<div class="done"><b>Done when:</b> a scenario on a boot disk fetches a kernel with <code>update</code>, boots it on trial, and it becomes the good slot; a kernel with a wrong hash, one that is too large, and a link that drops halfway each leave the good slot untouched; and a trial kernel that crashes rolls back as today.</div>
+</div>
+
+<h2 id="testing">6. Testing</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>What</th><th>Where</th><th>Checks</th></tr></thead>
+<tbody>
+<tr><td>SHA-256, HMAC</td><td><code>beenet</code> unit tests (host), one in <code>selftest.rs</code></td><td>The published test values (empty input, "abc", a million "a", the HMAC cases of RFC 4231).</td></tr>
+<tr><td>Proof and signed lines</td><td><code>beenet</code> unit tests</td><td>Both directions agree; wrong key, swapped random numbers, changed text, repeated or skipped counter, cut-off and oversized lines are refused.</td></tr>
+<tr><td>beehive's door</td><td><code>tests/test_beehive.py</code> (protected: a proposal)</td><td>Pairing; everything in H1's "done"; the per-machine budget; unknown names look like wrong keys; nothing is answered before the proof.</td></tr>
+<tr><td>The whole path</td><td><code>tests/scenarios/ai-network.scn</code> with a new directive <code>@ai-net</code></td><td>QEMU's built-in network, beehive with the fake backend listening on the host: <code>ai connect</code>, <code>ask</code>, <code>explain</code>, <code>wish</code>, Ctrl+C during an answer, <code>ai off</code>, a wrong key.</td></tr>
+<tr><td>Losing the link</td><td>scenario</td><td>The test stops and starts beehive: the OS reconnects, a wish filed in between arrives.</td></tr>
+<tr><td>Saved settings</td><td>scenario with <code>@disk</code> and <code>@reboot</code></td><td>The link comes back after a restart; the key is not shown by <code>ai</code>, and not in the event log.</td></tr>
+<tr><td>The serial link</td><td>the existing <code>ai-bridge.scn</code>, unchanged</td><td>Nothing changes for VMs.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="risks">7. Risks and guardrails</h2>
+<ul>
+<li><b>A door on the LAN.</b> The largest change. Off unless <code>--listen</code> is given, with an address you name; only paired machines; limits before the proof. On a network you do not trust, do not switch it on.</li>
+<li><b>Not encrypted.</b> Said plainly in the OS and the README. Do not type secrets into <code>ask</code>.</li>
+<li><b>Our own SHA-256.</b> The network plan says "we should not write cryptography ourselves". A hash is the small, exactly specified part: about 80 lines, and any mistake shows in the published test values. Encryption and key exchange stay out. See the decisions.</li>
+<li><b>A secret on the BeeFS disk.</b> The rule is "no API keys or secrets on the BeeFS disk". The pairing key is the machine's own, like the remote shell's password that already lives in <code>/system</code>; it opens nothing but this machine's access to beehive and can be withdrawn on the host. Still an exception to the wording, so it is a decision.</li>
+<li><b>The budget.</b> A paired machine that goes wrong could ask in a loop. The per-machine limit caps it; the OS already allows one request at a time.</li>
+<li><b>The deploy watchdog</b> (<code>tools/deploy.py</code>, protected) reads health signals by build number. Signals from network machines have a name instead of a socket; the watchdog is not changed and keeps working for vm1 over serial.</li>
+<li><b>Two links at once.</b> Avoided by rule (network when configured, else serial), so answers cannot arrive on the wrong one.</li>
+<li><b>Waiting.</b> Connecting can take seconds. It happens in the <code>hive</code> thread, never in the shell: <code>ask</code> with no link answers "offline" at once, as today.</li>
+</ul>
+
+<h2 id="decisions">8. Decisions for you</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Decision</th><th>Recommendation</th><th>Alternative and trade-off</th></tr></thead>
+<tbody>
+<tr><td><b>May beehive listen on the LAN at all?</b> (protected: beehive)</td><td>Yes, off by default, paired machines only.</td><td>No: then the HP gets no AI link until it has a serial port (a PCI card, a few euros) or TLS exists.</td></tr>
+<tr><td><b>How strong is the door?</b></td><td>Key proved with HMAC, every line signed.</td><td>A plain password sent at the start: 40 lines less and no hash in the OS, but anyone listening once has the password. Or wait for TLS: also private, but far away.</td></tr>
+<tr><td><b>SHA-256 written by us?</b></td><td>Yes, in <code>beenet</code>, checked against the published values.</td><td>A crate (<code>sha2</code>, <code>hmac</code>): proven code, but new dependencies in the kernel, which the project avoids.</td></tr>
+<tr><td><b>The pairing key on the BeeFS disk?</b></td><td>Yes, in <code>/system/hive</code>, as an exception like the remote shell's password.</td><td>Never saved: type it after every boot. Safe, but tiresome, and the HP would be exactly there anyway until D2/D3.</td></tr>
+<tr><td><b>Who connects to whom?</b></td><td>The OS connects out.</td><td>beehive connects to the OS: the OS would need a listening port, against its "default deny inbound" rule, and beehive would need every machine's address.</td></tr>
+<tr><td><b>HP first, or BeeFS on the HP first?</b></td><td>Build H1 and H2 now (all testable in QEMU); do D2/D3 before H3, so the pairing survives a restart.</td><td>H3 straight away, typing <code>ai connect</code> after each boot of the HP.</td></tr>
+</tbody>
+</table>
+</div>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BeeCodersOs Install</title>
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #ffffff; --surface-2: #f3f1ec; --text: #1d1b16; --muted: #6b665c;
+  --border: #e3dfd6; --accent: #b7791f; --accent-soft: #fdf3e1; --ok: #2f855a; --ok-soft: #e6f4ec;
+  --warn: #c05621; --warn-soft: #fdecdf; --risk: #c53030; --risk-soft: #fde8e8; --code: #f3f1ec;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15140f; --surface: #1d1b16; --surface-2: #26241d; --text: #ece8de; --muted: #a39d8f;
+    --border: #36332a; --accent: #e9b04f; --accent-soft: #2e2617; --ok: #68d391; --ok-soft: #1a2b21;
+    --warn: #f6ad55; --warn-soft: #2f2216; --risk: #fc8181; --risk-soft: #301c1c; --code: #26241d;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #15140f; --surface: #1d1b16; --surface-2: #26241d; --text: #ece8de; --muted: #a39d8f;
+  --border: #36332a; --accent: #e9b04f; --accent-soft: #2e2617; --ok: #68d391; --ok-soft: #1a2b21;
+  --warn: #f6ad55; --warn-soft: #2f2216; --risk: #fc8181; --risk-soft: #301c1c; --code: #26241d;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 920px; margin: 0 auto; padding: 48px 16px 96px; }
+h1 { font-size: 2.1rem; line-height: 1.2; margin: 0 0 8px; letter-spacing: -0.01em; }
+h2 { font-size: 1.45rem; margin: 56px 0 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+h3 { font-size: 1.1rem; margin: 28px 0 8px; }
+p, li { color: var(--text); }
+.lede { font-size: 1.12rem; color: var(--muted); margin: 0 0 24px; }
+.meta { font-size: .9rem; color: var(--muted); }
+code { font-family: ui-monospace, "JetBrains Mono", Menlo, monospace; font-size: .88em;
+  background: var(--code); padding: 1px 5px; border-radius: 4px; }
+pre { background: var(--code); padding: 14px 16px; border-radius: 8px; overflow-x: auto;
+  font-size: .85rem; line-height: 1.5; border: 1px solid var(--border); }
+pre code { background: none; padding: 0; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; margin: 16px 0; }
+.callout { background: var(--accent-soft); border-left: 4px solid var(--accent); border-radius: 6px; padding: 14px 18px; margin: 20px 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.phase { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px 22px; margin: 18px 0; }
+.phase h3 { margin-top: 0; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.tag { font-size: .75rem; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.t-now { background: var(--ok-soft); color: var(--ok); }
+.t-next { background: var(--accent-soft); color: var(--accent); }
+.t-later { background: var(--surface-2); color: var(--muted); }
+.done { font-size: .92rem; background: var(--surface-2); border-radius: 6px; padding: 10px 14px; margin-top: 12px; }
+.done b { color: var(--ok); }
+table { width: 100%; border-collapse: collapse; font-size: .93rem; margin: 12px 0; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: .82rem; text-transform: uppercase; letter-spacing: .04em; }
+.table-wrap { overflow-x: auto; }
+.lvl { font-weight: 700; white-space: nowrap; }
+.l0 { color: var(--ok); } .l1 { color: var(--ok); } .l2 { color: var(--warn); } .l3 { color: var(--risk); }
+.diagram { width: 100%; height: auto; display: block; margin: 8px 0; }
+.diagram text { font-family: system-ui, sans-serif; fill: var(--text); }
+.diagram .muted { fill: var(--muted); }
+.diagram .box { fill: var(--surface); stroke: var(--border); stroke-width: 1.5; }
+.diagram .box-a { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+.diagram .zone { fill: var(--surface-2); stroke: var(--border); stroke-dasharray: 5 4; }
+.diagram .line { stroke: var(--muted); stroke-width: 1.6; fill: none; }
+.diagram .line-a { stroke: var(--accent); stroke-width: 2; fill: none; }
+.loop { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 14px 0; }
+.loop span.step { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; font-weight: 600; font-size: .92rem; }
+.loop span.arrow { color: var(--muted); }
+ol.steps li { margin-bottom: 6px; }
+nav.toc { font-size: .93rem; }
+nav.toc a { color: var(--accent); text-decoration: none; }
+nav.toc a:hover { text-decoration: underline; }
+
+.tier { font-weight: 700; white-space: nowrap; }
+.t1 { color: var(--ok); } .t2 { color: var(--accent); } .t3 { color: var(--warn); } .t4 { color: var(--muted); }
+.rec { background: var(--ok-soft); border-left: 4px solid var(--ok); border-radius: 6px; padding: 12px 16px; margin: 14px 0; }
+.diagram .box-ok { fill: var(--ok-soft); stroke: var(--ok); stroke-width: 1.5; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Installing BeeCodersOs on the hard disk</h1>
+<p class="lede">A plan for an <code>install</code> command: it puts the OS on the machine's own disk, with a boot, an OS and a data partition, and the same command upgrades an installation that is already there.</p>
+<p class="meta">Plan v1 · 16 November 2026 · Starting point: BeeCodersOs 0.0.3 b47 · covers D2 of <a href="drivers-todo.html">the drivers todo</a> ("where BeeFS lives on the real machine").</p>
+<div class="callout"><b>Status:</b> approved on 16 November 2026, building started. Your answers: 1 yes (the heap setup may change); 2 the three partitions as proposed; 3 yes, <code>install</code> may erase another system's disk with <code>--erase</code> and the typed sentence (the HP is a test machine); 4 the HP's disk may go; 5 both legacy BIOS and UEFI boot from the disk must work.</div>
+
+<nav class="toc card">
+<b>Contents</b>
+<ol>
+<li><a href="#summary">Summary and recommendations</a></li>
+<li><a href="#start">What we have and what is missing</a></li>
+<li><a href="#layout">The disk after installing</a></li>
+<li><a href="#how">How install works</a></li>
+<li><a href="#safety">Not erasing the wrong disk</a></li>
+<li><a href="#phases">Phases I1–I4</a></li>
+<li><a href="#testing">Testing</a></li>
+<li><a href="#decisions">Decisions for you</a></li>
+</ol>
+</nav>
+
+<h2 id="summary">1. Summary and recommendations</h2>
+<p>Today the HP boots from the USB stick and runs from a RAM disk: nothing survives a restart, not the settings, not the pairing with beehive, not a wish. An installation on its own disk fixes that, and gives the HP the A/B kernel slots with rollback that vm1 has.</p>
+<div class="loop">
+  <span class="step">boot the USB stick</span><span class="arrow">→</span>
+  <span class="step">install</span><span class="arrow">→</span>
+  <span class="step">choose the disk, confirm</span><span class="arrow">→</span>
+  <span class="step">boot · os · data written</span><span class="arrow">→</span>
+  <span class="step">remove the stick, restart</span>
+</div>
+<div class="rec">
+<b>Recommended choices</b>
+<ul>
+<li><b>The boot part is made on the development PC, not by the kernel.</b> <code>tools/bootdisk.py</code> already builds a working boot area (bootloader for BIOS and UEFI, its settings, both kernel slots). The ISO carries that as one ready image and <code>install</code> copies it to the start of the disk. The kernel never has to build a FAT file system or know how the bootloader installs itself: far less that can go wrong.</li>
+<li><b>Three partitions, each with a job</b> (section 3): boot is replaced by an upgrade, os holds the system's own settings and logs, data holds your files and is never touched by an upgrade or a reinstall.</li>
+<li><b>One command, three cases.</b> On an empty disk: install. On a disk with BeeCodersOs: upgrade (new kernel into the spare slot, tried with rollback; os and data kept). On a disk with something else: refuse, unless you insist in a way that cannot happen by accident.</li>
+<li><b>MBR partition table.</b> It is what the boot disk tool makes and what was tested with rollback. Disks up to 2 TiB. GPT can follow.</li>
+<li><b>In QEMU first, on throwaway disk images.</b> The HP comes last, after the same build installed and upgraded itself in the tests.</li>
+</ul>
+</div>
+
+<h2 id="start">2. What we have and what is missing</h2>
+<div class="grid">
+<div class="card"><b>Already there</b>
+<ul>
+<li>Disk drivers that read and write: IDE and SATA (AHCI, works on the HP)</li>
+<li>BeeFS can format a partition (<code>FileSystem::format</code>)</li>
+<li>The kernel reads MBR and GPT partition tables</li>
+<li><code>tools/bootdisk.py</code>: boot area with Limine and A/B slots; the kernel side of rollback (<code>bootslots.rs</code>)</li>
+<li>The rule in <code>storage.rs</code>: a disk that is not BeeFS is "left untouched"</li>
+</ul>
+</div>
+<div class="card"><b>Missing</b>
+<ul>
+<li>The files to install: the kernel cannot read the USB stick it booted from (no USB storage driver), and its own file is not kept in memory</li>
+<li>Memory the bootloader hands over is reused by the kernel heap today, so files loaded with the kernel would be overwritten</li>
+<li>Writing a partition table</li>
+<li>More than one mounted file system (os and data)</li>
+<li>Any command that changes a disk's layout, and the checks around it</li>
+<li>A test that boots the ISO with a disk, installs, and boots the disk</li>
+</ul>
+</div>
+</div>
+
+<h2 id="layout">3. The disk after installing</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Partition</th><th>Size</th><th>Format</th><th>Holds</th><th>Upgrade</th><th>Reinstall</th></tr></thead>
+<tbody>
+<tr><td class="tier t1">1 boot</td><td>16 MiB</td><td>FAT16</td><td>The bootloader (BIOS and UEFI), its settings with the A/B slot state, <code>kernel-a.elf</code>, <code>kernel-b.elf</code></td><td>New kernel into the spare slot</td><td>Written again</td></tr>
+<tr><td class="tier t2">2 os</td><td>256 MiB</td><td>BeeFS</td><td>The system's own files, mounted as <code>/</code>: <code>/system</code> (settings, the beehive key, event log, crash reports, wishes)</td><td>Kept</td><td>Formatted</td></tr>
+<tr><td class="tier t3">3 data</td><td>the rest</td><td>BeeFS</td><td>Your files, mounted at <code>/data</code></td><td>Kept</td><td>Kept</td></tr>
+</tbody>
+</table>
+</div>
+<p><b>Why the kernels are on "boot" and not on "os":</b> the bootloader can only read FAT, so whatever it loads has to be there. That leaves "os" the role of the system's state. If you meant something else by an os partition, this is the place to say so (decision 2).</p>
+<p>A fresh install leaves a note in <code>/data/welcome.txt</code>. The shell starts in <code>/data</code>.</p>
+
+<h2 id="how">4. How install works</h2>
+<ol class="steps">
+<li><b>Building the ISO</b> (on the PC): after the kernel is built, <code>bootdisk.py</code> makes a boot disk as it does for vm1, and the first 17 MiB of it (partition table, boot code, the FAT partition with both kernel slots) are cut off as <code>install.img</code>. The ISO's boot menu loads that file into memory next to the kernel ("module").</li>
+<li><b>At boot:</b> the kernel notes where the bootloader put the image and keeps its heap away from it. Without the image (vm1, plain QEMU) <code>install</code> says it can only run from the install medium.</li>
+<li><b><code>install</code></b> with no arguments lists the disks: size, model, what is on each (empty, BeeCodersOs with its version, or "something else: 3 partitions"), and what would happen. It changes nothing.</li>
+<li><b><code>install DISK</code></b> shows the plan for that disk and asks for the confirmation of section 5. Then, in this order, so that a power cut at any moment leaves either the old state or a disk that says "install unfinished" and nothing half-valid:
+  <ol>
+  <li>wipe the first sector (the disk is now "no partition table");</li>
+  <li>write the boot image from sector 1 on;</li>
+  <li>format os and data (BeeFS), write the welcome note;</li>
+  <li>read back and compare what was written to the boot area;</li>
+  <li>last, write the first sector: boot code and the table with the three partitions sized for this disk.</li>
+  </ol></li>
+<li><b>Upgrade</b> (the disk already holds BeeCodersOs): only the spare kernel slot is written, as <code>make deploy</code> does for vm1, and it is marked "on trial". After the restart the new kernel arms the rollback, checks itself, and becomes the good slot; if it fails, the old kernel boots again. os and data are not touched. If the boot area itself has to change (a newer bootloader), <code>install DISK --reinstall</code> writes boot and os again and keeps data.</li>
+<li><b>Afterwards</b> it says: remove the stick and type <code>reboot</code>.</li>
+</ol>
+<p>Booted from the installed disk, the kernel mounts os as <code>/</code> and data as <code>/data</code>. Booted from the stick with an installed disk present, it does the same, so an upgrade runs with your settings.</p>
+
+<h2 id="safety">5. Not erasing the wrong disk</h2>
+<ul>
+<li><b>Nothing happens without a disk named on the command line</b>, and never at boot or from a saved setting.</li>
+<li><b>Only from the machine's own console</b>: not from the remote shell, not through the AI bridge.</li>
+<li><b>A disk with something else on it is refused</b> with what was found. Overriding takes <code>install DISK --erase</code> and then typing a sentence that names the disk, for example <code>erase 465 GiB WDC WD5000</code>: the size and model it just showed you. A typo, or anything else, stops it.</li>
+<li><b>An empty disk or a BeeCodersOs disk</b> asks for a plain <code>yes</code>.</li>
+<li><b>Never the disk the system is running from</b> unless it is an upgrade.</li>
+<li><b>A summary before the question:</b> which disk, what is on it now, what will be erased, what will be kept.</li>
+<li><b>In the tests</b> it only ever runs on disk images made for the test.</li>
+</ul>
+<p>The project rule says "never format or overwrite a disk that is not BeeFS". I read it as: nothing in the OS or the tests may do that by itself. A command you type, naming the disk, is your decision. That reading is yours to confirm (decision 3); if you disagree, <code>--erase</code> is left out and other systems must be removed with their own tools first.</p>
+
+<h2 id="phases">6. Phases</h2>
+<div class="phase">
+<h3>I1 — The install image, and looking without touching <span class="tag t-next">Needs your approval</span></h3>
+<ul>
+<li><code>make iso</code> builds <code>install.img</code> and puts it on the ISO; the boot menu loads it.</li>
+<li>The kernel keeps the bootloader's modules: the heap starts above them (protected: <code>allocator.rs</code>, a few lines).</li>
+<li><code>install</code> lists disks and what would happen. No write code exists yet in this phase.</li>
+</ul>
+<p class="meta">About 300 lines. Protected: <code>allocator.rs</code>, the <code>Makefile</code> (ISO rule), <code>tests/boot_test.py</code> (ISO boots with a disk attached). <code>tools/bootdisk.py</code> is used as it is.</p>
+<div class="done"><b>Done when:</b> the ISO boot in QEMU shows the image (size and the build inside it), its checksum matches the file on the PC after the heap has been used heavily, and <code>install</code> describes an empty disk, a BeeCodersOs disk and a foreign disk correctly.</div>
+</div>
+<div class="phase">
+<h3>I2 — A fresh install <span class="tag t-later">After I1</span></h3>
+<ul>
+<li>Writing the image, the partition table, formatting, comparing; the confirmations for empty and BeeCodersOs disks. Foreign disks are still always refused.</li>
+<li>One BeeFS mounted for now: os. Data exists but is not mounted yet.</li>
+</ul>
+<p class="meta">About 400 lines.</p>
+<div class="done"><b>Done when:</b> a scenario boots the ISO with an empty disk, installs, restarts without the ISO, and the installed system boots, keeps a file across a restart, and reports its A/B slots. Cutting the power in the middle (the test kills QEMU at each step) never leaves a disk that boots something broken.</div>
+</div>
+<div class="phase">
+<h3>I3 — os and data, upgrade, reinstall <span class="tag t-later">After I2</span></h3>
+<ul>
+<li>Two mounted file systems: os as <code>/</code>, data at <code>/data</code>; <code>df</code> shows both. (<code>storage::FsGuard</code> is protected: crash reports must keep working with two.)</li>
+<li>Upgrade into the spare slot with rollback; <code>--reinstall</code>.</li>
+</ul>
+<p class="meta">About 500 lines. Protected: <code>storage::FsGuard</code>, and <code>bootslots.rs</code> gets its first code that writes a kernel (inside an existing slot file only).</p>
+<div class="done"><b>Done when:</b> a scenario installs build N, boots a stick with build N+1, upgrades, and the disk boots N+1 with every file in / and /data intact; an upgrade to a kernel that crashes rolls back to N; a reinstall keeps /data.</div>
+</div>
+<div class="phase">
+<h3>I4 — The HP <span class="tag t-later">After I3</span></h3>
+<ul>
+<li><code>--erase</code> with the typed sentence, if you allow it.</li>
+<li>Install on the HP; boot it without the stick, in the boot mode you use.</li>
+</ul>
+<div class="done"><b>Done when:</b> the HP boots from its own disk, settings and the beehive pairing survive a restart, and an upgrade from a newer stick works.</div>
+</div>
+
+<h2 id="testing">7. Testing</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>What</th><th>Where</th><th>Checks</th></tr></thead>
+<tbody>
+<tr><td>What is on a disk</td><td><code>selftest.rs</code>, <code>beefs</code> unit tests</td><td>Empty, BeeCodersOs (with version), foreign, half-installed, cut-off and nonsense partition tables.</td></tr>
+<tr><td>The partition table we write</td><td><code>beefs</code> unit tests</td><td>Sizes for disks from 300 MiB to 2 TiB; too small is refused; our own reader reads back what was written.</td></tr>
+<tr><td>The confirmation</td><td><code>selftest.rs</code>, scenarios</td><td>Only the exact sentence passes; nothing from a session; nothing without a disk named.</td></tr>
+<tr><td>Install, upgrade, reinstall, rollback</td><td>scenarios with new directives (ISO plus a disk, restart without the ISO)</td><td>The "done" lines of I2 and I3.</td></tr>
+<tr><td>Power cuts</td><td>scenario</td><td>QEMU killed after each step: the next boot is the old system, or the stick says "install unfinished".</td></tr>
+<tr><td>Other systems' disks</td><td>scenario</td><td>A disk image with a foreign partition table is refused, byte for byte unchanged.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="decisions">8. Decisions for you</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Decision</th><th>Recommendation</th><th>Alternative and trade-off</th></tr></thead>
+<tbody>
+<tr><td><b>1. May the heap setup change?</b> (protected: <code>allocator.rs</code>)</td><td>Yes: start the heap above what the bootloader loaded. Without it the install image is overwritten as soon as the kernel allocates memory.</td><td>No install from the stick until a USB storage driver exists to read the files from it (drivers todo U3, large).</td></tr>
+<tr><td><b>2. What is the "os" partition for?</b></td><td>The system's own settings and logs (<code>/system</code>), separate from your files, so a reinstall can wipe one and keep the other.</td><td>Two partitions (boot, data) is simpler and loses only "reinstall but keep my files". Or tell me what you had in mind for it.</td></tr>
+<tr><td><b>3. May <code>install</code> erase a disk that holds another system?</b> (the "never format a disk that is not BeeFS" rule)</td><td>Yes, only with <code>--erase</code> and the typed sentence naming the disk.</td><td>Never: safest, but the HP's disk must first be wiped with another tool.</td></tr>
+<tr><td><b>4. What is on the HP's disk now, and may it go?</b></td><td>Tell me before I4. If anything on it matters, back it up first: there is no undo.</td><td>A second disk in the HP for BeeCodersOs.</td></tr>
+<tr><td><b>5. Legacy BIOS or UEFI on the HP?</b></td><td>The boot area serves both, but only legacy BIOS boot from a disk is tested (vm1). Tell me which one the HP uses; UEFI boot from the disk gets its own test in I2.</td><td>GPT instead of MBR if UEFI on the HP refuses an MBR disk: more work in I2.</td></tr>
+</tbody>
+</table>
+</div>
+
+</main>
+</body>
+</html>

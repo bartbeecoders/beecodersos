@@ -65,6 +65,8 @@ assembler and linked with the bundled `rust-lld`.
 | Network stack plan (phases N1–N6, threads) | `Docs/network-stack-plan.html` |
 | Drivers for real hardware: todo list with progress | `Docs/drivers-todo.html` |
 | Display driver plan (phases G1–G5: framebuffer console, full HD) | `Docs/display-driver-plan.html` |
+| Beehive over the network: plan (phases H1–H4) | `Docs/beehive-network-plan.html` |
+| Installing on the hard disk: plan (phases I1–I4) | `Docs/install-plan.html` |
 | Backlog and review reports | `Docs/backlog/` (see its README) |
 | Tool options | `--help` of `tools/beehive/beehive.py`, `tools/evolve/evolve.py`, `tools/bootdisk.py`, `tools/deploy.py`, `tools/usbstick.py`, `tools/bee_report.py`, `tests/boot_test.py` |
 | Shell commands | `help` in the OS |
@@ -190,7 +192,7 @@ kernel/
   src/eventlog.rs      event log /system/log/events.jsonl
   src/crash.rs         crash reports saved to disk, shown on the next boot
   src/json.rs          minimal JSON (event log, crash reports, AI protocol)
-  src/aibridge.rs      AI bridge: JSON lines on COM2 to beehive on the host
+  src/aibridge.rs      AI bridge: JSON lines to beehive on the host, on COM2 or over the network
   src/bootslots.rs     A/B kernel slots: arm the rollback, health check, report failed trials
   src/pci.rs           PCI: find devices, read their configuration (`lspci`)
   src/xhci.rs          USB host controller (xHCI): rings, ports, devices; polled by the usb thread
@@ -306,7 +308,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `ai`,
-`slots`, `display`, `desktop`, `lsusb`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `display`, `desktop`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Under the hood:** interrupts are enabled (IDT + remapped PIC; IRQ0 timer,
 IRQ1 keyboard, IRQ3 COM2 AI bridge, IRQ4 COM1 serial). Handlers queue raw bytes; the shell decodes them and sleeps with
@@ -908,8 +910,66 @@ service, a client that vanishes in the middle of a command, the setting
 and password across a reboot, a new password, and that the log holds no
 password and no address. Not yet tried with a real `telnet` program.
 
-Still open in N6: sending signals to beehive over the network, and
-downloading a new kernel into the spare slot.
+Still open in N6: downloading a new kernel into the spare slot (phase H4 of
+`Docs/beehive-network-plan.html`, not built). Signals to beehive over the
+network: see the next section.
+
+## Beehive over the network (phases H1–H3) ✅ in QEMU, not yet tried on the HP
+
+```
+host$ tools/beehive/beehive.py pair hp
+hp is paired. On that machine, type:
+
+    ai connect HOST:4560 hp k7m2q-x9fpa-3hbdw-e5tzn
+
+host$ make beehive BEEHIVE_ARGS="--listen 192.168.1.10:4560"
+
+bee:/$ ai connect 192.168.1.10 hp k7m2q-x9fpa-3hbdw-e5tzn
+connecting to beehive as machine 'hp' (saved)
+not encrypted: people on your network can read questions and answers, but not use or change them
+connected (anthropic claude-opus-5-5)
+```
+
+A machine without the AI serial port (any real one) reaches beehive over the
+local network. `ask`, `explain`, `wish`, crash and health reports work as they
+do over the serial port. Plan: `Docs/beehive-network-plan.html`.
+
+- **Off by default on both sides.** beehive listens only with
+  `--listen ADDRESS[:PORT]`; the OS connects only after `ai connect`. The OS
+  connects out: nothing new listens on the OS.
+- **Pairing.** `beehive.py pair NAME` makes a key for one machine and prints
+  the command to type on it. `beehive.py unpair NAME` takes it away,
+  `beehive.py machines` lists them. Keys are in beehive's state folder
+  (`machines.json`, readable by you only) and in `/system/hive` on the machine.
+- **The key is never sent.** Each side proves it knows the key with a keyed
+  hash (HMAC-SHA-256) over two fresh random numbers, and every line after
+  that is sealed the same way with its place in the row. Someone else on the
+  network cannot use beehive, pretend to be it, or change, repeat or drop a
+  message unnoticed. The code is `beenet/src/hive.rs` and `sha256.rs` (tested
+  on the host against the published values) and the same in `beehive.py`.
+- **Not encrypted.** People on the same network can read questions, answers
+  and wishes. Do not type secrets into `ask`.
+- **beehive's door:** at most 8 connections, 10 s to finish the proof, short
+  lines only before it, five wrong tries lock an address out for a minute,
+  and unknown names look exactly like wrong keys. Each machine has its own
+  daily share of the request budget (`--max-requests-per-machine`).
+- **The `hive` thread** in the OS keeps the connection: it reconnects when
+  beehive restarts or the network comes back (waiting 2 s, doubling up to a
+  minute), asks "still there?" every 30 s, and delivers wishes that were
+  filed while beehive was away. An `ask` without a connection says so at once.
+- **`ai`** shows the link; **`ai off`** closes it and keeps it closed;
+  **`ai disconnect`** removes it and its key. `ai connect` and `ai disconnect`
+  work from the machine's own console only.
+- **Privacy:** the event log records "hive connected / lost", never the
+  address or the key.
+- When a network link is set up it is used instead of COM2.
+- **Tests:** `tests/test_beehive.py` (the door: pairing, wrong keys, changed,
+  repeated and unsealed lines, lockout, budget), unit tests in `beenet`,
+  scenarios `ai-network*.scn` (`@ai-net`, `@hive stop|start`): the whole path
+  in QEMU, a beehive restart, and a reboot of the OS.
+- **Not done:** the link's state on the status page (that page is protected);
+  a new kernel over the link (H4). On the HP the key is lost at every restart
+  until BeeFS lives on a disk there (it runs from a RAM disk).
 
 ## Display — phase G1: a graphics console, full HD in QEMU ✅
 

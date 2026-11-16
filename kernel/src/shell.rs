@@ -21,6 +21,9 @@ const DISPLAY_FILE: &str = "/system/display";
 const DESKTOP_FILE: &str = "/system/desktop";
 /// Contains "off" when the AI features are switched off (`ai off`).
 const AI_SWITCH: &str = "/system/ai";
+/// The network link to beehive (`ai connect`): host, port, this machine's
+/// name and its pairing key. See aibridge::Settings.
+const HIVE_FILE: &str = "/system/hive";
 /// Network settings: "dhcp", "none" or "static IP/PREFIX [GATEWAY]", and
 /// optionally a line "dns ADDRESS[:PORT]". No file: DHCP.
 const NET_FILE: &str = "/system/net";
@@ -244,6 +247,17 @@ impl Shell {
             let ev = eventlog::event("net").str("state", kind).finish();
             eventlog::write(&mut self.storage.fs(), ev);
         }
+        for (state, why) in aibridge::take_news() {
+            // Never the address: the event log and the screen get the state only.
+            let text = match (state, why.is_empty()) {
+                ("connected", _) => String::from("connected to beehive over the network"),
+                (_, true) => String::from("the connection to beehive ended"),
+                (_, false) => format!("the connection to beehive ended: {why}"),
+            };
+            println!("[hive] {text}");
+            let ev = eventlog::event("hive").str("state", state).finish();
+            eventlog::write(&mut self.storage.fs(), ev);
+        }
         let (logins, failures) = remote::take_news();
         for (count, state, text) in
             [(logins, "login", "login to the remote shell"), (failures, "refused", "wrong password on the remote shell")]
@@ -405,6 +419,9 @@ impl Shell {
             ("explain", []) => self.explain(),
             ("ai", []) => self.ai_status(),
             ("ai", [s @ ("on" | "off")]) => self.ai_switch(s),
+            ("ai", ["connect", target, name, key]) => self.ai_connect(target, name, key),
+            ("ai", ["disconnect"]) => self.ai_disconnect(),
+            ("ai", ["connect", ..]) => error("usage: ai connect HOST[:PORT] NAME KEY   (as printed by: beehive.py pair NAME)"),
             ("threads" | "ps", []) => {
                 println!("{:>3}  {:<10} {:<8} {:>9}  STACK USED", "ID", "NAME", "STATE", "RUNS");
                 for t in thread::list() {
@@ -1100,7 +1117,7 @@ impl Shell {
     /// Check the AI can be used; prints why not.
     fn ai_ready(&mut self) -> bool {
         if !aibridge::present() {
-            error("no AI bridge: this machine has no second serial port (COM2)");
+            error("no AI bridge: this machine has no second serial port (COM2); over the network: see 'ai connect'");
             false
         } else if !self.ai_enabled() {
             error("AI is switched off ('ai on' to enable)");
@@ -1164,8 +1181,17 @@ impl Shell {
     fn ai_status(&mut self) {
         let switch = if self.ai_enabled() { "on" } else { "off ('ai on' to enable)" };
         println!("AI features: {switch}");
+        Self::wait_for_link(3000); // a connection that is just being made
+        if let Some((name, connected, problem, ms)) = aibridge::link_status() {
+            let since = time::format_duration(ms);
+            return match (connected, aibridge::peer(), problem) {
+                (true, Some(peer), _) => println!("bridge:      network, as machine '{name}': beehive online ({peer}) for {since}, not encrypted"),
+                (_, _, Some(why)) => println!("bridge:      network, as machine '{name}': not connected: {why}"),
+                _ => println!("bridge:      network, as machine '{name}': connecting"),
+            };
+        }
         if !aibridge::present() {
-            return println!("bridge:      none (no COM2 port in this machine)");
+            return println!("bridge:      none (no COM2 port in this machine; over the network: ai connect HOST NAME KEY)");
         }
         match aibridge::ping(1500) {
             Some(peer) => println!("bridge:      COM2, beehive online ({peer})"),
@@ -1177,9 +1203,75 @@ impl Shell {
         let mut fs = self.storage.fs();
         let r = fs.mkdir_all("/system").and_then(|_| fs.write_file(AI_SWITCH, format!("{state}\n").as_bytes()));
         drop(fs);
+        // The kill switch also closes (or allows) the network link to beehive.
+        aibridge::set_enabled(state == "on");
         match r {
             Ok(()) => println!("AI features switched {state}."),
             Err(e) => error(&format!("could not save: {e}")),
+        }
+    }
+
+    /// At boot: the saved network link to beehive, and the kill switch.
+    pub fn load_hive(&mut self) {
+        aibridge::set_enabled(self.ai_enabled());
+        let data = self.storage.fs().read_file(HIVE_FILE).ok();
+        if let Some(settings) = data.and_then(|d| aibridge::Settings::parse(&String::from_utf8_lossy(&d))) {
+            aibridge::configure(Some(settings));
+        }
+    }
+
+    /// `ai connect HOST[:PORT] NAME KEY`: reach beehive over the network.
+    fn ai_connect(&mut self, target: &str, name: &str, key: &str) {
+        if session::current().is_some() {
+            return error("ai connect: only from the machine's own console");
+        }
+        let Some(key) = beenet::hive::key_bytes(key) else {
+            return error("ai connect: that is not a pairing key (four groups of five characters, as beehive.py pair prints it)");
+        };
+        let settings = net::split_host_port(target, beenet::hive::DEFAULT_PORT)
+            .and_then(|(host, port)| aibridge::Settings::new(host, port, name, key));
+        let Some(settings) = settings else {
+            return error("usage: ai connect HOST[:PORT] NAME KEY   (as printed by: beehive.py pair NAME)");
+        };
+        let mut fs = self.storage.fs();
+        let saved = fs.mkdir_all("/system").and_then(|_| fs.write_file(HIVE_FILE, settings.to_text().as_bytes()));
+        drop(fs);
+        let note = match (saved, self.storage.persistent) {
+            (Ok(()), true) => "saved",
+            (Ok(()), false) => "RAM disk: not kept after reboot",
+            (Err(_), _) => "could not save",
+        };
+        aibridge::configure(Some(settings));
+        println!("connecting to beehive as machine '{name}' ({note})");
+        println!("not encrypted: people on your network can read questions and answers, but not use or change them");
+        Self::wait_for_link(5000);
+        match aibridge::link_status() {
+            Some((_, true, _, _)) => println!("connected ({})", aibridge::peer().unwrap_or_default()),
+            Some((_, _, Some(why), _)) => error(&format!("not connected: {why}\nit keeps trying; 'ai' shows how it goes")),
+            _ => println!("still connecting; 'ai' shows how it goes"),
+        }
+    }
+
+    /// Give the hive thread a moment to connect or to find out why it cannot.
+    fn wait_for_link(ms: u64) {
+        let until = time::uptime_ms() + ms;
+        thread::wait_until(|| {
+            time::uptime_ms() >= until || matches!(aibridge::link_status(), None | Some((_, true, _, _)) | Some((_, _, Some(_), _)))
+        });
+    }
+
+    fn ai_disconnect(&mut self) {
+        if session::current().is_some() {
+            return error("ai disconnect: only from the machine's own console");
+        }
+        if aibridge::link_status().is_none() {
+            return println!("there is no network link to beehive");
+        }
+        aibridge::configure(None);
+        let removed = self.storage.fs().remove(HIVE_FILE);
+        match removed {
+            Ok(()) => println!("network link to beehive removed, and its key with it"),
+            Err(e) => error(&format!("link closed, but {HIVE_FILE} could not be removed: {e}")),
         }
     }
 
@@ -1359,6 +1451,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("feedback TEXT", "tell the OS what could be better"),
     ("ask QUESTION", "ask the AI (needs beehive on the host)"),
     ("explain", "ask the AI about the last error or crash"),
+    ("ai connect HOST NAME KEY", "reach beehive over the network (ai disconnect: stop)"),
     ("ai [on|off]", "AI bridge status; switch AI features on/off"),
     ("selftest", "run the kernel self-tests"),
     ("net", "network status; net dhcp | static IP/PREFIX [GW] | dns ADDR | off"),

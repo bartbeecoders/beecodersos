@@ -13,8 +13,8 @@ $ history
 ~ ^\s+1\s+version$
 ~ ^\s+5\s+history$
 $ ask hello
-no AI bridge: this machine has no second serial port (COM2)
+no AI bridge: this machine has no second serial port (COM2); over the network: see 'ai connect'
 $ ai
-bridge:      none (no COM2 port in this machine)
+bridge:      none (no COM2 port in this machine; over the network: ai connect HOST NAME KEY)
 $ slots
 not booted from a boot disk with A/B slots (see tools/bootdisk.py)

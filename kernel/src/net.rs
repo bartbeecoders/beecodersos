@@ -349,6 +349,11 @@ pub fn apply(settings: Settings) -> Result<(), NetError> {
 }
 
 fn cancelled() -> bool {
+    // Only a shell reads keys. A background thread (the link to beehive, the
+    // status page) must not swallow what is typed on the console.
+    if !thread::on_console() && thread::current_session().is_none() {
+        return false;
+    }
     let mut stop = false;
     while let Some(key) = input::poll_key() {
         stop |= matches!(key, Key::Ctrl('c') | Key::Escape);

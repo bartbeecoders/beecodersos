@@ -21,6 +21,11 @@ Scenario files (tests/scenarios/*.scn):
                                e1000e (Intel 82574L) instead of the e1000
     @ai                        (first lines) attach COM2 and run beehive with its fake backend
     @ai-offline                (first lines) attach COM2 but run no beehive
+    @ai-net                    (first lines, with @net) run beehive with its fake backend
+                               listening on the network, with one paired machine: in a
+                               command {hive} is its address (10.0.2.2:PORT), {hive-name}
+                               the machine's name and {hive-key} its pairing key
+    @hive stop|start           (with @ai-net) stop beehive, or start it again
     @wire                      (first lines) connect the e1000 network card to the test: it
                                sees every frame the OS sends and can inject frames (the OS
                                boots with `nodhcp`, so it stays silent until told otherwise)
@@ -401,7 +406,7 @@ def parse_scenario(path: Path):
         line = raw.rstrip()
         if not line or line.startswith("#"):
             continue
-        if line in ("@disk", "@ai", "@ai-offline", "@bootdisk", "@wire", "@net", "@forward", "@sata", "@e1000e"):
+        if line in ("@disk", "@ai", "@ai-offline", "@ai-net", "@bootdisk", "@wire", "@net", "@forward", "@sata", "@e1000e"):
             opts.add(line[1:])
         elif line.startswith("@dns "):
             opts.add("dns:" + line[5:])
@@ -411,7 +416,7 @@ def parse_scenario(path: Path):
             steps.append(("screenshot", line[12:].strip(), []))
         elif line.startswith("@usb"):
             opts.add("usb:" + line[4:].strip())
-        elif line.startswith(("@keys ", "@mouse ", "@button ")):
+        elif line.startswith(("@keys ", "@mouse ", "@button ", "@hive ")):
             kind, _, arg = line[1:].partition(" ")
             steps.append((kind, arg.strip(), []))
         elif line.startswith(("@frame ", "@frame-soon ", "@send ")):
@@ -923,11 +928,24 @@ def test_scenario(path: Path):
                 [sys.executable, str(BEEHIVE), "--no-config", "--backend", "fake", "--retry", "0.1",
                  "--connect", f"127.0.0.1:{ai_port}", "--state-dir", str(Path(tmp) / "beehive")],
                 stdout=subprocess.PIPE if not VERBOSE else None, stderr=subprocess.STDOUT)
+        start_hive = None
+        if "ai-net" in opts:  # beehive's door on the network, one machine paired
+            state_dir, hive_port = Path(tmp) / "beehive", free_port()
+            run_tool([sys.executable, str(BEEHIVE), "--no-config", "--state-dir", str(state_dir), "pair", "test"])
+            hive_key = json.loads((state_dir / "machines.json").read_text())["test"]["key"]
+            start_hive = lambda: subprocess.Popen(
+                [sys.executable, str(BEEHIVE), "--no-config", "--backend", "fake", "--connect", "none",
+                 "--listen", f"127.0.0.1:{hive_port}", "--state-dir", str(state_dir)],
+                stdout=subprocess.PIPE if not VERBOSE else None, stderr=subprocess.STDOUT)
+            hive = start_hive()
+            time.sleep(0.5)  # let it open its port before the OS boots
         wire = Wire() if "wire" in opts else None
         dns_table = next((o[4:] for o in opts if o.startswith("dns:")), None)
         dns = FakeDns(dns_table) if dns_table is not None else None
         tcp = FakeTcp() if "tcp" in opts else None
         names = {"{dns}": f"10.0.2.2:{dns.port}"} if dns else {}
+        if start_hive:
+            names.update({"{hive}": f"10.0.2.2:{hive_port}", "{hive-name}": "test", "{hive-key}": hive_key})
         if tcp:
             names.update({"{%s}" % name: f"10.0.2.2 {port}" for name, port in tcp.ports.items()})
         servers = [x for x in (dns, tcp) if x]
@@ -941,7 +959,7 @@ def test_scenario(path: Path):
             servers.append(FakeTftp())
             names["{tftp}"] = f"10.0.2.2:{servers[-1].port}"
         # The fake servers listen on the host, so the guest must be able to reach it.
-        usernet = ("open" if servers else "isolated") if "net" in opts else None
+        usernet = ("open" if servers or start_hive else "isolated") if "net" in opts else None
         forward = free_port() if "forward" in opts else None
         forward_shell = free_port() if "forward" in opts else None
         extra_args = next((o[5:] for o in opts if o.startswith("args:")), None)
@@ -972,6 +990,15 @@ def test_scenario(path: Path):
                     continue
                 if kind == "screenshot":
                     check_screenshot(vm, Path(tmp), cmd, path.name)
+                    continue
+                if kind == "hive":
+                    if not start_hive:
+                        raise TestFailure(f"{path.name}: @hive needs @ai-net")
+                    if hive and hive.poll() is None:
+                        hive.kill()
+                        hive.wait()
+                    hive = start_hive() if cmd == "start" else None
+                    time.sleep(0.5)
                     continue
                 if kind == "keys":
                     for key in cmd.split():

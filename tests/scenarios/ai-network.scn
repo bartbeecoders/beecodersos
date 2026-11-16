@@ -1,0 +1,78 @@
+# The link to beehive over the network (Docs/beehive-network-plan.html): a
+# machine without the AI serial port pairs with beehive and gets the same
+# ask / explain / wish as over the serial port. beehive runs on the host with
+# its fake backend and one paired machine.
+@net
+@ai-net
+$ net dhcp
+~ 10\.0\.2\.15
+$ ai
+AI features: on
+bridge:      none (no COM2 port in this machine; over the network: ai connect HOST NAME KEY)
+$ ask hello
+~ no AI bridge
+
+# A wrong key: beehive stays silent, and `ai` says why there is no link.
+$ ai connect {hive} {hive-name} abcde-fghij-kmnpq-rstuv
+~ ^connecting to beehive as machine 'test'
+~ ^not encrypted
+~ ^not connected: refused: wrong key or name
+$ ai
+~ ^bridge:      network, as machine 'test': not connected: refused: wrong key or name
+$ ask hello
+~ offline|not connected
+
+# The right key.
+$ ai connect {hive} {hive-name} {hive-key}
+connected (fake fake)
+~ ^\[hive\] connected to beehive over the network$
+$ ai
+~ ^bridge:      network, as machine 'test': beehive online \(fake fake\) for .*, not encrypted$
+$ ask what is this
+BeeHive fake backend (no LLM).
+Question: what is this
+$ wish a banner from the network
+Thanks! Saved to /system/inbox/signals.jsonl and sent to the AI host.
+$ nosuchcommand
+$ explain
+~ nosuchcommand
+
+# Ctrl+C stops a long answer; the link stays.
+$^C ask slow please
+$ ask again
+Question: again
+
+# The kill switch closes the connection, and keeps it closed.
+$ ai off
+AI features switched off.
+$ ai
+AI features: off ('ai on' to enable)
+~ not connected: AI features are switched off
+$ ask hello
+~ switched off
+$ ai on
+$ ai
+~ beehive online
+$ ask back again
+Question: back again
+
+# The key is never shown, and the event log has no address.
+$ ai
+!~ {hive-key}
+$ log 40
+!~ 10\.0\.2\.2
+~ hive
+
+# Malformed settings are refused.
+$ ai connect {hive} {hive-name} not-a-key
+~ not a pairing key
+$ ai connect {hive} Bad_Name {hive-key}
+~ ^usage: ai connect
+$ ai connect
+~ ^usage: ai connect
+
+$ ai disconnect
+network link to beehive removed, and its key with it
+$ ai
+bridge:      none (no COM2 port in this machine; over the network: ai connect HOST NAME KEY)
+@signal "target": "test", "kind": "wish", "text": "a banner from the network"

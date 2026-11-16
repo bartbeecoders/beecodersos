@@ -12,6 +12,21 @@ expose that port as a TCP server on localhost; beehive connects to it, answers
 
 The API key lives here, never in the guest.
 
+Machines without such a serial port (real hardware) reach beehive over the
+local network instead, when it is started with --listen. Only machines that
+were paired may talk to it (see "machines on the network" in this file and
+Docs/beehive-network-plan.html):
+
+    beehive.py pair hp                 make a key for a machine called "hp"; prints what
+                                       to type on that machine (`ai connect ...`)
+    beehive.py unpair hp               take its key away
+    beehive.py machines                paired machines and when each was last seen
+    beehive.py --listen 192.168.1.10:4560 ...    also serve paired machines on that address
+
+The network link is not encrypted: people on the same network can read the
+questions and answers, but cannot use beehive, pretend to be it, or change
+what is sent.
+
     uv run tools/beehive/beehive.py                       # Claude (ANTHROPIC_API_KEY or `ant auth login`)
     python3 tools/beehive/beehive.py --backend openai \\
         --base-url http://localhost:11434/v1 --model llama3.2   # Ollama / LM Studio / OpenRouter
@@ -30,14 +45,17 @@ options, with underscores: backend = "openai", base_url = "...", ...).
 State (default ~/.local/state/beehive/):
     signals.jsonl     wishes, feedback, missed commands and crashes from the OS
     exchanges.jsonl   every AI request with its answer and timing
-    usage.json        requests per day (for --max-requests-per-day)
+    usage.json        requests per day (for --max-requests-per-day), also per machine
+    machines.json     the keys of paired machines (readable by you only)
 """
 
 import argparse
 import datetime as dt
+import hmac
 import json
 import os
 import re
+import secrets
 import shutil
 import socket
 import subprocess
@@ -383,8 +401,10 @@ class Wrapper:
 # --- state ---------------------------------------------------------------------------
 
 class State:
-    def __init__(self, path: Path, max_per_day: int):
+    def __init__(self, path: Path, max_per_day: int, max_per_machine: int | None = None):
         self.path, self.max_per_day = path, max_per_day
+        # One machine on the network may not use up the day for all the others.
+        self.max_per_machine = max_per_day if max_per_machine is None else max_per_machine
         path.mkdir(parents=True, exist_ok=True)
         self.lock = threading.Lock()
 
@@ -392,8 +412,9 @@ class State:
         with self.lock, open(self.path / name, "a") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-    def take_request(self) -> bool:
-        """Count one request against today's budget. False when over budget."""
+    def take_request(self, machine: str | None = None) -> bool:
+        """Count one request against today's budget (and, for a machine on the
+        network, against that machine's share). False when over budget."""
         with self.lock:
             f = self.path / "usage.json"
             today = dt.date.today().isoformat()
@@ -401,18 +422,110 @@ class State:
                 usage = json.loads(f.read_text())
             except (OSError, ValueError):
                 usage = {}
-            if usage.get("date") != today:
+            if not isinstance(usage, dict) or usage.get("date") != today:
                 usage = {"date": today, "requests": 0}
+            machines = usage.get("machines") if isinstance(usage.get("machines"), dict) else {}
             if usage["requests"] >= self.max_per_day:
                 return False
+            if machine is not None and machines.get(machine, 0) >= self.max_per_machine:
+                return False
             usage["requests"] += 1
+            if machine is not None:
+                machines[machine] = machines.get(machine, 0) + 1
+                usage["machines"] = machines
             f.write_text(json.dumps(usage))
             return True
 
+    # Paired machines: {name: {"key": ..., "paired": time, "seen": time or None}}.
+
+    def machines(self) -> dict:
+        try:
+            data = json.loads((self.path / "machines.json").read_text())
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def save_machines(self, machines: dict):
+        f = self.path / "machines.json"
+        tmp = f.with_suffix(".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)  # the keys: for the owner only
+        with os.fdopen(fd, "w") as out:
+            out.write(json.dumps(machines, indent=1))
+        os.replace(tmp, f)
+
+    def machine_seen(self, name: str):
+        with self.lock:
+            machines = self.machines()
+            if name in machines:
+                machines[name]["seen"] = now_iso()
+                self.save_machines(machines)
+
+
+# --- machines on the network ---------------------------------------------------------------
+#
+# A machine and beehive share a key, made by `beehive.py pair NAME` and typed in on the
+# machine once. It is never sent. On each connection both sides prove they know it:
+#
+#   machine: {"type":"hello","name":NAME,"nonce":A,...}       A, B: 32 hex digits, random
+#   beehive: {"type":"challenge","nonce":B}
+#   machine: {"type":"auth","mac":proof(key, "os", A, B)}
+#   beehive: {"type":"welcome",...,"mac":proof(key, "hive", B, A)}
+#
+# After that every line is "MAC N JSON": N counts the lines of one direction from 1, and
+# MAC is made from the direction, N and the JSON text with a key for this connection
+# only. A line that was changed, repeated, left out or made up does not pass.
+# The same code exists in the OS: beenet/src/hive.rs. Keep the two in step.
+
+KEY_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789"  # no l, o, 0, 1: easy to read and type
+DEFAULT_PORT = 4560
+NONCE = re.compile(r"[0-9a-f]{32}")
+MACHINE_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,15}")
+MAX_LINE = 8192          # as in the OS (aibridge.rs)
+MAX_HELLO_LINE = 512     # before the proof: short lines only
+PROOF_SECONDS = 10       # a connection that has not proved itself by then is closed
+MAX_CONNECTIONS = 8
+WRONG_TRIES = 5          # from one address; then it is ignored for LOCKOUT_SECONDS
+LOCKOUT_SECONDS = 60
+
+
+def new_key() -> str:
+    """100 random bits as four groups of five characters."""
+    return "-".join("".join(secrets.choice(KEY_ALPHABET) for _ in range(5)) for _ in range(4))
+
+
+def key_bytes(code: str) -> bytes | None:
+    """The key as typed (dashes and capitals do not matter), or None if it cannot be one."""
+    text = code.replace("-", "").lower()
+    return text.encode() if len(text) == 20 and all(c in KEY_ALPHABET for c in text) else None
+
+
+def proof(key: bytes, who: str, first: str, second: str) -> str:
+    return hmac.new(key, f"{who} {first} {second}".encode(), "sha256").hexdigest()
+
+
+def session_key(key: bytes, a: str, b: str) -> bytes:
+    return hmac.new(key, f"session {a} {b}".encode(), "sha256").digest()
+
+
+def seal(session: bytes, direction: str, n: int, text: str) -> str:
+    """One line of a proved connection. direction: "o" from the OS, "h" from beehive."""
+    mac = hmac.new(session, f"{direction} {n} {text}".encode(), "sha256").hexdigest()[:32]
+    return f"{mac} {n} {text}"
+
+
+def unseal(session: bytes, direction: str, n: int, line: str) -> str | None:
+    """The JSON text of line number `n`, or None when the line is not genuine."""
+    mac, _, rest = line.partition(" ")
+    number, _, text = rest.partition(" ")
+    if number != str(n) or not hmac.compare_digest(seal(session, direction, n, text).encode(), line.encode()):
+        return None
+    return text
 
 # --- one connection to a VM serial port ---------------------------------------------------
 
 class Link(threading.Thread):
+    machine = None  # the name of a paired machine on the network (see Peer); None: a serial port
+
     def __init__(self, target: str, hive: "Hive"):
         super().__init__(daemon=True)
         self.target, self.hive = target, hive
@@ -471,6 +584,8 @@ class Link(threading.Thread):
         if kind == "hello":
             log(f"{self.target}: BeeCodersOs {msg.get('version')} b{msg.get('build')} says hello")
             self.send({"type": "welcome", "backend": self.hive.backend.name, "model": self.hive.backend.model})
+        elif kind == "ping":  # "still there?" from a machine on the network
+            self.send({"type": "pong"})
         elif kind == "signal":
             record = {"received": now_iso(), "target": self.target,
                       **{k: msg.get(k) for k in ("kind", "text", "build", "t")}}
@@ -490,7 +605,7 @@ class Link(threading.Thread):
         started = time.monotonic()
         lines, outcome = [], "done"
         try:
-            if not self.hive.state.take_request():
+            if not self.hive.state.take_request(self.machine):
                 raise BackendError(f"daily request budget reached ({self.hive.state.max_per_day}); "
                                    "raise --max-requests-per-day on the host")
             prompt = self.hive.prompt(msg)
@@ -522,6 +637,207 @@ class Link(threading.Thread):
             "outcome": outcome, "seconds": round(secs, 2)})
 
 
+class Peer(Link):
+    """One paired machine connected over the network. After the proof it is served
+    exactly like a serial link (`dispatch`), with every line sealed."""
+
+    def __init__(self, sock, name: str, session: bytes, hive: "Hive", on_close):
+        super().__init__(name, hive)
+        self.sock, self.machine, self.session, self.on_close = sock, name, session, on_close
+        self.sent = self.received = 0
+
+    def send(self, msg: dict):
+        with self.send_lock:
+            self.sent += 1
+            line = seal(self.session, "h", self.sent, json.dumps(msg, ensure_ascii=False))
+            try:
+                self.sock.sendall(line.encode() + b"\n")
+            except OSError:
+                pass
+
+    def run(self):
+        log(f"{self.target}: connected over the network")
+        try:
+            buf = b""
+            while chunk := self.sock.recv(4096):
+                buf += chunk
+                while b"\n" in buf:
+                    raw, buf = buf.split(b"\n", 1)
+                    self.received += 1
+                    text = unseal(self.session, "o", self.received, raw.decode("utf-8", errors="replace"))
+                    if text is None:
+                        raise ValueError("a line that is not genuine")
+                    msg = json.loads(text)
+                    if isinstance(msg, dict):
+                        self.dispatch(msg)
+                if len(buf) > MAX_LINE:
+                    raise ValueError("a line that is too long")
+        except (OSError, ValueError) as e:
+            if isinstance(e, ValueError):
+                log(f"{self.target}: closing the connection: {e}")
+        self.close()
+        for ev in self.cancels.values():
+            ev.set()
+        log(f"{self.target}: disconnected")
+        self.on_close(self)
+
+    def close(self):
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        self.sock.close()
+
+
+class Listener(threading.Thread):
+    """The door on the network: accepts connections and lets paired machines in."""
+
+    def __init__(self, address: str, hive: "Hive"):
+        super().__init__(daemon=True)
+        host, _, port = address.rpartition(":")
+        if not host:
+            host, port = address, str(DEFAULT_PORT)
+        self.hive = hive
+        self.server = socket.create_server((host, int(port)))
+        self.port = self.server.getsockname()[1]
+        self.lock = threading.Lock()
+        self.peers: dict[str, Peer] = {}
+        self.open = 0                      # connections, proved or not
+        self.wrong: dict[str, list] = {}   # address -> [wrong tries, ignored until]
+
+    def run(self):
+        while True:
+            try:
+                sock, (address, _) = self.server.accept()
+            except OSError:
+                return
+            with self.lock:
+                tries, until = self.wrong.get(address, [0, 0])
+                refuse = self.open >= MAX_CONNECTIONS or time.monotonic() < until
+                if not refuse:
+                    self.open += 1
+            if refuse:
+                sock.close()
+                continue
+            threading.Thread(target=self.greet, args=(sock, address), daemon=True).start()
+
+    def close(self):
+        self.server.close()
+        with self.lock:
+            peers = list(self.peers.values())
+        for peer in peers:
+            peer.close()
+
+    def greet(self, sock, address: str):
+        """The proof. Ends with a running Peer, or a closed connection."""
+        peer = None
+        try:
+            peer = self.prove(sock)
+        except (OSError, ValueError):
+            pass
+        if peer is None:
+            sock.close()
+            with self.lock:
+                self.open -= 1
+                entry = self.wrong.setdefault(address, [0, 0])
+                entry[0] += 1
+                if entry[0] >= WRONG_TRIES:
+                    self.wrong[address] = [0, time.monotonic() + LOCKOUT_SECONDS]
+                    log(f"network: {WRONG_TRIES} wrong tries from one address: ignoring it for {LOCKOUT_SECONDS}s")
+            return
+        with self.lock:
+            self.wrong.pop(address, None)
+            old = self.peers.get(peer.machine)
+            self.peers[peer.machine] = peer
+        if old:
+            old.close()  # one connection per machine: the new one replaces it
+        self.hive.state.machine_seen(peer.machine)
+        peer.start()
+
+    def gone(self, peer: Peer):
+        with self.lock:
+            self.open -= 1
+            if self.peers.get(peer.machine) is peer:
+                del self.peers[peer.machine]
+
+    def prove(self, sock) -> Peer | None:
+        deadline = time.monotonic() + PROOF_SECONDS
+        buf = b""
+
+        def line() -> dict:
+            nonlocal buf
+            while b"\n" not in buf:
+                left = deadline - time.monotonic()
+                if left <= 0 or len(buf) > MAX_HELLO_LINE:
+                    raise ValueError("too slow or too long")
+                sock.settimeout(left)
+                chunk = sock.recv(1024)
+                if not chunk:
+                    raise ValueError("closed")
+                buf += chunk
+            raw, buf = buf.split(b"\n", 1)
+            msg = json.loads(raw.decode("utf-8", errors="replace"))
+            if not isinstance(msg, dict):
+                raise ValueError("not a message")
+            return msg
+
+        hello = line()
+        name, a = hello.get("name"), hello.get("nonce")
+        if hello.get("type") != "hello" or not isinstance(name, str) or not isinstance(a, str) or not NONCE.fullmatch(a):
+            return None
+        b = secrets.token_hex(16)
+        sock.sendall(json.dumps({"type": "challenge", "nonce": b}).encode() + b"\n")
+        auth = line()
+        entry = self.hive.state.machines().get(name) if MACHINE_NAME.fullmatch(name) else None
+        # An unknown name gets the same treatment with a key nobody has.
+        key = key_bytes(entry["key"]) if entry else None
+        key = key or secrets.token_bytes(20)
+        mac = auth.get("mac")
+        if auth.get("type") != "auth" or not isinstance(mac, str) or not entry \
+                or not hmac.compare_digest(mac.encode(), proof(key, "os", a, b).encode()):
+            return None
+        if buf:
+            return None  # nothing may follow the proof before our answer
+        sock.settimeout(None)
+        welcome = {"type": "welcome", "backend": self.hive.backend.name, "model": self.hive.backend.model,
+                   "mac": proof(key, "hive", b, a)}
+        sock.sendall(json.dumps(welcome).encode() + b"\n")
+        return Peer(sock, name, session_key(key, a, b), self.hive, self.gone)
+
+
+def manage_machines(state: State, action: list[str]) -> int:
+    """`pair NAME`, `unpair NAME`, `machines`."""
+    machines = state.machines()
+    if action == ["machines"]:
+        for name, entry in sorted(machines.items()):
+            print(f"{name:<16} paired {entry.get('paired', '?')}, last seen {entry.get('seen') or 'never'}")
+        if not machines:
+            print("no paired machines (pair one with: beehive.py pair NAME)")
+        return 0
+    if len(action) == 2 and action[0] in ("pair", "unpair"):
+        name = action[1]
+        if not MACHINE_NAME.fullmatch(name):
+            print("a machine name is 1 to 16 characters: a-z, 0-9 and -", file=sys.stderr)
+            return 2
+        if action[0] == "unpair":
+            if machines.pop(name, None) is None:
+                print(f"no machine called {name}", file=sys.stderr)
+                return 1
+            state.save_machines(machines)
+            print(f"{name} is no longer paired (a running beehive drops it at its next connection)")
+            return 0
+        key = new_key()
+        machines[name] = {"key": key, "paired": now_iso(), "seen": None}
+        state.save_machines(machines)
+        print(f"{name} is paired. "
+              f"On that machine, type:\n\n    ai connect HOST:{DEFAULT_PORT} {name} {key}\n\n"
+              f"HOST is this computer's address on your network; start beehive with\n"
+              f"--listen HOST:{DEFAULT_PORT}. The key is shown only now.")
+        return 0
+    print("usage: beehive.py pair NAME | unpair NAME | machines", file=sys.stderr)
+    return 2
+
+
 class Hive:
     def __init__(self, backend, state: State, readme: str, retry: float):
         self.backend, self.state, self.retry = backend, state, retry
@@ -541,8 +857,16 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", type=Path, default=Path.home() / ".config/beehive/config.toml")
     ap.add_argument("--no-config", action="store_true", help="ignore the config file")
+    ap.add_argument("action", nargs="*", metavar="pair|unpair|machines",
+                    help="pair NAME / unpair NAME / machines: manage machines on the network, then exit")
+    ap.add_argument("--listen", metavar="ADDRESS[:PORT]",
+                    help=f"also serve paired machines over the network on this address (port {DEFAULT_PORT} "
+                         "unless given). Not encrypted. Off unless given")
+    ap.add_argument("--max-requests-per-machine", type=int,
+                    help="daily limit for one machine on the network (default: the daily limit)")
     ap.add_argument("--connect", action="append", metavar="HOST:PORT",
-                    help=f"VM serial port(s) to serve (default: {', '.join(DEFAULT_TARGETS)})")
+                    help=f"VM serial port(s) to serve (default: {', '.join(DEFAULT_TARGETS)}; "
+                         "`none`: no serial ports, only --listen)")
     ap.add_argument("--backend", choices=["anthropic", "claude-code", "grok", "openai", "fake"])
     ap.add_argument("--model", help="model (anthropic default: claude-opus-5-5; CLIs: their default)")
     ap.add_argument("--effort", choices=["low", "medium", "high", "xhigh", "max"],
@@ -564,6 +888,8 @@ def main():
 
     backend_name = opt("backend", "anthropic")
     state_dir = Path(opt("state_dir", Path.home() / ".local/state/beehive")).expanduser()
+    if args.action:
+        sys.exit(manage_machines(State(state_dir, 0), args.action))
     if backend_name == "fake":
         backend = FakeBackend()
     elif backend_name == "claude-code":
@@ -584,13 +910,19 @@ def main():
 
     readme_path = ROOT / "README.md"
     readme = readme_path.read_text() if readme_path.exists() else "(no README found)"
-    state = State(state_dir, int(opt("max_requests_per_day", 200)))
+    per_machine = opt("max_requests_per_machine")
+    state = State(state_dir, int(opt("max_requests_per_day", 200)), None if per_machine is None else int(per_machine))
     hive = Hive(backend, state, readme, args.retry)
     targets = args.connect or cfg.get("connect") or DEFAULT_TARGETS
+    targets = [t for t in targets if t != "none"]  # --connect none: no serial ports, the network only
     log(f"backend {backend.name} ({backend.model}), state in {state_dir}")
     links = [Link(t, hive) for t in targets]
     for link in links:
         link.start()
+    if opt("listen"):
+        listener = Listener(opt("listen"), hive)
+        listener.start()
+        log(f"listening for paired machines on {opt('listen')} (port {listener.port}); not encrypted")
     try:
         while True:
             time.sleep(3600)

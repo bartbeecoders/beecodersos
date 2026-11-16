@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Unit tests for beehive (tools/beehive/beehive.py) that need no LLM or login:
 the console wrapper, prompts, and the claude-code / grok CLI backends driven
-by fake CLI executables (stream parsing, tool-use watchdog, errors, cancel).
+by fake CLI executables (stream parsing, tool-use watchdog, errors, cancel),
+and the network door for paired machines (pairing, the proof, sealed lines,
+limits).
 
     python3 tests/test_beehive.py        (part of `make check`)
 """
 
 import json
+import socket
 import stat
 import sys
 import tempfile
@@ -139,6 +142,241 @@ class Formatting(unittest.TestCase):
         self.assertIn("x: not found", p)
         p = hive.prompt({"type": "explain", "crash": "panicked at shell.rs", "kind": "panic", "build": "9"})
         self.assertIn("crashed", p)
+
+
+class Client:
+    """The machine's side of the network link, as the OS does it (beenet/src/hive.rs)."""
+
+    def __init__(self, port: int, name: str, key: str, auth=None, timeout: float = 5):
+        self.sock = socket.create_connection(("127.0.0.1", port), timeout=timeout)
+        self.buf = b""
+        self.sent = self.received = 0
+        a = "00112233445566778899aabbccddeeff"
+        self.put({"type": "hello", "name": name, "nonce": a, "version": "t", "build": "1"})
+        self.challenge = self.get()
+        nonce = self.challenge["nonce"]
+        k = b.key_bytes(key)
+        self.put({"type": "auth", "mac": b.proof(k, "os", a, nonce) if auth is None else auth})
+        self.welcome = self.get()  # None: the door stayed shut
+        self.proved = bool(self.welcome) and self.welcome.get("mac") == b.proof(k, "hive", nonce, a)
+        self.session = b.session_key(k, a, nonce)
+
+    def put(self, msg):
+        self.raw(json.dumps(msg))
+
+    def raw(self, line: str):
+        self.sock.sendall(line.encode() + b"\n")
+
+    def line(self):
+        """The next line as text, or None when beehive closed the connection."""
+        try:
+            while b"\n" not in self.buf:
+                chunk = self.sock.recv(4096)
+                if not chunk:
+                    return None
+                self.buf += chunk
+        except OSError:
+            return None
+        raw, self.buf = self.buf.split(b"\n", 1)
+        return raw.decode()
+
+    def get(self):
+        line = self.line()
+        return json.loads(line) if line else None
+
+    def send(self, msg, n=None):
+        self.sent += 1
+        self.raw(b.seal(self.session, "o", n or self.sent, json.dumps(msg, ensure_ascii=False)))
+
+    def recv(self):
+        line = self.line()
+        if line is None:
+            return None
+        self.received += 1
+        text = b.unseal(self.session, "h", self.received, line)
+        assert text is not None, f"beehive sent a line that is not genuine: {line}"
+        return json.loads(text)
+
+    def close(self):
+        self.sock.close()
+
+
+class Network(unittest.TestCase):
+    """beehive --listen: only paired machines get in, and only genuine lines are served."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.state = b.State(Path(self.tmp.name), 100)
+        self.assertEqual(b.manage_machines(self.state, ["pair", "hp"]), 0)
+        self.key = self.state.machines()["hp"]["key"]
+        self.hive = b.Hive(b.FakeBackend(), self.state, "README", 1)
+        self.listener = b.Listener("127.0.0.1:0", self.hive)
+        self.listener.start()
+        self.port = self.listener.port
+        self.clients = []
+
+    def tearDown(self):
+        for c in self.clients:
+            c.close()
+        self.listener.close()
+        self.tmp.cleanup()
+
+    def client(self, name="hp", key=None, **kw):
+        c = Client(self.port, name, key or self.key, **kw)
+        self.clients.append(c)
+        return c
+
+    def signals(self):
+        f = Path(self.tmp.name) / "signals.jsonl"
+        return [json.loads(l) for l in f.read_text().splitlines()] if f.exists() else []
+
+    def test_the_two_sides_agree_on_fixed_values(self):
+        # The same values are in beenet/src/hive.rs: a change on one side fails a test.
+        k = b.key_bytes("ABCDE-fghij-kmnpq-rstuv")
+        self.assertEqual(k, b"abcdefghijkmnpqrstuv")
+        a, n = "00112233445566778899aabbccddeeff", "ffeeddccbbaa99887766554433221100"
+        self.assertEqual(b.proof(k, "os", a, n), "c6a12e0fb9bfc1849ceef735bb0e27218e7150f4366bd88dab638b76d0ccb894")
+        self.assertEqual(b.proof(k, "hive", n, a), "d97922ca4948a5f094f7f3b6da1f0061ef6ce2b77e4e1b5ede14b0946df87b85")
+        session = b.session_key(k, a, n)
+        self.assertEqual(session.hex(), "226f0e56f7988da09c521f72d137c85112110a73b3671ed26bdf2f0127f8bb3b")
+        self.assertEqual(b.seal(session, "o", 1, '{"type":"ping"}'), '69b8381eba22110a9a2cb3cef051f20d 1 {"type":"ping"}')
+        line = b.seal(session, "h", 7, '{"type":"line","id":3,"text":"héllo"}')
+        self.assertEqual(line, '8c430b21a0d327d623ac6ef6d8369495 7 {"type":"line","id":3,"text":"héllo"}')
+        self.assertEqual(b.unseal(session, "h", 7, line), '{"type":"line","id":3,"text":"héllo"}')
+        for wrong in (line.replace("héllo", "hello"), line.replace(" 7 ", " 8 "), "0" + line[1:], line[33:], ""):
+            self.assertIsNone(b.unseal(session, "h", 7, wrong))
+        self.assertIsNone(b.unseal(session, "o", 7, line))  # the other direction
+        self.assertIsNone(b.unseal(session, "h", 6, line))  # another place in the row
+        for bad in ("", "abcde", "abcde-fghij-klmno-pqrst", "abcde-fghij-kmnpq-rstu", "abcde-fghij-kmnpq-rstuvw"):
+            self.assertIsNone(b.key_bytes(bad))
+
+    def test_pairing(self):
+        key = self.key
+        self.assertRegex(key, r"^[a-z2-9]{5}(-[a-z2-9]{5}){3}$")
+        self.assertIsNotNone(b.key_bytes(key))
+        mode = (Path(self.tmp.name) / "machines.json").stat().st_mode & 0o777
+        self.assertEqual(mode, 0o600)
+        self.assertEqual(b.manage_machines(self.state, ["pair", "Bad Name"]), 2)
+        self.assertEqual(b.manage_machines(self.state, ["pair", "x" * 17]), 2)
+        self.assertEqual(b.manage_machines(self.state, ["nonsense"]), 2)
+        self.assertEqual(b.manage_machines(self.state, ["unpair", "nobody"]), 1)
+        self.assertEqual(b.manage_machines(self.state, ["pair", "hp"]), 0)  # again: a new key
+        self.assertNotEqual(self.state.machines()["hp"]["key"], key)
+        self.assertFalse(self.client(key=key).welcome)  # the old key is worth nothing now
+        self.assertEqual(b.manage_machines(self.state, ["unpair", "hp"]), 0)
+        self.assertEqual(self.state.machines(), {})
+        self.assertEqual(b.manage_machines(self.state, ["machines"]), 0)
+
+    def test_a_paired_machine_is_served(self):
+        c = self.client()
+        self.assertTrue(c.proved)  # beehive proved itself too
+        self.assertEqual(c.welcome["backend"], "fake")
+        self.assertNotIn(self.key, json.dumps(c.challenge) + json.dumps(c.welcome))
+        c.send({"type": "ping"})
+        self.assertEqual(c.recv(), {"type": "pong"})
+        c.send({"type": "ask", "id": 4, "text": "what is this?", "cwd": "/"})
+        self.assertEqual(c.recv(), {"type": "ack", "id": 4})
+        lines = []
+        while (m := c.recv())["type"] == "line":
+            lines.append(m["text"])
+        self.assertEqual(m, {"type": "done", "id": 4})
+        self.assertIn("Question: what is this?", lines)
+        c.send({"type": "signal", "kind": "wish", "text": "a banner", "build": "33"})
+        c.send({"type": "ping"})
+        self.assertEqual(c.recv(), {"type": "pong"})  # the signal before it was handled
+        self.assertEqual([(s["target"], s["kind"], s["text"]) for s in self.signals()], [("hp", "wish", "a banner")])
+        self.assertIsNotNone(self.state.machines()["hp"]["seen"])
+        exchange = json.loads((Path(self.tmp.name) / "exchanges.jsonl").read_text().splitlines()[0])
+        self.assertEqual((exchange["target"], exchange["outcome"]), ("hp", "done"))
+
+    def test_the_door_stays_shut_without_the_key(self):
+        self.assertFalse(self.client(key="abcde-fghij-kmnpq-rstuv").welcome)
+        self.assertFalse(self.client(auth="héllo").welcome)
+        self.assertFalse(self.client(auth=17).welcome)
+        # An unknown machine gets a challenge too, and then the same silence.
+        stranger = self.client(name="nobody")
+        self.assertEqual(stranger.challenge["type"], "challenge")
+        self.assertFalse(stranger.welcome)
+        self.assertEqual(self.signals(), [])
+
+    def test_nothing_is_served_before_the_proof(self):
+        for first in ('{"type":"ask","id":1,"text":"hi"}', '{"type":"signal","kind":"wish","text":"x"}', "garbage",
+                      '{"type":"hello","name":"hp","nonce":"short"}', '{"type":"hello","name":7,"nonce":"' + "a" * 32 + '"}',
+                      '{"type":"hello","name":"hp","nonce":"' + "x" * 600 + '"}', "[1,2,3]"):
+            sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+            sock.sendall(first.encode() + b"\n")
+            try:
+                self.assertEqual(sock.recv(4096), b"", first)  # closed, not a word
+            except ConnectionResetError:
+                pass  # closed with our line still unread: just as good
+            sock.close()
+        self.assertEqual(self.signals(), [])
+        self.assertFalse((Path(self.tmp.name) / "exchanges.jsonl").exists())
+
+    def test_lines_that_are_not_genuine_end_the_connection(self):
+        signal = {"type": "signal", "kind": "wish", "text": "x"}
+        tampered = lambda c: c.raw(b.seal(c.session, "o", 1, json.dumps(signal)).replace('"x"', '"y"'))
+        unsealed = lambda c: c.raw(json.dumps(signal))
+        skipped = lambda c: c.send(signal, n=2)
+        wrong_way = lambda c: c.raw(b.seal(c.session, "h", 1, json.dumps(signal)))
+        too_long = lambda c: c.raw("x" * (b.MAX_LINE + 100))
+        for attack in (tampered, unsealed, skipped, wrong_way, too_long):
+            c = self.client()
+            attack(c)
+            self.assertIsNone(c.recv())
+        # A line sent twice: the first is taken, the copy is not.
+        c = self.client()
+        line = b.seal(c.session, "o", 1, json.dumps(signal))
+        c.raw(line)
+        c.raw(line)
+        self.assertIsNone(c.recv())
+        self.assertEqual(len(self.signals()), 1)
+
+    def test_wrong_tries_lock_the_address_out(self):
+        for _ in range(b.WRONG_TRIES):
+            self.assertFalse(self.client(auth="00" * 32).welcome)
+        sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        self.clients.append(sock)
+        self.assertEqual(sock.recv(4096), b"")  # not even a challenge, also with the right key
+        with self.assertRaises((OSError, TypeError, ValueError)):
+            self.client()
+
+    def test_each_machine_has_its_own_share_of_the_budget(self):
+        self.state.max_per_machine = 2
+        b.manage_machines(self.state, ["pair", "nuc"])
+        hp, nuc = self.client(), self.client("nuc", self.state.machines()["nuc"]["key"])
+
+        def ask(c, rid):
+            c.send({"type": "ask", "id": rid, "text": "hi"})
+            while (m := c.recv())["type"] in ("ack", "line"):
+                pass
+            return m["type"]
+
+        self.assertEqual([ask(hp, 1), ask(hp, 2), ask(hp, 3)], ["done", "done", "error"])
+        self.assertEqual(ask(nuc, 1), "done")  # the other machine still has its share
+        self.assertTrue(self.state.take_request())  # and so have the serial links
+        usage = json.loads((Path(self.tmp.name) / "usage.json").read_text())
+        self.assertEqual((usage["requests"], usage["machines"]), (4, {"hp": 2, "nuc": 1}))
+        self.state.max_per_day = 4
+        self.assertEqual(ask(nuc, 2), "error")  # the total for the day counts for everyone
+
+    def test_a_new_connection_replaces_the_old_one(self):
+        first = self.client()
+        second = self.client()
+        self.assertIsNone(first.recv())
+        second.send({"type": "ping"})
+        self.assertEqual(second.recv(), {"type": "pong"})
+
+    def test_a_slow_stranger_is_dropped(self):
+        old, b.PROOF_SECONDS = b.PROOF_SECONDS, 0.3
+        try:
+            sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+            self.clients.append(sock)
+            started = time.monotonic()
+            self.assertEqual(sock.recv(4096), b"")
+            self.assertLess(time.monotonic() - started, 3)
+        finally:
+            b.PROOF_SECONDS = old
 
 
 if __name__ == "__main__":

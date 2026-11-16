@@ -339,7 +339,7 @@ nav.toc a:hover { text-decoration: underline; }
 <li><b>Done:</b> TCP passive open (listen and accept), on top of cooperative threads (phase T).</li>
 <li><b>Done:</b> <code>httpd</code>: status page (version, uptime, slot state, threads, recent events) and read-only files from <code>/public</code>, for the LAN. Off by default.</li>
 <li><b>Done:</b> <code>remote</code>: a remote shell, Telnet style. Off by default, not encrypted, password always required and made up by the OS, one session, slow guessing, changes only from the local console.</li>
-<li><b>Signals over the network:</b> wishes, crashes and health reports sent to beehive over TCP as an alternative to COM2.</li>
+<li><b>Done:</b> signals, and <code>ask</code> / <code>explain</code>, to beehive over TCP as an alternative to COM2: see <a href="beehive-network-plan.html">the beehive link plan</a> (H1 to H3).</li>
 <li><b>Kernel download:</b> fetch a new kernel into the spare A/B slot over HTTP or TFTP and try it, with the phase 8 rollback as the safety net. This is the roadmap's "the OS drives its own improvement" step, and it should wait for a signature check on the downloaded kernel.</li>
 <li>Interrupt-driven receive, if polling every 10 ms proves too slow (needs approval: it touches the protected interrupt code).</li>
 </ul>

@@ -1,0 +1,44 @@
+# The network link to beehive is dependable (plan phase H3): it is saved and
+# comes back after a restart, it reconnects when beehive was away, and a
+# wish filed meanwhile is delivered afterwards.
+@net
+@ai-net
+@disk
+$ net dhcp
+~ 10\.0\.2\.15
+$ ai connect {hive} {hive-name} {hive-key}
+~ ^connecting to beehive as machine 'test' \(saved\)$
+connected (fake fake)
+$ cat /system/hive
+~ ^name test$
+
+# beehive goes away: the OS notices, and says so instead of waiting.
+@hive stop
+$ ping -c 2 10.0.2.2
+$ ai
+~ ^bridge:      network, as machine 'test': not connected: beehive
+$ ask anyone there
+~ offline|not connected|not running
+$ wish remembered while beehive was away
+Thanks! Saved to /system/inbox/signals.jsonl.
+
+# It comes back: the OS connects again by itself and delivers the wish.
+@hive start
+$ ping -c 6 10.0.2.2
+$ ai
+~ beehive online \(fake fake\)
+$ ask are you back
+Question: are you back
+
+# After a restart of the OS the link is there again, without typing anything.
+@reboot
+$ net dhcp
+$ ping -c 4 10.0.2.2
+$ ai
+~ ^bridge:      network, as machine 'test': beehive online \(fake fake\)
+$ ask after the restart
+Question: after the restart
+$ log 60
+~ "event":"hive"|hive
+!~ 10\.0\.2\.2
+@signal "target": "test", "kind": "wish", "text": "remembered while beehive was away"

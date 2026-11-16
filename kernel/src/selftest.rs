@@ -73,6 +73,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("display: wrap, scroll, clear and cursor on a framebuffer", fbcon_screen),
     ("display: odd framebuffer sizes never write outside", fbcon_bounds),
     ("display: double-size font, saved settings, write-combining pages", display_g3),
+    ("beehive link: saved settings, the hash the proof is built on", hive_link),
     ("usb: what devices say about themselves, also cut short", usb_descriptors),
     ("usb: keyboard reports become key presses, mouse reports movement", usb_reports),
     ("usb: xHCI rings and requests", xhci_rings),
@@ -1666,5 +1667,42 @@ fn wm_mouse() -> TestResult {
     let mut small = Desktop::new();
     small.set_pointer(old_pointer, Rect::new(0, 0, 20, 20));
     check_eq!(small.pointer().map(|p| (p.x, p.y)), Some((19, 19)));
+    Ok(())
+}
+
+fn hive_link() -> TestResult {
+    use crate::aibridge::Settings;
+    use beenet::hive;
+    // The hash, inside the kernel as well (beenet's own tests run on the host).
+    check_eq!(hive::hex(&beenet::sha256::sha256(b"abc")), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    check_eq!(
+        hive::hex(&beenet::sha256::hmac(b"Jefe", b"what do ya want for nothing?")),
+        "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+    );
+    let key = hive::key_bytes("abcde-fghij-kmnpq-rstuv").ok_or("not a key")?;
+    let (a, b) = ("00112233445566778899aabbccddeeff", "ffeeddccbbaa99887766554433221100");
+    check_eq!(hive::proof(&key, "os", a, b), "c6a12e0fb9bfc1849ceef735bb0e27218e7150f4366bd88dab638b76d0ccb894");
+    // The settings file, there and back.
+    let settings = Settings::new("192.168.1.10", 4560, "hp", key).ok_or("settings refused")?;
+    let text = settings.to_text();
+    check_eq!(text, "host 192.168.1.10\nport 4560\nname hp\nkey abcde-fghij-kmnpq-rstuv\n");
+    check_eq!(Settings::parse(&text), Some(settings.clone()));
+    check_eq!(Settings::parse("name hp\nkey ABCDE-FGHIJ-KMNPQ-RSTUV\n\nhost 192.168.1.10\nsomething else\n"), Some(settings));
+    // Anything missing or wrong: no link at all, rather than a half one.
+    for bad in [
+        "",
+        "host 192.168.1.10\nname hp\n",
+        "host 192.168.1.10\nkey abcde-fghij-kmnpq-rstuv\n",
+        "name hp\nkey abcde-fghij-kmnpq-rstuv\n",
+        "host 192.168.1.10\nname hp\nkey abcde-fghij-klmno-pqrst\n",
+        "host 192.168.1.10\nname HP\nkey abcde-fghij-kmnpq-rstuv\n",
+        "host 192.168.1.10\nport 0\nname hp\nkey abcde-fghij-kmnpq-rstuv\n",
+        "host 192.168.1.10\nport 99999\nname hp\nkey abcde-fghij-kmnpq-rstuv\n",
+        "host bad/host\nname hp\nkey abcde-fghij-kmnpq-rstuv\n",
+    ] {
+        check_eq!((bad, Settings::parse(bad)), (bad, None));
+    }
+    check!(Settings::new("", 4560, "hp", key).is_none() && Settings::new("host name", 4560, "hp", key).is_none());
+    check!(Settings::new("pc.lan", 1, "hp", key).is_some());
     Ok(())
 }
