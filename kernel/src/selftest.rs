@@ -72,6 +72,11 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("display: text drawn as pixels in every pixel format", fbcon_drawing),
     ("display: wrap, scroll, clear and cursor on a framebuffer", fbcon_screen),
     ("display: odd framebuffer sizes never write outside", fbcon_bounds),
+    ("display: double-size font, saved settings, write-combining pages", display_g3),
+    ("usb: what devices say about themselves, also cut short", usb_descriptors),
+    ("usb: keyboard reports become key presses, mouse reports movement", usb_reports),
+    ("usb: xHCI rings and requests", xhci_rings),
+    ("desktop: mouse pointer, dragging a window, repairing the screen", wm_mouse),
     ("desktop: rectangles and drawing stay inside the screen", gfx_canvas),
     ("desktop: on by default, boot flag before saved choice", desktop_setting),
     ("desktop: where the terminal window goes", wm_layout),
@@ -1126,11 +1131,11 @@ fn gfx_canvas() -> TestResult {
         check_eq!(t.pixel(29, 19), format.encode(0x102030));
         check_eq!((t.pixel(30, 20), t.pixel(39, 29)), (format.encode(0xFF0000), format.encode(0xFF0000)));
         // Characters: drawn when they fit completely, otherwise not at all.
-        canvas.glyph(32, 14, b'A', 0xFFFFFF, 0);
+        canvas.glyph(32, 14, b'A', 0xFFFFFF, 0, 1);
         check!(t.shows_at(32, 14, 'A', 0xFFFFFF, 0));
-        canvas.glyph(33, 0, b'B', 0xFFFFFF, 0); // one pixel too far right
-        canvas.glyph(0, 15, b'B', 0xFFFFFF, 0); // one pixel too low
-        canvas.glyph(usize::MAX, usize::MAX, b'B', 0xFFFFFF, 0);
+        canvas.glyph(33, 0, b'B', 0xFFFFFF, 0, 1); // one pixel too far right
+        canvas.glyph(0, 15, b'B', 0xFFFFFF, 0, 1); // one pixel too low
+        canvas.glyph(usize::MAX, usize::MAX, b'B', 0xFFFFFF, 0, 1);
         check_eq!((t.pixel(33, 0), t.pixel(0, 15)), (format.encode(0x102030), format.encode(0x102030)));
         // Text stops at its width, and at the edge of the canvas.
         canvas.text(0, 0, "abcdefgh", 0xFFFFFF, 0, 17);
@@ -1145,7 +1150,7 @@ fn gfx_canvas() -> TestResult {
     let canvas = Canvas::new(t.pixels.as_mut_ptr(), Mode { pitch: 40 * 4 - 1, ..t.mode });
     check_eq!(canvas.bounds(), Rect::new(0, 0, 0, 0));
     canvas.fill_rect(Rect::new(0, 0, 40, 30), 0xFFFFFF);
-    canvas.glyph(0, 0, b'A', 0xFFFFFF, 0);
+    canvas.glyph(0, 0, b'A', 0xFFFFFF, 0, 1);
     check!(t.pixels.iter().all(|&b| b == 0xEE));
     Ok(())
 }
@@ -1155,7 +1160,7 @@ fn wm_layout() -> TestResult {
     use crate::wm::{terminal_frame, Window};
     let content = |frame: Rect| Window { title: String::new(), frame }.content();
     // Full HD: a window in the middle with desktop all around.
-    let frame = terminal_frame(1920, 1080).ok_or("no window on a full HD screen")?;
+    let frame = terminal_frame(1920, 1080, 1).ok_or("no window on a full HD screen")?;
     let inside = content(frame);
     check_eq!((inside.width / 8, inside.height / 16), (221, 56));
     check_eq!(frame.x, 1920 - frame.x - frame.width); // centered
@@ -1165,7 +1170,7 @@ fn wm_layout() -> TestResult {
     let mut with_window = 0;
     for width in (0..2600).step_by(53) {
         for height in (0..1700).step_by(47) {
-            let Some(frame) = terminal_frame(width, height) else { continue };
+            let Some(frame) = terminal_frame(width, height, 1) else { continue };
             with_window += 1;
             let inside = content(frame);
             check!(frame.x + frame.width <= width && frame.y + frame.height <= height);
@@ -1178,9 +1183,9 @@ fn wm_layout() -> TestResult {
     check!(with_window > 500);
     // Too small for a window.
     for (width, height) in [(0, 0), (1, 1), (100, 1000), (1000, 60), (150, 120)] {
-        check_eq!((width, terminal_frame(width, height)), (width, None));
+        check_eq!((width, terminal_frame(width, height, 1)), (width, None));
     }
-    check!(terminal_frame(320, 200).is_some() && terminal_frame(640, 480).is_some());
+    check!(terminal_frame(320, 200, 1).is_some() && terminal_frame(640, 480, 1).is_some());
     // A window frame too small to have an inside does not underflow.
     check_eq!(content(Rect::new(5, 5, 3, 3)).width, 0);
     check_eq!(content(Rect::new(5, 5, 3, 3)).height, 0);
@@ -1194,7 +1199,7 @@ fn wm_drawing() -> TestResult {
     use crate::wm::{self, Desktop};
     let mut t = TestScreen::new(640, 480, 0, Xrgb8888);
     let canvas = Canvas::new(t.pixels.as_mut_ptr(), t.mode);
-    let frame = wm::terminal_frame(640, 480).ok_or("no window at 640x480")?;
+    let frame = wm::terminal_frame(640, 480, 1).ok_or("no window at 640x480")?;
     let mut desk = Desktop::new();
     let id = desk.open("Terminal", frame);
     desk.draw(&canvas);
@@ -1212,7 +1217,7 @@ fn wm_drawing() -> TestResult {
     check_eq!(t.rgb(inside.x + inside.width - 1, inside.y + inside.height - 1), wm::CONTENT);
     // The terminal draws inside the window and nowhere else.
     let mut cells = vec![0u16; 8000];
-    let mut term = FbCon::in_area(canvas, inside, &mut cells);
+    let mut term = FbCon::in_area(canvas, inside, &mut cells, 1);
     check_eq!((term.width(), term.height()), (inside.width / 8, inside.height / 16));
     term.clear();
     term.write_str("A");
@@ -1253,7 +1258,7 @@ fn wm_drawing() -> TestResult {
             desk.draw(&canvas);
             let inside = desk.window(id).ok_or("the window is gone")?.content();
             let mut cells = vec![0u16; 400];
-            let mut term = FbCon::in_area(canvas, inside, &mut cells);
+            let mut term = FbCon::in_area(canvas, inside, &mut cells, 1);
             term.clear();
             term.write_str("some text\nmore text");
             term.sync_cursor();
@@ -1345,5 +1350,321 @@ fn bootfb_parsing() -> TestResult {
             check!(usable(addr, &mode));
         }
     }
+    Ok(())
+}
+
+fn display_g3() -> TestResult {
+    use crate::display::{parse_font, parse_settings, PixelFormat::*};
+    use crate::fbcon::FbCon;
+    use crate::gfx::Canvas;
+    use crate::{paging, wm};
+    // Font size: what was asked for, or double above full HD.
+    check_eq!((console::font_scale(0, 1080), console::font_scale(0, 1440), console::font_scale(0, 2160)), (1, 2, 2));
+    check_eq!((console::font_scale(1, 2160), console::font_scale(2, 480), console::font_scale(7, 600)), (1, 2, 1));
+    check_eq!((parse_font("1"), parse_font("2"), parse_font("auto")), (Some(1), Some(2), Some(0)));
+    check_eq!((parse_font("3"), parse_font(""), parse_font("0")), (None, None, None));
+    // The settings file: lines in any order, nonsense skipped, the last good one counts.
+    check_eq!(parse_settings("mode 1280x720\nfont 2\n"), (Some((1280, 720)), Some(2)));
+    check_eq!(parse_settings("font auto\n\nmode 800x600"), (Some((800, 600)), Some(0)));
+    check_eq!(parse_settings(""), (None, None));
+    check_eq!(parse_settings("mode 1x1\nfont 9\nmode\nfont 1 2\nhello\n\u{0}"), (None, None));
+    check_eq!(parse_settings("mode 800x600\nmode 99999x1\nfont 2\nfont x"), (Some((800, 600)), Some(2)));
+    // A double-size character: every font pixel is 2x2 screen pixels.
+    for format in [Xrgb8888, Rgb888, Rgb565] {
+        let mut t = TestScreen::new(70, 50, 3, format);
+        let canvas = Canvas::new(t.pixels.as_mut_ptr(), t.mode);
+        canvas.fill_rect(canvas.bounds(), 0x102030);
+        canvas.glyph(4, 2, b'A', 0xFFFFFF, 0, 2);
+        let glyph = &crate::font::FONT[b'A' as usize];
+        for y in 0..32 {
+            for x in 0..16 {
+                let want = if glyph[y / 2] & (0x80 >> (x / 2)) != 0 { 0xFFFFFF } else { 0 };
+                check_eq!((x, y, t.pixel(4 + x, 2 + y)), (x, y, format.encode(want)));
+            }
+        }
+        check_eq!((t.pixel(3, 2), t.pixel(20, 2), t.pixel(4, 34)), (format.encode(0x102030), format.encode(0x102030), format.encode(0x102030)));
+        canvas.glyph(55, 0, b'B', 0xFFFFFF, 0, 2); // 16 wide: one pixel too far right
+        canvas.glyph(0, 19, b'B', 0xFFFFFF, 0, 2); // 32 high: one pixel too low
+        canvas.glyph(40, 10, b'B', 0xFFFFFF, 0, 99); // at most 4 times: does not fit
+        check_eq!((t.pixel(60, 5), t.pixel(5, 40), t.pixel(45, 15)), (format.encode(0x102030), format.encode(0x102030), format.encode(0x102030)));
+        check!(t.untouched_outside());
+    }
+    // A console with the double font: half the characters, same rules.
+    let mut t = TestScreen::new(70, 70, 1, Xrgb8888);
+    let canvas = Canvas::new(t.pixels.as_mut_ptr(), t.mode);
+    let mut cells = vec![0u16; 64];
+    let mut screen = FbCon::in_area(canvas, canvas.bounds(), &mut cells, 2);
+    check_eq!((screen.width(), screen.height(), screen.scale()), (4, 2, 2));
+    screen.clear();
+    screen.write_str("ab\ncd\nef");
+    check_eq!((screen.scrolls(), screen.pos()), (1, (1, 2)));
+    screen.sync_cursor();
+    check_eq!(t.rgb(16, 0), t.rgb(17, 1)); // 2x2 blocks
+    check_eq!((t.rgb(2 * 16, 32 + 26), t.rgb(2 * 16 + 15, 32 + 29), t.rgb(2 * 16, 32 + 25)), (0xAAAAAA, 0xAAAAAA, 0)); // the cursor, doubled
+    for _ in 0..50 {
+        screen.write_str("long line that wraps and scrolls\t\n");
+    }
+    screen.redraw();
+    check!(t.untouched_outside());
+    let mut cells = vec![0u16; 64];
+    check_eq!(FbCon::in_area(canvas, canvas.bounds(), &mut cells, 0).scale(), 1);
+    // The terminal window with the double font holds whole double characters.
+    let frame = wm::terminal_frame(2560, 1440, 2).ok_or("no window at 2560x1440")?;
+    let inside = wm::Window { title: String::new(), frame }.content();
+    check_eq!((inside.width % 16, inside.height % 32), (0, 0));
+    check!(inside.width / 16 >= 100 && frame.x + frame.width < 2560);
+    check!(wm::terminal_frame(400, 300, 2).is_some() && wm::terminal_frame(320, 200, 2).is_none());
+    // Write-combining: which 2 MiB pages, and which bits.
+    check_eq!(paging::pages_2m(0xFD00_0000, 1920 * 1080 * 4), Some((0xFD00_0000 / 0x20_0000, 4)));
+    check_eq!(paging::pages_2m(0x20_0000, 1), Some((1, 1)));
+    check_eq!(paging::pages_2m(0x3F_FFFF, 2), Some((1, 2)));
+    check_eq!(paging::pages_2m(0xFFE0_0000, 0x20_0000), Some((2047, 1)));
+    check_eq!(paging::pages_2m(0xFFE0_0000, 0x20_0001), None); // past 4 GiB
+    check_eq!(paging::pages_2m(0x1_0000_0000, 4096), None);
+    check_eq!(paging::pages_2m(0x1000, 0), None);
+    check_eq!(paging::pages_2m(u64::MAX, 2), None);
+    check_eq!(paging::pat_with_wc(0x0007_0406_0007_0406), 0x0007_0406_0007_0106);
+    check_eq!(paging::entry_with_wc(0xFD00_0083), 0xFD00_008B); // a present 2 MiB page gets PWT
+    check_eq!(paging::entry_with_wc(0xFD00_109B), 0xFD00_008B); // other caching bits go
+    check_eq!(paging::entry_with_wc(0xFD00_0082), 0xFD00_0082); // not present: untouched
+    check_eq!(paging::entry_with_wc(0x0010_0003), 0x0010_0003); // points to a page table: untouched
+    Ok(())
+}
+
+fn usb_descriptors() -> TestResult {
+    use crate::usb::{class_name, parse_config, HidInterface, Kind};
+    // A keyboard as QEMU's describes itself: configuration, interface, HID, endpoint.
+    let keyboard: &[u8] = &[
+        9, 2, 34, 0, 1, 1, 0, 0xA0, 50, // configuration 1, 34 bytes in all
+        9, 4, 0, 0, 1, 3, 1, 1, 0, // interface 0: HID, boot, keyboard
+        9, 0x21, 0x11, 1, 0, 1, 0x22, 63, 0, // HID descriptor
+        7, 5, 0x81, 3, 8, 0, 10, // endpoint 1 in, interrupt, 8 bytes, every 10 ms
+    ];
+    let config = parse_config(keyboard);
+    check_eq!(config.value, 1);
+    check_eq!(config.classes, vec![(3, 1, 1)]);
+    let want = HidInterface { number: 0, kind: Kind::Keyboard, endpoint: 0x81, max_packet: 8, interval: 10 };
+    check_eq!(config.interfaces, vec![want]);
+    // A keyboard with a second interface (media keys, no boot protocol) and a mouse behind it.
+    let mut combo = keyboard.to_vec();
+    combo.extend_from_slice(&[9, 4, 1, 0, 1, 3, 0, 0, 0, 7, 5, 0x82, 3, 4, 0, 10]);
+    combo.extend_from_slice(&[9, 4, 2, 0, 1, 3, 1, 2, 0, 7, 5, 0x03, 3, 4, 0, 10, 7, 5, 0x83, 2, 4, 0, 10, 7, 5, 0x84, 3, 4, 0, 7]);
+    let config = parse_config(&combo);
+    check_eq!(config.classes, vec![(3, 1, 1), (3, 0, 0), (3, 1, 2)]);
+    check_eq!(config.interfaces.len(), 2);
+    // Of the mouse's endpoints: not the outgoing one, not the bulk one.
+    check_eq!(config.interfaces[1], HidInterface { number: 2, kind: Kind::Mouse, endpoint: 0x84, max_packet: 4, interval: 7 });
+    // Cut short anywhere: no panic, and never more than the whole gives.
+    for len in 0..combo.len() {
+        let part = parse_config(&combo[..len]);
+        check!(part.interfaces.len() <= 2 && part.classes.len() <= 3);
+        check!(part.interfaces.iter().all(|i| config.interfaces.contains(i)));
+    }
+    check_eq!(parse_config(&combo[..33]).interfaces.len(), 0); // the endpoint is cut off
+    // Lengths that lie.
+    check_eq!(parse_config(&[9, 2, 9, 0, 1, 1, 0, 0, 0, 0, 4]).classes.len(), 0); // a descriptor of length 0
+    check_eq!(parse_config(&[9, 2, 9, 0, 1, 1, 0, 0, 0, 1, 4]).classes.len(), 0); // length 1
+    check_eq!(parse_config(&[9, 2, 9, 0, 1, 1, 0, 0, 0, 200, 4, 0, 0]).classes.len(), 0); // longer than the data
+    check_eq!(parse_config(&[9, 4, 0, 0, 1, 3, 1, 1, 0]).value, 0); // not a configuration at all
+    check_eq!(parse_config(&[2, 2]).value, 0);
+    let mut zero_packet = keyboard.to_vec();
+    zero_packet[31] = 0;
+    check_eq!(parse_config(&zero_packet).interfaces.len(), 0); // an endpoint that carries nothing
+    // A device that lists interfaces without end.
+    let mut many = vec![9, 2, 9, 0, 1, 1, 0, 0, 0];
+    for i in 0..200u8 {
+        many.extend_from_slice(&[9, 4, i, 0, 1, 3, 1, 1, 0, 7, 5, 0x81, 3, 8, 0, 10]);
+    }
+    check!(parse_config(&many).classes.len() <= 16 && parse_config(&many).interfaces.len() <= 16);
+    check_eq!((class_name(3, 1, 1), class_name(3, 1, 2), class_name(9, 0, 0), class_name(8, 6, 0x50)), ("keyboard", "mouse", "hub", "storage"));
+    Ok(())
+}
+
+fn usb_reports() -> TestResult {
+    use crate::usb::{keyboard_changes, mouse_report, repeat_key, usage_to_scancode};
+    // USB key numbers -> the scancodes of the PS/2 keyboard.
+    check_eq!(usage_to_scancode(0x04), Some((false, 0x1E))); // a
+    check_eq!(usage_to_scancode(0x1D), Some((false, 0x2C))); // z
+    check_eq!(usage_to_scancode(0x1E), Some((false, 0x02))); // 1
+    check_eq!(usage_to_scancode(0x27), Some((false, 0x0B))); // 0
+    check_eq!(usage_to_scancode(0x28), Some((false, 0x1C))); // Enter
+    check_eq!(usage_to_scancode(0x2C), Some((false, 0x39))); // Space
+    check_eq!(usage_to_scancode(0x38), Some((false, 0x35))); // /
+    check_eq!(usage_to_scancode(0x3A), Some((false, 0x3B))); // F1
+    check_eq!(usage_to_scancode(0x52), Some((true, 0x48))); // Up
+    check_eq!(usage_to_scancode(0x4C), Some((true, 0x53))); // Delete
+    check_eq!(usage_to_scancode(0x64), Some((false, 0x56))); // the key next to left Shift
+    check_eq!((usage_to_scancode(0), usage_to_scancode(1), usage_to_scancode(0xFF)), (None, None, None));
+    check!((0..=255u8).filter_map(usage_to_scancode).all(|(_, code)| code > 0 && code < 0x80));
+    // Press a, add Shift, let go of a, let go of Shift.
+    let none = [0u8; 8];
+    let a = [0, 0, 0x04, 0, 0, 0, 0, 0];
+    let shift_a = [0x02, 0, 0x04, 0, 0, 0, 0, 0];
+    let shift = [0x02, 0, 0, 0, 0, 0, 0, 0];
+    check_eq!(keyboard_changes(&none, &a), vec![0x1E]);
+    check_eq!(keyboard_changes(&a, &shift_a), vec![0x2A]);
+    check_eq!(keyboard_changes(&shift_a, &shift), vec![0x9E]);
+    check_eq!(keyboard_changes(&shift, &none), vec![0xAA]);
+    check_eq!(keyboard_changes(&a, &a), Vec::<u8>::new());
+    // Two keys, in any place of the report; releases come before presses.
+    let ab = [0, 0, 0x04, 0x05, 0, 0, 0, 0];
+    let ba = [0, 0, 0x05, 0x04, 0, 0, 0, 0];
+    let bc = [0, 0, 0x05, 0x06, 0, 0, 0, 0];
+    check_eq!(keyboard_changes(&ab, &ba), Vec::<u8>::new());
+    check_eq!(keyboard_changes(&ab, &bc), vec![0x9E, 0x2E]);
+    // Keys with a prefix: right Alt (AltGr) and the arrow keys.
+    check_eq!(keyboard_changes(&none, &[0x40, 0, 0x52, 0, 0, 0, 0, 0]), vec![0xE0, 0x38, 0xE0, 0x48]);
+    check_eq!(keyboard_changes(&[0x40, 0, 0x52, 0, 0, 0, 0, 0], &none), vec![0xE0, 0xB8, 0xE0, 0xC8]);
+    // "Too many keys" and unknown keys change nothing.
+    check_eq!(keyboard_changes(&a, &[0, 0, 1, 1, 1, 1, 1, 1]), Vec::<u8>::new());
+    check_eq!(keyboard_changes(&none, &[0, 0, 0xF0, 0, 0, 0, 0, 0]), Vec::<u8>::new());
+    // The key that repeats: the newest one; modifiers alone do not repeat.
+    check_eq!((repeat_key(&none), repeat_key(&shift), repeat_key(&a), repeat_key(&ab)), (None, None, Some(0x04), Some(0x05)));
+    // Mouse: buttons, right, down; movement is signed.
+    check_eq!(mouse_report(&[1, 5, 0xFB]), Some((1, 5, -5)));
+    check_eq!(mouse_report(&[0xFF, 0x80, 0x7F, 9, 9]), Some((7, -128, 127)));
+    check_eq!((mouse_report(&[]), mouse_report(&[1, 2])), (None, None));
+    Ok(())
+}
+
+fn xhci_rings() -> TestResult {
+    use crate::xhci::{control_trbs, default_max_packet, endpoint_interval, is_xhci, port_write, Ring, Trb, RING_TRBS};
+    check!(is_xhci(0x0C, 0x03, 0x30) && !is_xhci(0x0C, 0x03, 0x20) && !is_xhci(0x0C, 0x05, 0x30));
+    // A ring: each TRB gets the cycle bit; the last place links back and flips it.
+    let mut ring = Ring::new().ok_or("no page for a ring")?;
+    check_eq!(ring.addr() % 4096, 0);
+    check!(ring.addr() < 1 << 32);
+    let first = ring.push(Trb::new(9, 0x1122_3344_5566_7788, 0xABCD, 1 << 5));
+    check_eq!(first, ring.addr());
+    check_eq!(ring.peek(0), Trb { param: 0x1122_3344_5566_7788, status: 0xABCD, control: 9 << 10 | 1 << 5 | 1 });
+    for i in 1..RING_TRBS - 1 {
+        check_eq!(ring.push(Trb::new(1, i as u64, 0, 0)), ring.addr() + i as u64 * 16);
+    }
+    let link = ring.peek(RING_TRBS - 1);
+    check_eq!((link.kind(), link.param, link.control & 3), (6, ring.addr(), 3)); // link, toggle, cycle 1
+    check_eq!(ring.push(Trb::new(1, 0x77, 0, 1)), ring.addr()); // second lap: at the start again
+    check_eq!(ring.peek(0).control & 1, 0); // with the cycle bit flipped
+    check_eq!(ring.peek(0).param, 0x77);
+    // GET_DESCRIPTOR(device, 18 bytes): setup, data in, status out.
+    let trbs = control_trbs(0x80, 6, 0x0100, 0, 0x5000, 18);
+    check_eq!(trbs.len(), 3);
+    check_eq!((trbs[0].kind(), trbs[0].param, trbs[0].status), (2, 0x0012_0000_0100_0680, 8));
+    check_eq!(trbs[0].control >> 16 & 3, 3); // data comes in
+    check!(trbs[0].control & 1 << 6 != 0); // the request is in the TRB itself
+    check_eq!((trbs[1].kind(), trbs[1].param, trbs[1].status, trbs[1].control >> 16 & 1), (3, 0x5000, 18, 1));
+    check_eq!((trbs[2].kind(), trbs[2].control >> 16 & 1, trbs[2].control >> 5 & 1), (4, 0, 1));
+    // SET_CONFIGURATION(1): no data, status in.
+    let trbs = control_trbs(0x00, 9, 1, 0, 0x5000, 0);
+    check_eq!(trbs.len(), 2);
+    check_eq!((trbs[0].control >> 16 & 3, trbs[1].kind(), trbs[1].control >> 16 & 1), (0, 4, 1));
+    // Data going out: status comes in.
+    let trbs = control_trbs(0x21, 9, 0x0200, 0, 0x5000, 1);
+    check_eq!((trbs[0].control >> 16 & 3, trbs[1].control >> 16 & 1, trbs[2].control >> 16 & 1), (2, 0, 1));
+    // How often to ask: 10 ms at low speed is 2^6 * 125 µs; high speed counts differently.
+    check_eq!((endpoint_interval(2, 10), endpoint_interval(1, 1), endpoint_interval(2, 255), endpoint_interval(2, 0)), (6, 3, 10, 3));
+    check_eq!((endpoint_interval(3, 7), endpoint_interval(3, 0), endpoint_interval(4, 200)), (6, 0, 15));
+    check_eq!((default_max_packet(2), default_max_packet(1), default_max_packet(3), default_max_packet(4)), (8, 8, 64, 512));
+    // Writing a port register never repeats "enabled" (that would switch the
+    // port off) or a "changed" flag (that would clear it) by accident.
+    let status = 1 | 1 << 1 | 1 << 9 | 3 << 10 | 1 << 17 | 1 << 21;
+    check_eq!(port_write(status, 1 << 4), 1 << 9 | 1 << 4);
+    check_eq!(port_write(status, 1 << 21), 1 << 9 | 1 << 21);
+    Ok(())
+}
+
+fn wm_mouse() -> TestResult {
+    use crate::display::PixelFormat::*;
+    use crate::fbcon::FbCon;
+    use crate::gfx::{Canvas, Rect};
+    use crate::wm::{self, Desktop, MouseEffect};
+    let mut t = TestScreen::new(640, 480, 0, Xrgb8888);
+    let canvas = Canvas::new(t.pixels.as_mut_ptr(), t.mode);
+    let screen = canvas.bounds();
+    let frame = wm::terminal_frame(640, 480, 1).ok_or("no window at 640x480")?;
+    let mut desk = Desktop::new();
+    desk.open("Terminal", frame);
+    let inside = desk.window(0).ok_or("no window")?.content();
+    let mut cells = vec![0u16; 8000];
+    let mut term = FbCon::in_area(canvas, inside, &mut cells, 1);
+    desk.draw(&canvas);
+    term.clear();
+    term.write_str("hello");
+    term.sync_cursor();
+    // No pointer until the mouse moves; then it starts in the middle.
+    check!(desk.pointer().is_none());
+    desk.draw_pointer(&canvas);
+    check_eq!(desk.mouse(0, 0, 0, screen), MouseEffect::PointerMoved(Rect::new(320, 240, 12, 19)));
+    check_eq!(desk.mouse(0, 0, 0, screen), MouseEffect::Nothing);
+    check_eq!(desk.mouse(0, -20, 10, screen), MouseEffect::PointerMoved(Rect::new(320, 240, 12, 19)));
+    check_eq!(desk.pointer().map(|p| (p.x, p.y)), Some((300, 250)));
+    // It stops at the edges of the screen.
+    desk.mouse(0, -5000, -5000, screen);
+    check_eq!(desk.pointer().map(|p| (p.x, p.y)), Some((0, 0)));
+    desk.mouse(0, i32::MAX, i32::MAX, screen);
+    check_eq!(desk.pointer().map(|p| (p.x, p.y)), Some((639, 479)));
+    // Drawn at the edge it is cut off, not written outside.
+    desk.draw_pointer(&canvas);
+    check_eq!(t.rgb(639, 479), 0x000000);
+    check!(t.untouched_outside());
+    // Over the terminal: black edge, white inside; moving away repairs the text.
+    desk.mouse(0, -5000, -5000, screen);
+    desk.mouse(0, inside.x as i32, inside.y as i32, screen);
+    desk.draw_pointer(&canvas);
+    check_eq!((t.rgb(inside.x, inside.y + 5), t.rgb(inside.x + 1, inside.y + 5)), (0x000000, 0xFFFFFF));
+    check!(!t.shows_at(inside.x, inside.y, 'h', 0xAAAAAA, 0));
+    let MouseEffect::PointerMoved(old) = desk.mouse(0, 200, 100, screen) else { return Err(String::from("the pointer did not move")) };
+    desk.draw(&canvas.clipped(old));
+    term.redraw_in(old);
+    check!(t.shows_at(inside.x, inside.y, 'h', 0xAAAAAA, 0) && t.shows_at(inside.x + 8, inside.y, 'e', 0xAAAAAA, 0));
+    check_eq!(t.rgb(0, 0), wm::BACKGROUND);
+    // A repair only touches its rectangle.
+    canvas.fill_rect(screen, 0x123456);
+    desk.draw(&canvas.clipped(Rect::new(0, 0, 10, 10)));
+    term.redraw_in(Rect::new(0, 0, 10, 10));
+    check_eq!((t.rgb(9, 9), t.rgb(10, 9), t.rgb(9, 10), t.rgb(inside.x, inside.y)), (wm::BACKGROUND, 0x123456, 0x123456, 0x123456));
+    canvas.glyph(100, 100, b'A', 0xFFFFFF, 0, 1);
+    canvas.fill_rect(Rect::new(100, 100, 8, 16), 0x123456);
+    canvas.clipped(Rect::new(104, 100, 100, 100)).glyph(100, 100, b'M', 0xFFFFFF, 0, 1); // only its right half
+    check_eq!(t.rgb(103, 108), 0x123456);
+    check!((104..108).any(|x| t.rgb(x, 108) != 0x123456));
+    desk.draw(&canvas);
+    term.redraw();
+    // A click inside the window grabs nothing.
+    desk.mouse(0, -5000, -5000, screen);
+    desk.mouse(0, (inside.x + 50) as i32, (inside.y + 50) as i32, screen);
+    desk.mouse(1, 0, 0, screen);
+    check!(matches!(desk.mouse(1, 30, 30, screen), MouseEffect::PointerMoved(_)));
+    check_eq!(desk.window(0).map(|w| w.frame), Some(frame));
+    desk.mouse(0, 0, 0, screen);
+    // Pressing on the title bar and moving drags the window along.
+    desk.mouse(0, -5000, -5000, screen);
+    desk.mouse(0, (frame.x + 100) as i32, (frame.y + 10) as i32, screen);
+    check_eq!(desk.mouse(1, 0, 0, screen), MouseEffect::Nothing);
+    check_eq!(desk.mouse(1, -7, 5, screen), MouseEffect::WindowMoved);
+    let moved = desk.window(0).ok_or("no window")?;
+    check_eq!(moved.frame, Rect::new(frame.x - 7, frame.y + 5, frame.width, frame.height));
+    let area = moved.content();
+    check!(term.move_to(area.x, area.y));
+    desk.draw(&canvas);
+    term.redraw();
+    check!(t.shows_at(inside.x - 7, inside.y + 5, 'h', 0xAAAAAA, 0));
+    check_eq!(t.rgb(frame.x - 7 + 100, frame.y + 5 + 3), wm::TITLE_BAR);
+    // Dragged far away it stops at the edge of the screen, whole.
+    check_eq!(desk.mouse(1, 5000, 5000, screen), MouseEffect::WindowMoved);
+    check_eq!(desk.window(0).map(|w| w.frame), Some(Rect::new(640 - frame.width, 480 - frame.height, frame.width, frame.height)));
+    check_eq!(desk.mouse(1, -5000, -5000, screen), MouseEffect::WindowMoved);
+    check_eq!(desk.window(0).map(|w| (w.frame.x, w.frame.y)), Some((0, 0)));
+    // Letting go ends it: the window stays where it is.
+    desk.mouse(0, 0, 0, screen);
+    check!(matches!(desk.mouse(0, 50, 50, screen), MouseEffect::PointerMoved(_)));
+    check_eq!(desk.window(0).map(|w| (w.frame.x, w.frame.y)), Some((0, 0)));
+    // The console refuses a place where it does not fit.
+    check!(!term.move_to(600, 0) && !term.move_to(0, 470) && !term.move_to(usize::MAX, 5));
+    check!(t.untouched_outside());
+    // A new desktop takes the pointer over, inside its own screen.
+    let old_pointer = desk.pointer();
+    let mut small = Desktop::new();
+    small.set_pointer(old_pointer, Rect::new(0, 0, 20, 20));
+    check_eq!(small.pointer().map(|p| (p.x, p.y)), Some((19, 19)));
     Ok(())
 }

@@ -1,0 +1,6 @@
+# `usb=off`: the controller is found but not touched. No controller at all
+# is the case in every other scenario.
+@usb kbd
+@args usb=off
+$ lsusb
+~ ^xHCI controller [0-9a-f:]+: not used \(usb=off\)$

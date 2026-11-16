@@ -15,6 +15,8 @@ use alloc::vec::Vec;
 use beefs::{normalize, FileKind, FsError};
 
 const LAYOUT_FILE: &str = "/system/keyboard";
+/// Lines "mode WIDTHxHEIGHT" and "font 1|2|auto" (`display mode`, `display font`).
+const DISPLAY_FILE: &str = "/system/display";
 /// "on" or "off": the desktop (`desktop on` / `desktop off`). No file: on.
 const DESKTOP_FILE: &str = "/system/desktop";
 /// Contains "off" when the AI features are switched off (`ai off`).
@@ -164,6 +166,36 @@ impl Shell {
             if let Some(l) = core::str::from_utf8(&data).ok().and_then(|s| Layout::from_id(s.trim())) {
                 keyboard::set_layout(l);
             }
+        }
+    }
+
+    /// Apply the resolution and font size saved on disk, if any. A `mode=`
+    /// boot flag wins over the saved resolution; a driver that cannot change
+    /// the mode keeps the one it has.
+    pub fn load_display(&mut self) {
+        let Ok(data) = self.storage.fs().read_file(DISPLAY_FILE) else { return };
+        let (mode, font) = display::parse_settings(&String::from_utf8_lossy(&data));
+        if let Some(font) = font {
+            console::set_font(font);
+        }
+        let now = display::current().map(|(_, m)| (m.width, m.height));
+        if let Some((width, height)) = mode.filter(|m| Some(*m) != now && crate::bootargs::value("mode").is_none()) {
+            let _ = console::set_display_mode(width, height);
+        }
+    }
+
+    /// Remember one display setting ("mode" or "font"); the other one stays.
+    fn save_display(&mut self, key: &str, value: &str) -> &'static str {
+        let mut fs = self.storage.fs();
+        let old = fs.read_file(DISPLAY_FILE).map(|d| String::from_utf8_lossy(&d).into_owned()).unwrap_or_default();
+        let mut text: String = old.lines().filter(|l| l.split_whitespace().next() != Some(key)).map(|l| format!("{l}\n")).collect();
+        text += &format!("{key} {value}\n");
+        let saved = fs.mkdir_all("/system").and_then(|_| fs.write_file(DISPLAY_FILE, text.as_bytes()));
+        drop(fs);
+        match (saved, self.storage.persistent) {
+            (Ok(()), true) => "saved",
+            (Ok(()), false) => "RAM disk: not kept after reboot",
+            (Err(_), _) => "could not save",
         }
     }
 
@@ -467,7 +499,10 @@ impl Shell {
             ("display", []) => println!("{}", console::describe_display()),
             ("display", ["mode", size]) => match display::parse_mode(size) {
                 Some((width, height)) => match console::set_display_mode(width, height) {
-                    Ok(()) => println!("{}", console::describe_display()),
+                    Ok(()) => {
+                        let note = self.save_display("mode", size);
+                        println!("{}\n({note})", console::describe_display())
+                    }
                     Err(e) => error(&format!("display mode {size}: {}", e.message())),
                 },
                 None => error(&format!("display mode {size}: {}", display::DisplayError::BadSize.message())),
@@ -485,14 +520,27 @@ impl Shell {
                 let micros = console::redraw();
                 println!("drawing the whole screen again took {}.{} ms", micros / 1000, micros % 1000 / 100);
             }
-            ("display", _) => error("usage: display [mode WIDTHxHEIGHT | test]"),
+            ("display", ["font", size]) => match display::parse_font(size) {
+                Some(_) if display::current().is_none() => error("display font: needs a graphics mode, and this is the text screen"),
+                Some(font) => {
+                    console::set_font(font);
+                    let note = self.save_display("font", size);
+                    println!("{}\n({note})", console::describe_display())
+                }
+                None => error("usage: display font 1|2|auto   (1: 8x16 pixels per character, 2: 16x32)"),
+            },
+            ("display", _) => error("usage: display [mode WIDTHxHEIGHT | font 1|2|auto | test]"),
             ("desktop", []) if console::desktop_on() => {
                 let (cols, rows) = console::size();
-                println!("desktop: on, the terminal window has {cols}x{rows} characters ('desktop off' ends it)")
+                println!("desktop: on, the terminal window has {cols}x{rows} characters ('desktop off' ends it)");
+                if let Some((x, y)) = console::pointer() {
+                    println!("mouse pointer at {x},{y}");
+                }
             }
             ("desktop", []) => println!("desktop: off ('desktop on' starts it)"),
             ("desktop", [state @ ("on" | "off")]) => self.desktop(state),
             ("desktop", _) => error("usage: desktop [on | off]"),
+            ("lsusb", []) => println!("{}", crate::usb::describe()),
             ("slots", []) => match bootslots::describe() {
                 Some(text) => println!("{text}"),
                 None => println!("not booted from a boot disk with A/B slots (see tools/bootdisk.py)"),
@@ -1324,8 +1372,9 @@ const COMMANDS: &[(&str, &str)] = &[
     ("tftp get|put HOST FILE", "copy a file from / to a TFTP server"),
     ("arp", "neighbours learned on the local network"),
     ("lspci [-v]", "list PCI devices (-v: what each one can do)"),
+    ("lsusb", "USB controller and devices"),
     ("threads", "what runs side by side inside the kernel"),
-    ("display [mode WxH]", "screen: driver and resolution; change it; 'display test': color bars"),
+    ("display [mode WxH]", "screen: driver, resolution; 'display font 1|2|auto'; 'display test'"),
     ("desktop [on|off]", "graphical desktop: the terminal in a window (on by default; saved)"),
     ("slots", "A/B kernel slots: which one runs, last trial"),
     ("crash", "deliberately crash the kernel (tests crash reports)"),

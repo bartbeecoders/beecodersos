@@ -8,12 +8,14 @@
 //!
 //! Boot flags: `display=bochs|bootfb|text` picks a driver (`text`: none), and
 //! `mode=1920x1080` asks for a size (from a driver that can set one).
+//! `wc=off` leaves the framebuffer's memory as the firmware set it up
+//! (no write-combining, see paging.rs): for a machine where that goes wrong.
 //!
 //! Add a driver: a file with a `probe` function, and one line in `DRIVERS`.
 
 use crate::ring::Global;
 use crate::bootfb::{self, Boot};
-use crate::{bochs, bootargs, pci};
+use crate::{bochs, bootargs, paging, pci};
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
@@ -123,6 +125,49 @@ const SMALLER_MODES: &[(u32, u32)] = &[(1280, 720), (1024, 768), (800, 600), (64
 
 static DRIVER: Global<Option<Box<dyn DisplayDriver>>> = Global::new(None);
 
+/// Whether the framebuffer is write-combining, or why not.
+static WRITE_COMBINING: Global<Result<(), &'static str>> = Global::new(Err("no framebuffer"));
+
+/// Make drawing fast on real hardware (paging.rs), unless `wc=off` says no.
+fn speed_up(target: &Target) {
+    *WRITE_COMBINING.get() = if bootargs::value("wc") == Some("off") {
+        Err("switched off with wc=off")
+    } else {
+        paging::write_combine(target.framebuffer as u64, target.mode.bytes())
+    };
+}
+
+/// "on", or "off" and the reason.
+pub fn write_combining() -> Result<(), &'static str> {
+    *WRITE_COMBINING.get()
+}
+
+/// The lines of the settings file (`/system/display`): "mode WIDTHxHEIGHT"
+/// and "font 1|2|auto". Returns the mode and the font (0 = auto) it names;
+/// lines it does not understand are skipped.
+pub fn parse_settings(text: &str) -> (Option<(u32, u32)>, Option<usize>) {
+    let (mut mode, mut font) = (None, None);
+    for line in text.lines() {
+        let mut words = line.split_whitespace();
+        match (words.next(), words.next(), words.next()) {
+            (Some("mode"), Some(size), None) => mode = parse_mode(size).or(mode),
+            (Some("font"), Some(size), None) => font = parse_font(size).or(font),
+            _ => {}
+        }
+    }
+    (mode, font)
+}
+
+/// "1", "2" or "auto" (0).
+pub fn parse_font(text: &str) -> Option<usize> {
+    match text {
+        "auto" => Some(0),
+        "1" => Some(1),
+        "2" => Some(2),
+        _ => None,
+    }
+}
+
 /// Where to draw: a framebuffer and its mode.
 #[derive(Clone, Copy)]
 pub struct Target {
@@ -193,6 +238,7 @@ pub fn init() -> (Option<Target>, Vec<String>) {
         // A driver that takes over a mode has one already.
         if let Some(mode) = driver.mode() {
             let target = Target { framebuffer: driver.framebuffer(), mode };
+            speed_up(&target);
             *DRIVER.get() = Some(driver);
             return (Some(target), notes);
         }
@@ -201,6 +247,7 @@ pub fn init() -> (Option<Target>, Vec<String>) {
             match driver.set_mode(width, height) {
                 Ok(mode) => {
                     let target = Target { framebuffer: driver.framebuffer(), mode };
+                    speed_up(&target);
                     *DRIVER.get() = Some(driver);
                     return (Some(target), notes);
                 }
@@ -231,5 +278,7 @@ pub fn set_mode(width: u32, height: u32) -> Result<Target, DisplayError> {
     }
     let driver = DRIVER.get().as_mut().ok_or(DisplayError::NoDriver)?;
     let mode = driver.set_mode(width, height)?;
-    Ok(Target { framebuffer: driver.framebuffer(), mode })
+    let target = Target { framebuffer: driver.framebuffer(), mode };
+    speed_up(&target);
+    Ok(target)
 }

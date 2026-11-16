@@ -82,7 +82,7 @@ nav.toc a:hover { text-decoration: underline; }
 <h1>A display driver for BeeCodersOs</h1>
 <p class="lede">A plan to move the screen from 80x25 VGA text to a graphics framebuffer at up to 1920x1080, in virtual machines and on real hardware, with display drivers as interchangeable modules.</p>
 <p class="meta">Plan v1 · 15 November 2026 · Starting point: BeeCodersOs 0.0.3 · covers items A2 and X3 of <a href="drivers-todo.html">the drivers todo</a>.</p>
-<div class="callout"><b>Status:</b> G1 and G2 are done. The OS sets 1920x1080 itself on QEMU's cards, and on any other card it draws in the mode the bootloader set up. <b>Seen working on the HP</b> (16 November 2026, b24): it boots to the desktop and <code>display</code> shows the monitor's own resolution, so the firmware offers it and G5 (a driver of our own for the Intel card) is not needed. Since G1 there is also a desktop with a terminal window, on by default. Next: G3 (speed, a larger font, saved settings).</div>
+<div class="callout"><b>Status:</b> G1 and G2 are done. The OS sets 1920x1080 itself on QEMU's cards, and on any other card it draws in the mode the bootloader set up. <b>Seen working on the HP</b> (16 November 2026, b24): it boots to the desktop and <code>display</code> shows the monitor's own resolution, so the firmware offers it and G5 (a driver of our own for the Intel card) is not needed. Since G1 there is also a desktop with a terminal window, on by default. G3 (a larger font, saved settings, write-combining) is done too; its speed still has to be measured on the HP with <code>display test</code>.</div>
 
 <nav class="toc card">
 <b>Contents</b>
@@ -299,7 +299,7 @@ static DRIVERS: &amp;[(&amp;str, fn(&amp;BootInfo, &amp;[pci::Device]) -&gt; Opt
 </div>
 
 <div class="phase">
-<h3>G3 — Fast and comfortable <span class="tag t-later">Later</span></h3>
+<h3>G3 — Fast and comfortable <span class="tag t-now">Done, HP to measure</span></h3>
 <ul>
 <li><b>Write-combining</b> for the framebuffer memory. Without it every pixel write on real hardware goes to the card one by one, and a full-screen scroll at 1080p can take a noticeable fraction of a second. Done by marking the framebuffer's pages in the page tables (the tables are data set up by <code>boot.s</code>; the file itself is not changed).</li>
 <li>Double-size font and <code>display font 1|2</code>; pick double automatically at 1080p and above.</li>
@@ -308,6 +308,7 @@ static DRIVERS: &amp;[(&amp;str, fn(&amp;BootInfo, &amp;[pci::Device]) -&gt; Opt
 </ul>
 <p class="meta">About 300 lines. Whether write-combining is needed is measured on the HP first: <code>display test</code> prints how long a full redraw takes.</p>
 <div class="done"><b>Done when:</b> <code>cat</code> of a long file on the HP scrolls without visible stutter, and a full redraw at 1080p takes under 20 ms.</div>
+<p class="meta"><b>How it went:</b> write-combining, the double font (<code>display font 1|2|auto</code>) and the saved settings (<code>/system/display</code>) are in. Differences from the plan: "auto" picks the double font only above full HD (1440 lines and more), because at 1920x1080 the small font gives a terminal of useful size and the choice is one command; the driver name is not saved, only mode and font. Write-combining changes the caching bits of the pages boot.s set up, from Rust, and can be switched off with the boot flag <code>wc=off</code>. Scrolling in jumps is not built: it waits for a measurement. <b>Still to do on the HP:</b> run <code>display test</code> and note the redraw time, and check <code>display</code> says <code>video memory: write-combining</code>.</p>
 </div>
 
 <div class="phase">

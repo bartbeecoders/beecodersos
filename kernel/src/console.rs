@@ -16,6 +16,7 @@ use crate::font::{GLYPH_HEIGHT, GLYPH_WIDTH};
 use crate::gfx::Canvas;
 use crate::ring::Global;
 use crate::bootfb::{self, Boot};
+use crate::wm::MouseEffect;
 use crate::{bootargs, serial, session, vga, wm};
 use alloc::format;
 use alloc::string::String;
@@ -103,9 +104,29 @@ static CELLS: Global<[u16; fbcon::MAX_CELLS]> = Global::new([0; fbcon::MAX_CELLS
 /// The desktop, when it is on: the console is then its terminal window.
 static DESKTOP: Global<Option<wm::Desktop>> = Global::new(None);
 
+/// Where the pointer was when the desktop was last laid out or switched
+/// off: a mouse that was in use keeps its pointer.
+static POINTER: Global<Option<wm::Pointer>> = Global::new(None);
+
+/// The terminal's window on the desktop (the first one opened).
+const TERMINAL: usize = 0;
+
 /// The first text printed while the screen is the text screen, to show it
 /// again when the bootloader's graphics mode hid that screen.
 static EARLY: Global<([u8; 1024], usize)> = Global::new(([0; 1024], 0));
+
+/// The font size asked for: 1, 2, or 0 = choose by the screen (`display font`).
+static FONT: Global<usize> = Global::new(0);
+
+/// The font size for a screen: the one asked for, or double above full HD,
+/// where 8x16 letters get too small to read.
+pub fn font_scale(wanted: usize, screen_height: usize) -> usize {
+    match wanted {
+        1 | 2 => wanted,
+        _ if screen_height >= 1440 => 2,
+        _ => 1,
+    }
+}
 
 pub fn init() {
     serial::init();
@@ -152,22 +173,33 @@ pub fn start_display() -> String {
     for note in notes {
         lines += &format!("{note}\n       ");
     }
-    lines + &describe_display().replace('\n', ", ")
+    // The boot log gets the first four facts; `display` shows all.
+    let facts = describe_display();
+    lines + &facts.lines().take(4).collect::<Vec<_>>().join(", ")
 }
 
 /// Driver, resolution and size in characters, one per line.
 pub fn describe_display() -> String {
     let (cols, rows) = size();
-    match display::current() {
-        Some((name, mode)) => format!(
-            "driver: {name}\nmode: {}x{}, {} bits per pixel\ntext: {cols}x{rows} characters ({GLYPH_WIDTH}x{GLYPH_HEIGHT} font)\ndesktop: {}",
-            mode.width,
-            mode.height,
-            mode.format.bytes() * 8,
-            if desktop_on() { "on" } else { "off" }
-        ),
-        None => format!("driver: text (VGA text mode, no graphics)\ntext: {cols}x{rows} characters"),
-    }
+    let Some((name, mode)) = display::current() else {
+        return format!("driver: text (VGA text mode, no graphics)\ntext: {cols}x{rows} characters");
+    };
+    let scale = match SCREEN.get() {
+        Screen::Graphics(screen) => screen.scale(),
+        Screen::Text(_) => 1,
+    };
+    let font = format!("{}x{} font{}", GLYPH_WIDTH * scale, GLYPH_HEIGHT * scale, if *FONT.get() == 0 { ", automatic" } else { "" });
+    let fast = match display::write_combining() {
+        Ok(()) => String::from("write-combining"),
+        Err(why) => format!("plain ({why})"),
+    };
+    format!(
+        "driver: {name}\nmode: {}x{}, {} bits per pixel\ntext: {cols}x{rows} characters ({font})\ndesktop: {}\nvideo memory: {fast}",
+        mode.width,
+        mode.height,
+        mode.format.bytes() * 8,
+        if desktop_on() { "on" } else { "off" }
+    )
 }
 
 /// Characters per line, and lines, of the machine's own screen.
@@ -209,20 +241,25 @@ fn lay_out(target: Target, desktop: bool) -> bool {
         Screen::Graphics(s) if s.width() > 0 => Some((Vec::from(s.cells()), s.width(), s.pos(), s.attr())),
         _ => None,
     };
+    if let Some(pointer) = DESKTOP.get().as_ref().and_then(|desk| desk.pointer()) {
+        *POINTER.get() = Some(pointer);
+    }
     let canvas = Canvas::new(target.framebuffer, target.mode);
-    let frame = if desktop { wm::terminal_frame(canvas.width(), canvas.height()) } else { None };
+    let scale = font_scale(*FONT.get(), canvas.height());
+    let frame = if desktop { wm::terminal_frame(canvas.width(), canvas.height(), scale) } else { None };
     let mut screen = match frame {
         Some(frame) => {
             let mut desk = wm::Desktop::new();
-            let id = desk.open("Terminal", frame);
+            desk.open("Terminal", frame);
+            desk.set_pointer(*POINTER.get(), canvas.bounds());
             desk.draw(&canvas);
-            let area = desk.window(id).map_or(frame, |w| w.content());
+            let area = desk.window(TERMINAL).map_or(frame, |w| w.content());
             *DESKTOP.get() = Some(desk);
-            FbCon::in_area(canvas, area, CELLS.get())
+            FbCon::in_area(canvas, area, CELLS.get(), scale)
         }
         None => {
             *DESKTOP.get() = None;
-            FbCon::in_area(canvas, canvas.bounds(), CELLS.get())
+            FbCon::in_area(canvas, canvas.bounds(), CELLS.get(), scale)
         }
     };
     screen.clear();
@@ -238,6 +275,7 @@ fn lay_out(target: Target, desktop: bool) -> bool {
         screen.sync_cursor();
     }
     *SCREEN.get() = Screen::Graphics(screen);
+    pointer_on_top();
     frame.is_some()
 }
 
@@ -247,6 +285,52 @@ pub fn set_display_mode(width: u32, height: u32) -> Result<(), DisplayError> {
     let target = display::set_mode(width, height)?;
     lay_out(target, desktop_on());
     Ok(())
+}
+
+/// Choose the font size (`display font`): 1, 2, or 0 for automatic.
+pub fn set_font(size: usize) {
+    *FONT.get() = size;
+    if let Some(target) = display::target() {
+        lay_out(target, desktop_on());
+    }
+}
+
+/// The mouse moved or a button changed (from the usb thread, once per
+/// timer tick): buttons, then how far right and down. Only the desktop has
+/// a pointer; a full-screen terminal ignores the mouse.
+pub fn mouse_event(buttons: u8, dx: i32, dy: i32) {
+    let (Some(desk), Screen::Graphics(screen)) = (DESKTOP.get().as_mut(), SCREEN.get()) else { return };
+    let canvas = screen.canvas();
+    match desk.mouse(buttons, dx, dy, canvas.bounds()) {
+        MouseEffect::Nothing => {}
+        MouseEffect::PointerMoved(old) => {
+            // Repair what the pointer covered, then draw it in its new place.
+            desk.draw(&canvas.clipped(old));
+            screen.redraw_in(old);
+            desk.draw_pointer(&canvas);
+        }
+        MouseEffect::WindowMoved => {
+            if let Some(window) = desk.window(TERMINAL) {
+                let area = window.content();
+                screen.move_to(area.x, area.y);
+            }
+            desk.draw(&canvas);
+            screen.redraw();
+            desk.draw_pointer(&canvas);
+        }
+    }
+}
+
+/// Where the pointer is on the desktop: for `desktop` and the tests.
+pub fn pointer() -> Option<(usize, usize)> {
+    DESKTOP.get().as_ref()?.pointer().map(|p| (p.x, p.y))
+}
+
+/// Text was drawn and may have covered the pointer: put it back on top.
+fn pointer_on_top() {
+    if let (Some(desk), Screen::Graphics(screen)) = (DESKTOP.get().as_ref(), SCREEN.get()) {
+        desk.draw_pointer(&screen.canvas());
+    }
 }
 
 pub fn desktop_on() -> bool {
@@ -279,6 +363,7 @@ pub fn redraw() -> u64 {
         }
         screen.redraw();
     }
+    pointer_on_top();
     crate::time::micros() - start
 }
 
@@ -287,6 +372,7 @@ pub fn clear() {
         return;
     }
     SCREEN.get().clear();
+    pointer_on_top();
     serial::write_str("\x1b[2J\x1b[H");
 }
 
@@ -324,6 +410,7 @@ impl Write for Console {
         let screen = SCREEN.get();
         screen.write_str(s);
         screen.sync_cursor();
+        pointer_on_top();
         if let Screen::Text(_) = screen {
             let (early, len) = EARLY.get();
             let n = s.len().min(early.len() - *len);
@@ -395,6 +482,7 @@ pub fn redraw_line(mark: &Mark, text: &[char], old_len: usize, cursor: usize, ol
     }
     screen.set_pos(end.0, end.1);
     screen.set_cursor(mark.start(screen) + cursor);
+    pointer_on_top();
 
     // Serial fast paths: typing or backspacing at the end of the line.
     let mut buf = [0u8; 4];

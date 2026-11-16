@@ -37,6 +37,7 @@ mod interrupts;
 mod keyboard;
 mod layouts;
 mod net;
+mod paging;
 mod pci;
 mod port;
 mod power;
@@ -51,8 +52,10 @@ mod testmode;
 mod thread;
 mod time;
 mod uart;
+mod usb;
 mod vga;
 mod wm;
+mod xhci;
 
 use core::panic::PanicInfo;
 
@@ -123,9 +126,13 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info: u32) -> ! {
         Err(e) => println!("[net]  {e}"),
     }
     net::start_task();
+    if let Some(line) = xhci::start() {
+        println!("[usb]  {line}");
+    }
 
     let mut shell = shell::Shell::new(storage);
     shell.load_layout();
+    shell.load_display();
     shell.load_desktop();
     shell.load_network();
     let layout = keyboard::layout();

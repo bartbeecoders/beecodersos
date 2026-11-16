@@ -49,6 +49,8 @@ pub struct FbCon<'a> {
     scrolls: usize,
     /// Cell that shows the cursor.
     cursor: Option<usize>,
+    /// Font size: 1 = 8x16 pixels per character, 2 = 16x32.
+    scale: usize,
 }
 
 impl<'a> FbCon<'a> {
@@ -57,21 +59,28 @@ impl<'a> FbCon<'a> {
     /// gives a screen of 0x0 characters: nothing is drawn.
     pub fn new(framebuffer: *mut u8, mode: Mode, cells: &'a mut [u16]) -> Self {
         let canvas = Canvas::new(framebuffer, mode);
-        Self::in_area(canvas, canvas.bounds(), cells)
+        Self::in_area(canvas, canvas.bounds(), cells, 1)
     }
 
-    /// A console in one area of the canvas (what lies outside the canvas is cut off).
-    pub fn in_area(canvas: Canvas, area: Rect, cells: &'a mut [u16]) -> Self {
+    /// A console in one area of the canvas (what lies outside the canvas is
+    /// cut off), with the font at `scale` times its size (1 or 2).
+    pub fn in_area(canvas: Canvas, area: Rect, cells: &'a mut [u16], scale: usize) -> Self {
+        let scale = scale.clamp(1, 2);
         let area = area.clip(&canvas.bounds());
-        let cols = area.width / GLYPH_WIDTH;
-        let mut rows = area.height / GLYPH_HEIGHT;
+        let cols = area.width / (GLYPH_WIDTH * scale);
+        let mut rows = area.height / (GLYPH_HEIGHT * scale);
         if cols == 0 || rows == 0 {
             rows = 0;
         } else {
             rows = rows.min(cells.len() / cols);
         }
         let cols = if rows == 0 { 0 } else { cols };
-        FbCon { canvas, area, cells, cols, rows, col: 0, row: 0, attr: 0x07, scrolls: 0, cursor: None }
+        FbCon { canvas, area, cells, cols, rows, col: 0, row: 0, attr: 0x07, scrolls: 0, cursor: None, scale }
+    }
+
+    /// Font size: 1 or 2.
+    pub fn scale(&self) -> usize {
+        self.scale
     }
 
     pub fn canvas(&self) -> Canvas {
@@ -185,7 +194,27 @@ impl<'a> FbCon<'a> {
         self.cursor = Some(index);
         let color = PALETTE[(self.cells[index] >> 8) as usize & 0x0F];
         let (x, y) = self.origin(index);
-        self.canvas.fill_rect(Rect::new(x, y + CURSOR_ROWS.start, GLYPH_WIDTH, CURSOR_ROWS.len()), color);
+        let s = self.scale;
+        self.canvas.fill_rect(Rect::new(x, y + CURSOR_ROWS.start * s, GLYPH_WIDTH * s, CURSOR_ROWS.len() * s), color);
+    }
+
+    /// Draw the part of the console inside `rect` again.
+    pub fn redraw_in(&mut self, rect: Rect) {
+        let whole = self.canvas;
+        self.canvas = whole.clipped(rect);
+        self.redraw();
+        self.canvas = whole;
+    }
+
+    /// Move the console to another place on the canvas (its window was
+    /// dragged). Nothing is drawn; a place where it does not fit is refused.
+    pub fn move_to(&mut self, x: usize, y: usize) -> bool {
+        let moved = Rect::new(x, y, self.area.width, self.area.height);
+        let fits = moved.clip(&self.canvas.bounds()) == moved;
+        if fits {
+            self.area = moved;
+        }
+        fits
     }
 
     /// Draw every cell again (after something else drew on the screen).
@@ -242,13 +271,14 @@ impl<'a> FbCon<'a> {
 
     /// Top left pixel of a cell.
     fn origin(&self, index: usize) -> (usize, usize) {
-        (self.area.x + index % self.cols * GLYPH_WIDTH, self.area.y + index / self.cols * GLYPH_HEIGHT)
+        let (w, h) = (GLYPH_WIDTH * self.scale, GLYPH_HEIGHT * self.scale);
+        (self.area.x + index % self.cols * w, self.area.y + index / self.cols * h)
     }
 
     fn draw_cell(&mut self, index: usize) {
         let cell = self.cells[index];
         let (fg, bg) = (PALETTE[(cell >> 8) as usize & 0x0F], PALETTE[(cell >> 12) as usize]);
         let (x, y) = self.origin(index);
-        self.canvas.glyph(x, y, cell as u8, fg, bg);
+        self.canvas.glyph(x, y, cell as u8, fg, bg, self.scale);
     }
 }

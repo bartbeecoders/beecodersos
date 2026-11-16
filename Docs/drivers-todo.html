@@ -260,25 +260,28 @@ ul.items { list-style: none; padding: 0; margin: 12px 0; }
 <h3 id="tier-D" data-tier="Tier D: USB">Tier D: USB</h3>
 <p>The largest block of work. Without it there is no keyboard under UEFI and no USB stick as a disk.</p>
 <ul class="items" data-tier="Tier D: USB">
-<li class="item" data-status="todo" id="U1">
+<li class="item" data-status="doing" id="U1">
 <h4><span class="id">U1</span> xHCI host controller (USB 3) <span class="size">XL</span> <span class="st"></span></h4>
 <p>On this chipset it can drive all the USB ports. Memory-mapped registers, command and event rings, device slots.</p>
 <p class="facts">Needs P1 (or polling) and P3. Test: QEMU <code>-device qemu-xhci</code>.</p>
+<p><b>Works in QEMU</b> (0.0.3, 16 Nov 2026), with polling: <code>kernel/src/xhci.rs</code>, command <code>lsusb</code>. It includes the handover from the firmware and the Intel register that moves the ports from the old USB 2 controller to xHCI, which the HP needs; neither can be tested in QEMU. <b>Not tried on the HP yet.</b> If it goes wrong there: the boot menu entry "without the USB driver" (<code>usb=off</code>).</p>
 </li>
-<li class="item" data-status="todo" id="U2">
+<li class="item" data-status="doing" id="U2">
 <h4><span class="id">U2</span> USB core and keyboard <span class="size">L</span> <span class="st"></span></h4>
 <p>Find devices, read their descriptors, hubs, and the keyboard protocol.</p>
 <p class="facts">Test: QEMU <code>-device usb-kbd</code>.</p>
+<p><b>Works in QEMU:</b> devices on the machine's own ports are found and described, and a keyboard types (layouts, Shift, AltGr, key repeat). Not done: hubs. A keyboard plugged into a hub, or one with a hub inside, is listed by <code>lsusb</code> as not supported. <b>Not tried on the HP yet</b>; real keyboards are usually low-speed devices and QEMU's is not, so that path is untested.</p>
 </li>
 <li class="item" data-status="todo" id="U3">
 <h4><span class="id">U3</span> USB mass storage <span class="size">M</span> <span class="st"></span></h4>
 <p>Sticks and USB disks as block devices.</p>
 <p class="facts">Test: QEMU <code>-device usb-storage</code>.</p>
 </li>
-<li class="item" data-status="todo" id="U5">
+<li class="item" data-status="doing" id="U5">
 <h4><span class="id">U5</span> USB mouse <span class="size">M</span> <span class="st"></span></h4>
 <p>For the graphical desktop (<code>desktop on</code>): a pointer on the screen, and windows that can be picked and moved. A USB mouse speaks the same simple "boot protocol" family as the keyboard: a small report with the buttons and how far it moved, read from an interrupt endpoint. The window system (<code>wm.rs</code>) then needs a pointer drawn over the windows, and clicks sent to the window under it.</p>
 <p class="facts">Needs U1 and U2 (host controller, finding devices, reading descriptors); the mouse itself is the small part. Test: QEMU <code>-device usb-mouse</code> (or <code>usb-tablet</code>, which reports absolute positions), with the test moving the pointer through QEMU and a screenshot showing where it is.</p>
+<p><b>Works in QEMU:</b> the pointer follows the mouse and the terminal window can be dragged by its title bar. Tablets (absolute positions) are not supported. <b>Not tried on the HP yet.</b></p>
 </li>
 <li class="item" data-status="skip" id="U4">
 <h4><span class="id">U4</span> EHCI host controller (USB 2) <span class="size">L</span> <span class="st"></span></h4>

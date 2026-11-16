@@ -1,0 +1,10 @@
+# Devices we have no driver for are listed with the reason, and do no harm.
+# `usb=off` leaves the controller alone.
+@usb tablet hub storage
+$ lsusb
+~ ^xHCI controller [0-9a-f:]+, \d+ ports$
+~ ^port \d+: 46f4:0001 storage, \w+ speed \(no driver\)$
+~ ^port \d+: 0627:0001 input device \(no boot protocol\), \w+ speed \(no driver\)$
+~ ^port \d+: 0409:55aa hub, \w+ speed \(hubs are not supported: plug devices into the machine itself\)$
+$ echo fine
+fine

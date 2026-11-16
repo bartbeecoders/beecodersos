@@ -72,6 +72,14 @@ Without @wire or @net the machine has no network card.
                                screen with something on it) or `bars` (the eight color bars
                                of `display test`), or `pixels X,Y=RRGGBB ...` (these pixels
                                have these colors). Waits up to 3 s for it
+    @usb DEVICE ...            (first lines) a USB 3 controller (xHCI) with these devices
+                               plugged in: `kbd`, `mouse`, `tablet`, `hub`, `storage`
+    @keys KEY ...              press these keys on the machine's keyboard (not the serial
+                               port), one after the other. Names as QEMU has them: a, 1, ret,
+                               spc, shift+a, ... `KEY:MS` holds a key for that long. Follow
+                               with `$wait` to check what the shell printed
+    @mouse DX DY               move the mouse that far right and down (pixels)
+    @button NAME down|up       press or let go a mouse button (left, right, middle)
     @bootdisk                  (first lines) boot from an A/B boot disk (tools/bootdisk.py)
                                with the kernel in both slots, BeeFS in partition 2
     $ COMMAND                  type a command, wait for the next prompt
@@ -151,7 +159,7 @@ class Vm:
 
     def __init__(self, *, kernel_args=None, cdrom=None, disk=None, uefi=False, ai_port=None, bootdisk=None,
                  wire=None, usernet=None, forward=None, forward_shell=None, sata=False, nic="e1000",
-                 extra_args=None, vga=None, qmp=None):
+                 extra_args=None, vga=None, qmp=None, usb=None):
         cmd = ["qemu-system-x86_64", "-m", "128M", "-display", "none", "-serial", "stdio",
                "-monitor", "none", "-no-reboot",
                "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04"]
@@ -166,8 +174,16 @@ class Vm:
             cmd += ["-kernel", str(KERNEL), "-append", f"{args} {extra_args}" if extra_args else args]
         if vga:
             cmd += ["-vga", vga]
+        if usb is not None:
+            cmd += ["-device", "qemu-xhci"]
+            for device in usb:
+                if device == "storage":
+                    cmd += ["-drive", "if=none,id=stick,format=raw,file=/dev/null,readonly=on",
+                            "-device", "usb-storage,drive=stick"]
+                else:
+                    cmd += ["-device", f"usb-{device}"]
         self.qmp = qmp
-        if qmp:  # QEMU's control port, for screenshots
+        if qmp:  # QEMU's control port, for screenshots, keys and the mouse
             cmd += ["-qmp", f"tcp:127.0.0.1:{qmp},server=on,wait=off"]
         if disk and sata:
             cmd += ["-device", "ahci,id=ahci", "-drive", f"file={disk},format=raw,if=none,id=sata0",
@@ -261,18 +277,21 @@ class Vm:
         lines = out.split("\n")
         return [l.rstrip() for l in lines[1:-1]]  # drop echoed command and the new prompt
 
-    def screenshot(self, path: Path) -> tuple[int, int, bytes]:
-        """What the screen shows now: (width, height, RGB bytes, 3 per pixel, row by row)."""
+    def control(self, execute: str, **arguments):
+        """One command to QEMU itself (QMP), e.g. a screenshot or a key press."""
         with socket.create_connection(("127.0.0.1", self.qmp), timeout=5) as conn:
             f = conn.makefile("rw")
             f.readline()  # QEMU's greeting
-            for request in ({"execute": "qmp_capabilities"},
-                            {"execute": "screendump", "arguments": {"filename": str(path)}}):
+            for request in ({"execute": "qmp_capabilities"}, {"execute": execute, "arguments": arguments}):
                 f.write(json.dumps(request) + "\n")
                 f.flush()
                 while "return" not in (answer := json.loads(f.readline())):  # skip events
                     if "error" in answer:
-                        raise TestFailure(f"screenshot: QEMU says {answer['error'].get('desc')}")
+                        raise TestFailure(f"{execute}: QEMU says {answer['error'].get('desc')}")
+
+    def screenshot(self, path: Path) -> tuple[int, int, bytes]:
+        """What the screen shows now: (width, height, RGB bytes, 3 per pixel, row by row)."""
+        self.control("screendump", filename=str(path))
         data = path.read_bytes()  # PPM: "P6\nWIDTH HEIGHT\n255\n", then the pixels
         magic, width, height, depth = data.split(maxsplit=4)[:4]
         width, height = int(width), int(height)
@@ -390,6 +409,11 @@ def parse_scenario(path: Path):
             opts.add(line[1:].replace(" ", ":", 1))
         elif line.startswith("@screenshot "):
             steps.append(("screenshot", line[12:].strip(), []))
+        elif line.startswith("@usb"):
+            opts.add("usb:" + line[4:].strip())
+        elif line.startswith(("@keys ", "@mouse ", "@button ")):
+            kind, _, arg = line[1:].partition(" ")
+            steps.append((kind, arg.strip(), []))
         elif line.startswith(("@frame ", "@frame-soon ", "@send ")):
             kind, _, arg = line[1:].partition(" ")
             steps.append((kind, arg.strip(), []))
@@ -924,10 +948,12 @@ def test_scenario(path: Path):
         if extra_args and bootdisk:
             raise TestFailure(f"{path.name}: @args does not work with @bootdisk")
         vga = next((o[4:] for o in opts if o.startswith("vga:")), None)
-        qmp = free_port() if any(kind == "screenshot" for kind, _, _ in steps) else None
+        usb = next((o[4:].split() for o in opts if o.startswith("usb:")), None)
+        qmp = free_port() if any(kind in ("screenshot", "keys", "mouse", "button") for kind, _, _ in steps) else None
         boot = lambda: Vm(disk=disk, ai_port=ai_port, bootdisk=bootdisk, wire=wire.ports if wire else None,
                           usernet=usernet, forward=forward, forward_shell=forward_shell, sata="sata" in opts,
-                          nic="e1000e" if "e1000e" in opts else "e1000", extra_args=extra_args, vga=vga, qmp=qmp)
+                          nic="e1000e" if "e1000e" in opts else "e1000", extra_args=extra_args, vga=vga, qmp=qmp,
+                          usb=usb)
         vm = boot()
         out = []
         try:
@@ -946,6 +972,22 @@ def test_scenario(path: Path):
                     continue
                 if kind == "screenshot":
                     check_screenshot(vm, Path(tmp), cmd, path.name)
+                    continue
+                if kind == "keys":
+                    for key in cmd.split():
+                        key, _, hold = key.partition(":")
+                        keys = [{"type": "qcode", "data": name} for name in key.split("+")]
+                        vm.control("send-key", keys=keys, **({"hold-time": int(hold)} if hold else {}))
+                        time.sleep(int(hold) / 1000 + 0.15 if hold else 0.12)
+                    continue
+                if kind in ("mouse", "button"):
+                    a, b = cmd.split()
+                    if kind == "mouse":
+                        events = [{"type": "rel", "data": {"axis": axis, "value": int(v)}} for axis, v in (("x", a), ("y", b))]
+                    else:
+                        events = [{"type": "btn", "data": {"button": a, "down": b == "down"}}]
+                    vm.control("input-send-event", events=events)
+                    time.sleep(0.25)
                     continue
                 if kind == "request":
                     if not forward:

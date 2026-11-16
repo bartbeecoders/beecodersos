@@ -1,0 +1,7 @@
+# `wc=off` leaves the framebuffer's memory alone: the way out if
+# write-combining goes wrong on some machine. Everything still draws.
+@args wc=off desktop=off
+$ display
+driver: bochs
+video memory: plain (switched off with wc=off)
+@screenshot 1920x1080 text

@@ -5,7 +5,7 @@
 $ display
 driver: bochs
 mode: 1024x768, 32 bits per pixel
-text: 128x48 characters (8x16 font)
+text: 128x48 characters (8x16 font, automatic)
 @screenshot 1024x768 text
 $ display mode 1920x1080
 mode: 1920x1080, 32 bits per pixel

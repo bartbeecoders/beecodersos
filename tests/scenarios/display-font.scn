@@ -1,0 +1,46 @@
+# Display phase G3: a double-size font, and the resolution and font size are
+# remembered on the disk. The framebuffer is write-combining (fast drawing on
+# real hardware).
+@disk
+@args desktop=off
+$ display
+text: 240x67 characters (8x16 font, automatic)
+video memory: write-combining
+$ display font 2
+text: 120x33 characters (16x32 font)
+(saved)
+@screenshot 1920x1080 text
+$ echo big létters
+big létters
+$ display mode 1280x720
+mode: 1280x720, 32 bits per pixel
+text: 80x22 characters (16x32 font)
+(saved)
+$ cat /system/display
+font 2
+mode 1280x720
+$ display font 3
+usage: display font 1|2|auto   (1: 8x16 pixels per character, 2: 16x32)
+$ display font
+usage: display [mode WIDTHxHEIGHT | font 1|2|auto | test]
+
+# After a restart both are back.
+@reboot
+$ display
+mode: 1280x720, 32 bits per pixel
+text: 80x22 characters (16x32 font)
+video memory: write-combining
+@screenshot 1280x720 text
+$ desktop on
+desktop on (saved)
+$ desktop
+desktop: on, the terminal window has 73x18 characters ('desktop off' ends it)
+@screenshot 1280x720 pixels 0,0=a8d0f0 1279,719=a8d0f0
+$ display font auto
+text: 147x37 characters (8x16 font, automatic)
+(saved)
+$ display mode 1920x1080
+(saved)
+$ cat /system/display
+font auto
+mode 1920x1080

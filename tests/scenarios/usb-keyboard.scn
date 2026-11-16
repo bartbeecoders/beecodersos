@@ -1,0 +1,29 @@
+# A USB keyboard on the xHCI controller: found at boot, and what is typed on
+# it (through QEMU, not the serial port) reaches the shell, with the layout,
+# Shift and key repeat.
+@usb kbd
+$ layout us
+$ lsusb
+~ ^xHCI controller [0-9a-f]{4}:[0-9a-f]{4}, \d+ ports$
+~ ^port \d+: 0627:0001 keyboard, \w+ speed \(in use, 0 reports\)$
+@keys e c h o spc shift+u s b spc 1 2 3 shift+1 ret
+$wait
+Usb 123!
+$ lsusb
+~ keyboard, \w+ speed \(in use, [1-9]\d* reports\)
+
+# Editing keys: left arrow and backspace change the line before Enter.
+@keys e c h o spc a b x c left backspace ret
+$wait
+abc
+
+# A key held down repeats.
+@keys z:1500 ret
+$wait
+~ ^z{8,}: command not found
+
+# Another layout applies to the USB keyboard too (Belgian: the q key gives a).
+$ layout be
+@keys e c h o spc q ret
+$wait
+a

@@ -3,8 +3,8 @@
 //! their frames look; what is inside a window is drawn by its owner (for the
 //! terminal: the framebuffer console, fbcon.rs, in the window's content area).
 //!
-//! There is no mouse yet (USB mouse: U5 in Docs/drivers-todo.html), so
-//! windows cannot be moved, and the only window is the terminal.
+//! With a mouse (usb.rs) there is a pointer, and the top window can be
+//! dragged by its title bar. The only window so far is the terminal.
 
 use crate::font::{GLYPH_HEIGHT, GLYPH_WIDTH};
 use crate::gfx::{Canvas, Rect};
@@ -78,14 +78,61 @@ impl Window {
     }
 }
 
+/// The mouse pointer: an arrow, 12 by 19 pixels. X: black edge, o: white inside.
+const POINTER: [&str; 19] = [
+    "X           ",
+    "XX          ",
+    "XoX         ",
+    "XooX        ",
+    "XoooX       ",
+    "XooooX      ",
+    "XoooooX     ",
+    "XooooooX    ",
+    "XoooooooX   ",
+    "XooooooooX  ",
+    "XoooooooooX ",
+    "XooooooXXXXX",
+    "XoooXooX    ",
+    "XooX XooX   ",
+    "XoX  XooX   ",
+    "XX    XooX  ",
+    "X     XooX  ",
+    "       XX   ",
+    "            ",
+];
+pub const POINTER_WIDTH: usize = 12;
+pub const POINTER_HEIGHT: usize = 19;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pointer {
+    /// The tip of the arrow.
+    pub x: usize,
+    pub y: usize,
+    buttons: u8,
+    /// While the top window is being dragged: where in its frame it was grabbed.
+    grab: Option<(usize, usize)>,
+}
+
+/// What a mouse event changed on the screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseEffect {
+    Nothing,
+    /// The pointer moved: this is where it was.
+    PointerMoved(Rect),
+    /// The top window moved (and the pointer with it).
+    WindowMoved,
+}
+
 pub struct Desktop {
     /// Back to front: the last window is on top and has the focus.
     windows: Vec<Window>,
+    /// `None` until a mouse moves.
+    pointer: Option<Pointer>,
 }
 
 impl Desktop {
     pub fn new() -> Self {
-        Desktop { windows: Vec::new() }
+        Desktop { windows: Vec::new(), pointer: None }
     }
 
     /// Add a window on top of the others; returns its number.
@@ -108,18 +155,88 @@ impl Desktop {
     }
 }
 
+impl Desktop {
+    pub fn pointer(&self) -> Option<Pointer> {
+        self.pointer
+    }
+
+    /// Put the pointer somewhere (a new desktop takes over the old one's pointer).
+    pub fn set_pointer(&mut self, pointer: Option<Pointer>, screen: Rect) {
+        self.pointer = pointer.map(|p| Pointer {
+            x: p.x.min(screen.width.saturating_sub(1)),
+            y: p.y.min(screen.height.saturating_sub(1)),
+            buttons: 0,
+            grab: None,
+        });
+    }
+
+    pub fn draw_pointer(&self, canvas: &Canvas) {
+        let Some(p) = self.pointer else { return };
+        for (dy, row) in POINTER.iter().enumerate() {
+            for (dx, mark) in row.bytes().enumerate() {
+                let color = match mark {
+                    b'X' => 0x000000,
+                    b'o' => 0xFFFFFF,
+                    _ => continue,
+                };
+                canvas.fill_rect(Rect::new(p.x + dx, p.y + dy, 1, 1), color);
+            }
+        }
+    }
+
+    /// The mouse moved by (dx, dy) pixels and its buttons are now `buttons`
+    /// (bit 0: left). The first event puts the pointer in the middle of the
+    /// screen. Pressing the left button on the top window's title bar grabs
+    /// the window; it follows the pointer until the button is let go, and
+    /// stays completely on the screen.
+    pub fn mouse(&mut self, buttons: u8, dx: i32, dy: i32, screen: Rect) -> MouseEffect {
+        let first = self.pointer.is_none();
+        let old = self.pointer.unwrap_or(Pointer { x: screen.width / 2, y: screen.height / 2, buttons: 0, grab: None });
+        let step = |at: usize, by: i32, size: usize| {
+            (at as i64 + by as i64).clamp(0, size.saturating_sub(1) as i64) as usize
+        };
+        let mut new = Pointer { x: step(old.x, dx, screen.width), y: step(old.y, dy, screen.height), buttons, grab: old.grab };
+        let (was_down, is_down) = (old.buttons & 1 != 0, buttons & 1 != 0);
+        if !is_down {
+            new.grab = None;
+        } else if !was_down {
+            new.grab = self.windows.last().and_then(|w| {
+                let f = w.frame;
+                let on_bar = new.x >= f.x && new.x < f.x + f.width && new.y >= f.y && new.y < f.y + BORDER + TITLE_HEIGHT;
+                on_bar.then(|| (new.x - f.x, new.y - f.y))
+            });
+        }
+        self.pointer = Some(new);
+        if let (Some((gx, gy)), Some(window)) = (new.grab, self.windows.last_mut()) {
+            let f = window.frame;
+            let x = new.x.saturating_sub(gx).min(screen.width.saturating_sub(f.width));
+            let y = new.y.saturating_sub(gy).min(screen.height.saturating_sub(f.height));
+            if (x, y) != (f.x, f.y) {
+                window.frame = Rect::new(x, y, f.width, f.height);
+                return MouseEffect::WindowMoved;
+            }
+        }
+        if first || (new.x, new.y) != (old.x, old.y) {
+            return MouseEffect::PointerMoved(Rect::new(old.x, old.y, POINTER_WIDTH, POINTER_HEIGHT));
+        }
+        MouseEffect::Nothing
+    }
+}
+
 /// Where the terminal window goes on a screen of this size: in the middle,
-/// with some desktop around it, and a content area of whole characters.
-/// `None`: the screen is too small for a window.
-pub fn terminal_frame(width: usize, height: usize) -> Option<Rect> {
+/// with some desktop around it, and a content area of whole characters
+/// (`scale`: the terminal's font size, 1 or 2). `None`: the screen is too
+/// small for a window.
+pub fn terminal_frame(width: usize, height: usize, scale: usize) -> Option<Rect> {
+    let (cell_width, cell_height) = (GLYPH_WIDTH * scale.max(1), GLYPH_HEIGHT * scale.max(1));
     let margin = (width.min(height) / 16).max(8);
     let extra_width = 2 * (BORDER + PADDING);
     let extra_height = extra_width + TITLE_HEIGHT;
-    let cols = width.checked_sub(2 * margin + extra_width)? / GLYPH_WIDTH;
-    let rows = height.checked_sub(2 * margin + extra_height)? / GLYPH_HEIGHT;
+    let cols = width.checked_sub(2 * margin + extra_width)? / cell_width;
+    let rows = height.checked_sub(2 * margin + extra_height)? / cell_height;
     if cols < MIN_COLS || rows < MIN_ROWS {
         return None;
     }
-    let (w, h) = (cols * GLYPH_WIDTH + extra_width, rows * GLYPH_HEIGHT + extra_height);
+    let (w, h) = (cols * cell_width + extra_width, rows * cell_height + extra_height);
     Some(Rect::new((width - w) / 2, (height - h) / 2, w, h))
 }

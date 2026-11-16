@@ -1,0 +1,47 @@
+# A USB mouse on the desktop: a pointer that follows it, and the terminal
+# window can be dragged by its title bar.
+@usb kbd mouse
+$ lsusb
+~ ^port \d+: 0627:0001 mouse, \w+ speed \(in use, 0 reports\)$
+$ desktop
+desktop: on, the terminal window has 221x56 characters ('desktop off' ends it)
+!~ mouse pointer
+
+# The first movement shows the pointer, starting from the middle of the screen.
+@mouse -100 -50
+$ desktop
+mouse pointer at 860,490
+@screenshot 1920x1080 pixels 860,490=000000 861,493=ffffff 859,490=000000 0,0=a8d0f0
+$ lsusb
+~ mouse, \w+ speed \(in use, [1-9]\d* reports\)
+
+# It stops at the edge of the screen.
+@mouse -3000 -3000
+$ desktop
+mouse pointer at 0,0
+@screenshot 1920x1080 pixels 0,0=000000 1,2=ffffff 20,20=a8d0f0
+
+# Onto the title bar (the window starts at 70,74), press, move, let go: the
+# window went along, the desktop shows where it was, the terminal still works.
+@mouse 400 85
+@screenshot 1920x1080 pixels 960,78=3a6ea5 72,80=3a6ea5
+@button left down
+@mouse 50 30
+@button left up
+$ desktop
+mouse pointer at 450,115
+@screenshot 1920x1080 pixels 72,80=a8d0f0 1010,108=3a6ea5 126,134=000000 0,0=a8d0f0
+$ echo still héré
+still héré
+
+# Moving without the button leaves the window alone.
+@mouse 300 300
+@screenshot 1920x1080 pixels 1010,108=3a6ea5 72,80=a8d0f0
+
+# A full-screen terminal has no pointer.
+$ desktop off
+@mouse 10 10
+@screenshot 1920x1080 text
+$ desktop on
+$ desktop
+~ ^mouse pointer at \d+,\d+$

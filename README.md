@@ -193,6 +193,8 @@ kernel/
   src/aibridge.rs      AI bridge: JSON lines on COM2 to beehive on the host
   src/bootslots.rs     A/B kernel slots: arm the rollback, health check, report failed trials
   src/pci.rs           PCI: find devices, read their configuration (`lspci`)
+  src/xhci.rs          USB host controller (xHCI): rings, ports, devices; polled by the usb thread
+  src/usb.rs           USB descriptors, keyboard and mouse boot protocol (`lsusb`)
   src/e1000.rs         Intel network cards: e1000, e1000e, I217 (descriptor rings; interrupt + poll)
   src/net.rs           card + beenet stack: polling, settings, TCP streams, HTTP / time / TFTP transfers
   src/thread.rs        cooperative kernel threads: stacks, switching, waiting
@@ -208,6 +210,7 @@ kernel/
   src/bootfb.rs        display driver for the framebuffer the bootloader set up (any card, fixed mode)
   src/fbcon.rs         framebuffer console: text drawn as pixels, for any resolution
   src/font.rs          the 8x16 console font (Spleen, BSD license), generated table
+  src/paging.rs        page table changes after boot: write-combining for the framebuffer
   src/gfx.rs           drawing on a framebuffer: rectangles and characters, always clipped
   src/wm.rs            window system: desktop background, window frames, the terminal window
   src/keyboard.rs      PS/2 keyboard driver + scancode decoder (modifiers, dead keys)
@@ -303,7 +306,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `ai`,
-`slots`, `display`, `desktop`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `display`, `desktop`, `lsusb`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Under the hood:** interrupts are enabled (IDT + remapped PIC; IRQ0 timer,
 IRQ1 keyboard, IRQ3 COM2 AI bridge, IRQ4 COM1 serial). Handlers queue raw bytes; the shell decodes them and sleeps with
@@ -935,8 +938,8 @@ framebuffer, at any resolution.
   Spleen 8x16 font (`kernel/src/font.rs`). No heap, no waiting: it works
   during a panic too.
 - **`display`** shows driver, resolution and size in characters;
-  **`display mode WIDTHxHEIGHT`** changes the resolution (not saved yet; the
-  text on screen stays);
+  **`display mode WIDTHxHEIGHT`** changes the resolution (the text on screen
+  stays);
   **`display test`** shows color bars until Enter, then tells how long drawing
   the whole screen took.
 - **Boot flags:** `display=text` keeps the text screen (the way back if graphics
@@ -947,7 +950,6 @@ framebuffer, at any resolution.
   QEMU (`@screenshot`), on the standard card, on QXL, without a supported card
   (`@vga`) and with `display=text` (`@args`).
 
-Not yet: one font size only, and `display mode` is not saved.
 
 ## Display — phase G2: the bootloader's framebuffer (real hardware, UEFI) ✅
 
@@ -985,6 +987,34 @@ Seen working on the HP (EliteDesk 800 G1): it boots to the desktop at the
 monitor's own resolution. Not done: a framebuffer above 4 GiB (reported, not
 used), and the A/B boot disk has no "text screen" menu entry.
 
+## Display — phase G3: larger font, saved settings, fast drawing ✅
+
+```
+bee:/$ display font 2
+driver: bochs
+mode: 1920x1080, 32 bits per pixel
+text: 110x28 characters (16x32 font)
+desktop: on
+video memory: write-combining
+(saved)
+```
+
+- **`display font 1|2|auto`**: 2 draws every character at double size (16x32
+  pixels). `auto`, the default, picks double on screens higher than full HD.
+- **Saved:** `display mode` and `display font` write `/system/display`
+  (lines `mode WIDTHxHEIGHT` and `font 1|2|auto`) and are applied at the next
+  boot. A `mode=` boot flag wins over the saved resolution; the `bootfb`
+  driver keeps the bootloader's mode.
+- **Write-combining** (`kernel/src/paging.rs`): the framebuffer's pages are
+  marked so the CPU sends pixel writes to the graphics card in bursts instead
+  of one by one. On real hardware that makes drawing many times faster; in a
+  VM it changes nothing. `display` shows `video memory: write-combining`, or
+  `plain` and why. The boot flag `wc=off` switches it off.
+- **Measuring:** `display test` prints how long drawing the whole screen takes.
+
+Not done: scrolling in jumps when output comes faster than the screen draws
+(only if the HP shows it is needed).
+
 ## Graphical desktop: a terminal in a window ✅
 
 ```
@@ -1011,12 +1041,51 @@ desktop.
 - The boot flags `desktop=off` and `desktop=on` decide for one boot, whatever
   was saved. The screen is set up before the disk is read, so a machine with
   the desktop switched off shows it for a moment while booting.
-- **No mouse yet**, so windows cannot be moved or clicked and the close box
-  does nothing. A USB mouse is U5 in `Docs/drivers-todo.html`; it needs the
-  USB host controller and USB core first (U1, U2).
+- **Mouse** (USB, see the USB section): a pointer appears when the mouse
+  first moves, and the terminal window can be dragged by its title bar; it
+  stays completely on the screen. The close box does nothing yet. `desktop`
+  shows where the pointer is.
 - **Tests:** self-tests for the layout at every screen size and for drawing on
   a framebuffer in RAM; scenarios `desktop*.scn` check real pixels of the
   screen (`@screenshot WxH pixels X,Y=RRGGBB ...`).
+
+## USB: keyboard and mouse (xHCI) ✅ in QEMU, not yet tried on the HP
+
+```
+[usb]  xHCI controller 1b36:000d, 8 ports, 2 devices ('lsusb' shows them)
+bee:/$ lsusb
+xHCI controller 1b36:000d, 8 ports
+port 5: 0627:0001 keyboard, high speed (in use, 14 reports)
+port 6: 0627:0001 mouse, high speed (in use, 2 reports)
+```
+
+- **xHCI driver** (`kernel/src/xhci.rs`): takes the controller over from the
+  firmware, resets it, sets up its rings, and gives every device on the
+  machine's own ports an address. It runs in its own thread (`usb`) and looks
+  at the controller's event ring every timer tick (10 ms): no interrupts, so
+  the protected interrupt code is untouched. Plugging in and pulling out
+  while running works. On Intel 7/8/9-series chipsets (the HP) it moves the
+  ports from the old USB 2 controller to xHCI.
+- **Keyboard** (`kernel/src/usb.rs`): reports in the boot protocol are turned
+  into the scancodes a PS/2 keyboard sends, so layouts, dead keys and line
+  editing work unchanged. Held keys repeat (after 0.5 s, 25 times a second).
+- **Mouse**: boot protocol; moves the pointer on the desktop and drags the
+  terminal window.
+- **`lsusb`** lists the controller and the devices, with how many reports each
+  one sent, or why a device is not used.
+- The boot waits for the first look at the ports (at most 3 s), so a USB
+  keyboard works when the prompt appears.
+- **Not supported:** hubs (also the ones inside keyboards and monitors),
+  sticks and disks, tablets and other devices without the boot protocol,
+  EHCI-only machines, controllers with registers above 4 GiB.
+- **Way back:** the boot flag `usb=off` leaves the controller to the firmware
+  (which then keeps imitating a PS/2 keyboard in legacy BIOS boot). The ISO's
+  boot menu has an entry for it: "without the USB driver".
+- **Tests:** self-tests for descriptors (also cut short and lying about
+  lengths), key and mouse reports, rings and requests, the pointer and
+  dragging. Scenarios `usb*.scn` attach QEMU's USB keyboard, mouse, tablet,
+  hub and stick, type on the USB keyboard and move the mouse through QEMU
+  (`@usb`, `@keys`, `@mouse`, `@button`) and check the screen.
 
 ## Versioning
 

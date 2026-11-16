@@ -35,6 +35,8 @@ impl Rect {
 pub struct Canvas {
     framebuffer: *mut u8,
     mode: Mode,
+    /// Only this part is drawn in (the whole canvas, unless `clipped`).
+    clip: Rect,
 }
 
 impl Canvas {
@@ -45,7 +47,14 @@ impl Canvas {
             mode.width = 0;
             mode.height = 0;
         }
-        Canvas { framebuffer, mode }
+        let clip = Rect::new(0, 0, mode.width as usize, mode.height as usize);
+        Canvas { framebuffer, mode, clip }
+    }
+
+    /// The same canvas, but drawing only changes pixels inside `rect`: to
+    /// repair one part of the screen with the usual drawing code.
+    pub fn clipped(&self, rect: Rect) -> Canvas {
+        Canvas { clip: rect.clip(&self.clip), ..*self }
     }
 
     pub fn width(&self) -> usize {
@@ -63,7 +72,7 @@ impl Canvas {
 
     /// Fill a rectangle with a 0xRRGGBB color; the part outside the canvas is left out.
     pub fn fill_rect(&self, rect: Rect, rgb: u32) {
-        let r = rect.clip(&self.bounds());
+        let r = rect.clip(&self.clip);
         let value = self.mode.format.encode(rgb);
         for y in r.y..r.y + r.height {
             for x in r.x..r.x + r.width {
@@ -73,17 +82,35 @@ impl Canvas {
     }
 
     /// Draw one character of the font (code page 437 number) with its top
-    /// left corner at (x, y). A character that does not fit completely is
-    /// not drawn.
-    pub fn glyph(&self, x: usize, y: usize, code: u8, fg: u32, bg: u32) {
+    /// left corner at (x, y). `scale` 2 draws every font pixel as 2x2 (1 to
+    /// 4 are accepted). A character that does not fit completely is not drawn.
+    pub fn glyph(&self, x: usize, y: usize, code: u8, fg: u32, bg: u32, scale: usize) {
+        let scale = scale.clamp(1, 4);
         let fits = |at: usize, size: usize, limit: usize| at.checked_add(size).is_some_and(|end| end <= limit);
-        if !fits(x, GLYPH_WIDTH, self.width()) || !fits(y, GLYPH_HEIGHT, self.height()) {
+        if !fits(x, GLYPH_WIDTH * scale, self.width()) || !fits(y, GLYPH_HEIGHT * scale, self.height()) {
             return;
         }
+        let cell = Rect::new(x, y, GLYPH_WIDTH * scale, GLYPH_HEIGHT * scale);
+        let visible = cell.clip(&self.clip);
+        if visible.width == 0 || visible.height == 0 {
+            return;
+        }
+        let whole = visible == cell;
+        let inside = |px: usize, py: usize| {
+            whole || (px >= visible.x && px < visible.x + visible.width && py >= visible.y && py < visible.y + visible.height)
+        };
         let (fg, bg) = (self.mode.format.encode(fg), self.mode.format.encode(bg));
         for (gy, bits) in FONT[code as usize].iter().enumerate() {
             for gx in 0..GLYPH_WIDTH {
-                self.put(x + gx, y + gy, if bits & (0x80 >> gx) != 0 { fg } else { bg });
+                let value = if bits & (0x80 >> gx) != 0 { fg } else { bg };
+                for sy in 0..scale {
+                    for sx in 0..scale {
+                        let (px, py) = (x + gx * scale + sx, y + gy * scale + sy);
+                        if inside(px, py) {
+                            self.put(px, py, value);
+                        }
+                    }
+                }
             }
         }
     }
@@ -91,7 +118,7 @@ impl Canvas {
     /// Draw text on one line, starting at (x, y); it stops at `max_width` pixels.
     pub fn text(&self, x: usize, y: usize, text: &str, fg: u32, bg: u32, max_width: usize) {
         for (i, c) in text.chars().take(max_width / GLYPH_WIDTH).enumerate() {
-            self.glyph(x.saturating_add(i * GLYPH_WIDTH), y, vga::cp437(c), fg, bg);
+            self.glyph(x.saturating_add(i * GLYPH_WIDTH), y, vga::cp437(c), fg, bg, 1);
         }
     }
 

@@ -67,6 +67,12 @@ pub fn on_interrupt() {
     }
 }
 
+/// A scancode from another kind of keyboard (USB, see usb.rs): it goes
+/// through the same decoder and layouts as the PS/2 keyboard's.
+pub fn push_scancode(code: u8) {
+    SCANCODES.push(code);
+}
+
 pub fn pending() -> bool {
     !SCANCODES.is_empty() || STATE.get().queued.is_some()
 }

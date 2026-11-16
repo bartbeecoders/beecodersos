@@ -166,6 +166,21 @@ impl Device {
         walk_capabilities(|offset| read8(self.bus, self.dev, self.func, offset))
     }
 
+    /// The third part of the class code: which kind of, say, USB controller.
+    pub fn prog_if(&self) -> u8 {
+        read8(self.bus, self.dev, self.func, 0x09)
+    }
+
+    /// One 32-bit register of the device's own configuration (for the few
+    /// drivers that need a vendor's special register).
+    pub fn config_read(&self, offset: u8) -> u32 {
+        read32(self.bus, self.dev, self.func, offset)
+    }
+
+    pub fn config_write(&self, offset: u8, value: u32) {
+        write32(self.bus, self.dev, self.func, offset, value);
+    }
+
     pub fn bar(&self, n: u8) -> Bar {
         let off = 0x10 + n * 4;
         let low = read32(self.bus, self.dev, self.func, off);

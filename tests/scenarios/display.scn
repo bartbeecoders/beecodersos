@@ -6,7 +6,7 @@
 $ display
 driver: bochs
 mode: 1920x1080, 32 bits per pixel
-text: 240x67 characters (8x16 font)
+text: 240x67 characters (8x16 font, automatic)
 @screenshot 1920x1080 text
 
 # Color bars cover the whole screen; Enter brings the text back.
@@ -22,7 +22,7 @@ color bars on the screen: press Enter to go on
 $ display mode 1280x720
 driver: bochs
 mode: 1280x720, 32 bits per pixel
-text: 160x45 characters (8x16 font)
+text: 160x45 characters (8x16 font, automatic)
 @screenshot 1280x720 text
 $ echo still typing: héllo
 still typing: héllo
@@ -39,7 +39,7 @@ display mode 100x100: not a usable size (320x200 to 4096x2160, e.g. 1920x1080)
 $ display mode 1280x720x32
 ~ not a usable size
 $ display mode
-usage: display [mode WIDTHxHEIGHT | test]
+usage: display [mode WIDTHxHEIGHT | font 1|2|auto | test]
 $ display
 mode: 1280x720, 32 bits per pixel
 @screenshot 1280x720 text
@@ -50,5 +50,5 @@ $ help
 $ help
 $ help
 $ display mode 1920x1080
-text: 240x67 characters (8x16 font)
+text: 240x67 characters (8x16 font, automatic)
 @screenshot 1920x1080 text
