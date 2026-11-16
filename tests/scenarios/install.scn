@@ -1,0 +1,134 @@
+# `install` (Docs/install-plan.html): from the install medium onto an empty
+# SATA disk, then the installed system by itself, an upgrade from a newer
+# medium (new kernel on trial in the spare slot), boot and os again with the
+# data kept, and last everything erased.
+@sata
+@blank-disk 96
+@install-medium
+$ install
+~ ^This install medium carries BeeCodersOs b\d+\.$
+~ ^  sata0 +96 MiB  "QEMU HARDDISK": empty$
+~ ^ +install sata0  would install$
+Nothing was changed.
+@disk-untouched
+
+# Anything but "yes" changes nothing.
+$& install sata0
+> no
+$wait
+~ ^  after: BeeCodersOs b\d+: boot 16 MiB, os 39 MiB, data 40 MiB$
+Nothing was changed.
+@disk-untouched
+
+$& install sata0
+> yes
+$wait
+  clearing the partition table
+  writing the boot area (bootloader and both kernel slots)
+  making the os file system
+  making the data file system
+  checking what was written
+  writing the partition table
+Installed on sata0. Take out the install medium and type: reboot
+
+# The installed system, without the medium: both file systems, A/B slots.
+@boot-disk
+~ ^\[slots\] slot a \(good slot: a\)$
+~ SATA port 0 "QEMU HARDDISK", 96 MiB, partition: BeeFS mounted \(boot #1\)$
+~ ^\[disk\] data partition, 40 MiB: mounted at /data$
+$ pwd
+/data
+$ cat welcome.txt
+~ ^Your files live here
+$ slots
+booted slot: a
+good slot:   a
+$ echo mine > notes.txt
+$ mkdir /data/work
+$ echo deep > work/a.txt
+$ echo a setting > /system/setting
+$ ls /
+~ data/
+~ system/
+$ df
+~ ^disk: \d+ KiB used
+~ ^data \(/data\): \d+ KiB used
+$ mv /data/notes.txt /notes-on-os.txt
+$ cat /notes-on-os.txt
+mine
+$ mv /notes-on-os.txt /data/notes.txt
+$ rm /data
+directory not empty
+$ ls /data
+~ notes.txt
+$ install sata0
+~ not started from an install medium
+@reboot
+$ cat /data/notes.txt
+mine
+
+# A newer medium: the same command upgrades. The disk keeps everything.
+@boot-medium newer
+~ ^\[disk\] data partition, 40 MiB: mounted at /data$
+$ install
+~ ^  sata0 +96 MiB  "QEMU HARDDISK": BeeCodersOs b\d+ \(boot, os, data\)$
+~ would upgrade
+$& install sata0
+> yes
+$wait
+~ ^  after: the same, with kernel b\d+ on trial in the spare slot
+~ ^  writing the new kernel \(b\d+\) into slot b$
+  checking what was written
+  putting slot b on trial
+~ ^Kernel b\d+ is in slot b of sata0, on trial at the next start from the disk\.
+$& install sata0
+> yes
+$wait
+~ a kernel is still on trial on this disk
+
+@boot-disk
+~ ^\[slots\] trying slot b \(b\d+\): rollback armed, slot a boots next unless this one passes its health check$
+~ ^\[slots\] slot b passed its health check: it is now the good slot$
+$ slots
+booted slot: b
+good slot:   b
+$ cat /data/notes.txt
+mine
+$ cat /data/work/a.txt
+deep
+$ cat /system/setting
+a setting
+
+# Boot and os again: the settings go, the files stay.
+@boot-medium
+$& install sata0 --reinstall
+> yes
+$wait
+  writing the boot area (bootloader and both kernel slots)
+  making the os file system again
+~ ^Boot and os written again on sata0; data kept\.
+@boot-disk
+~ ^\[slots\] slot a \(good slot: a\)$
+$ cat /data/notes.txt
+mine
+$ cat /system/setting
+~ no such file
+
+# Everything new takes --erase and a sentence naming the disk.
+@boot-medium
+$& install sata0 --erase
+> erase the disk
+$wait
+EVERYTHING on this disk will be erased. There is no undo.
+~ ^To go on, type exactly:  erase 96 MiB QEMU HARDDISK$
+That is not the sentence: nothing was changed.
+$ cat /data/notes.txt
+mine
+$& install sata0 --erase
+> Erase  96 mib qemu harddisk
+$wait
+Installed on sata0. Take out the install medium and type: reboot
+@boot-disk
+$ ls /data
+~ welcome.txt
+!~ notes.txt

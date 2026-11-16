@@ -89,10 +89,35 @@ OVMF_CODE  := /usr/share/edk2/x64/OVMF_CODE.4m.fd
 
 iso: $(ISO)
 
-$(ISO): $(IMAGE) boot/limine.conf
+# What `install` writes to the start of a disk (Docs/install-plan.html): the
+# first 17 MiB of a boot disk made by tools/bootdisk.py, that is the boot code,
+# the partition table and the FAT boot partition with Limine and both kernel
+# slots. The ISO carries it, and the bootloader loads it next to the kernel.
+INSTALL_IMG := build/install.img
+INSTALL_MIB := 17
+
+# Each kernel slot is a file of fixed size (the kernel, filled up with zeros):
+# an upgrade overwrites the spare slot in place, without changing the FAT file
+# system. A kernel that outgrows the slot stops the build here.
+KERNEL_SLOT := build/kernel-slot.elf
+SLOT_MIB    := 4
+
+$(KERNEL_SLOT): $(IMAGE)
+	@[ $$(stat -c %s $(IMAGE)) -le $$(( $(SLOT_MIB) * 1024 * 1024 )) ] || \
+	   { echo "the kernel is larger than a $(SLOT_MIB) MiB slot: raise SLOT_MIB (and install.rs)"; exit 1; }
+	cp $(IMAGE) $@
+	truncate -s $$(( $(SLOT_MIB) * 1024 * 1024 )) $@
+
+$(INSTALL_IMG): $(KERNEL_SLOT) tools/bootdisk.py | tool
+	python3 tools/bootdisk.py create build/install-disk.tmp --kernel $(KERNEL_SLOT) --size-mb 20 > /dev/null
+	head -c $$(( $(INSTALL_MIB) * 1024 * 1024 )) build/install-disk.tmp > $@
+	rm -f build/install-disk.tmp
+
+$(ISO): $(IMAGE) $(INSTALL_IMG) boot/limine.conf
 	rm -rf $(ISO_ROOT)
 	mkdir -p $(ISO_ROOT)/boot/limine $(ISO_ROOT)/EFI/BOOT
 	cp $(IMAGE) $(ISO_ROOT)/boot/beecoders.elf
+	cp $(INSTALL_IMG) $(ISO_ROOT)/boot/install.img
 	cp boot/limine.conf $(ISO_ROOT)/boot/limine/
 	cp $(LIMINE_DIR)/limine-bios.sys $(LIMINE_DIR)/limine-bios-cd.bin \
 	   $(LIMINE_DIR)/limine-uefi-cd.bin $(ISO_ROOT)/boot/limine/
@@ -191,7 +216,7 @@ evolve:
 
 # Everything an AI or human change must pass. Exit status 0 = all good.
 # Single suites: tests/boot_test.py selftest|scenarios|iso|iso-uefi [-v]
-check: $(IMAGE) $(ISO) tool
+check: $(IMAGE) $(ISO) $(INSTALL_IMG) tool
 	cd beefs && cargo test --quiet
 	cd beenet && cargo test --quiet
 	python3 tests/test_beehive.py

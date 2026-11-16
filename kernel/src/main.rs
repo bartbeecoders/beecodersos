@@ -17,21 +17,25 @@ mod ata;
 mod bochs;
 mod bootargs;
 mod bootfb;
+mod bootmods;
 #[macro_use]
 mod console;
 // After `console`: uses println!.
 mod bootslots;
 mod crash;
+mod disks;
 mod display;
 mod e1000;
 mod editor;
 mod eventlog;
+mod fat;
 mod fbcon;
 mod font;
 mod gfx;
 mod httpd;
 mod remote;
 mod input;
+mod install;
 mod json;
 mod interrupts;
 mod keyboard;
@@ -82,6 +86,7 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info: u32) -> ! {
     }
     bootargs::init(multiboot_info); // before the heap: it may reuse that memory
     bootfb::remember(multiboot_info); // the same holds for the bootloader's framebuffer
+    bootmods::remember(multiboot_info); // and the heap must stay away from loaded files
     if testmode::enabled() {
         println!("[test] test mode, kernel command line: {}", bootargs::cmdline());
     }
@@ -132,6 +137,7 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info: u32) -> ! {
 
     let mut shell = shell::Shell::new(storage);
     shell.load_layout();
+    shell.go_home();
     shell.load_display();
     shell.load_desktop();
     shell.load_network();

@@ -1,0 +1,35 @@
+# An upgrade to a kernel that crashes: the rollback brings the old kernel
+# back, and the files are untouched. (`failboot` makes a kernel on trial panic.)
+@sata
+@blank-disk 64
+@install-medium failboot
+$& install sata0
+> yes
+$wait
+Installed on sata0. Take out the install medium and type: reboot
+@boot-disk
+$ echo precious > /data/keep.txt
+@boot-medium newer
+$& install sata0
+> yes
+$wait
+~ ^Kernel b\d+ is in slot b of sata0
+
+# The new kernel panics on its trial boot; the next boot is the old one.
+@boot-disk crash
+~ ^\[slots\] trial of build b\d+ in slot b failed \(crashed or hung\); rolled back to slot a$
+$ slots
+booted slot: a
+good slot:   a
+~ failed
+$ cat /data/keep.txt
+precious
+
+# After that the upgrade can be tried again.
+@boot-medium newer
+$ install
+~ BeeCodersOs b\d+ \(boot, os, data\)
+$& install sata0
+> yes
+$wait
+~ ^Kernel b\d+ is in slot b of sata0

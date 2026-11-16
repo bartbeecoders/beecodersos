@@ -20,15 +20,14 @@
 //! The kernel only rewrites those two lines, in place and at the same length,
 //! in one sector, so the FAT file system never changes shape.
 
-use crate::ata::AtaDisk;
+use crate::disks::{self, DiskRef};
+use crate::fat::{self, Fat16};
 use crate::bootargs;
 use crate::ring::Global;
 use alloc::format;
 use alloc::string::String;
 use beefs::{mbr_partitions, Block, BlockDevice};
 
-/// Short (8.3) name tools/bootdisk.py gives limine.conf.
-const CONF_SFN: &[u8; 11] = b"LIMINE~1CON";
 const FAT_PARTITION_TYPES: [u8; 4] = [0xEF, 0x0E, 0x06, 0x04];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,41 +103,25 @@ pub fn render(s: &mut [u8], st: &State) {
 
 /// limine.conf on the boot disk: the disk and the sector holding the state.
 struct Conf {
-    disk: AtaDisk,
+    disk: DiskRef,
     lba: u64,
 }
 
-fn le16(b: &[u8], off: usize) -> u64 {
-    u16::from_le_bytes([b[off], b[off + 1]]) as u64
-}
-
-/// Find limine.conf in the root directory of the FAT16 boot partition.
+/// Find limine.conf in the FAT16 boot partition of one of the machine's
+/// disks (IDE or SATA): the first disk that has one with a slot state.
 fn locate() -> Option<Conf> {
-    let mut disk = AtaDisk::find()?;
-    let mut b: Block = [0; 512];
-    disk.read_block(0, &mut b).ok()?;
-    let (_, start, _) = mbr_partitions(&b)?.into_iter().find(|p| FAT_PARTITION_TYPES.contains(&p.0) && p.1 > 0)?;
-    disk.read_block(start, &mut b).ok()?;
-    let (bps, spc, reserved, fats, root_entries, fat_size) = (le16(&b, 11), b[13] as u64, le16(&b, 14), b[16] as u64, le16(&b, 17), le16(&b, 22));
-    if bps != 512 || spc == 0 || fat_size == 0 || root_entries == 0 {
-        return None; // not FAT16
-    }
-    let root = start + reserved + fats * fat_size;
-    let root_sectors = root_entries * 32 / 512;
-    for sector in 0..root_sectors {
-        disk.read_block(root + sector, &mut b).ok()?;
-        for e in b.chunks(32) {
-            match e[0] {
-                0 => return None, // end of directory
-                0xE5 => continue, // deleted
-                _ if e[11] == 0x0F => continue, // long-name part
-                _ if &e[..11] == CONF_SFN => {
-                    let cluster = le16(e, 26);
-                    let lba = root + root_sectors + (cluster.checked_sub(2)?) * spc;
-                    return Some(Conf { disk, lba });
-                }
-                _ => {}
-            }
+    for index in 0..disks::count() {
+        let mut disk = DiskRef(index);
+        let mut b: Block = [0; 512];
+        if disk.read_block(0, &mut b).is_err() {
+            continue;
+        }
+        let Some(parts) = mbr_partitions(&b) else { continue };
+        let Some(&(_, start, len)) = parts.iter().find(|p| FAT_PARTITION_TYPES.contains(&p.0) && p.1 > 0) else { continue };
+        let Some(fat) = Fat16::open(&mut disk, start, len) else { continue };
+        let Some(lba) = fat.find(&mut disk, fat::CONF).and_then(|file| fat.sector_of(file.first_cluster)) else { continue };
+        if disk.read_block(lba, &mut b).is_ok() && parse(&b).is_some() {
+            return Some(Conf { disk, lba });
         }
     }
     None

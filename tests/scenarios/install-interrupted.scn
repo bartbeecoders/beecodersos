@@ -1,0 +1,19 @@
+# An install that stops halfway (a power cut; here the test flag
+# installstop=N) leaves a disk without a partition table, which `install`
+# recognises and can do again. Nothing half-valid is ever on the disk.
+@sata
+@blank-disk 64
+@install-medium
+@args installstop=2
+$& install sata0
+> yes
+$wait
+~ ^install failed: stopped after step 2 for a test
+The disk has no partition table now; 'install sata0' starts over.
+$ install
+~ ^  sata0 +64 MiB  "QEMU HARDDISK": an install that was not finished$
+~ would install again
+@reboot
+~ not BeeFS, left untouched
+$ install
+~ an install that was not finished

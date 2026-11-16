@@ -2,12 +2,13 @@
 
 use crate::editor::{Editor, Line};
 use crate::layouts::Layout;
-use crate::storage::Storage;
+use crate::disks::{self, DiskRef};
+use crate::storage::{self, Storage};
 use crate::vga::Color;
 use crate::aibridge::{self, Outcome};
 use crate::json::Obj;
 use crate::ring::Global;
-use crate::{allocator, bootslots, display, httpd, remote, session, console, crash, eventlog, keyboard, net, pci, power, selftest, thread, time};
+use crate::{allocator, bootslots, display, httpd, install, remote, session, console, crash, eventlog, keyboard, net, pci, power, selftest, thread, time};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -90,7 +91,9 @@ impl Shell {
 
     /// The shell of a remote session (remote.rs): it shows what is typed.
     pub fn remote(storage: Storage) -> Self {
-        Shell { echo: true, ..Shell::new(storage) }
+        let mut shell = Shell { echo: true, ..Shell::new(storage) };
+        shell.go_home();
+        shell
     }
 
     /// A shell whose commands are not recorded in the event log.
@@ -199,6 +202,14 @@ impl Shell {
             (Ok(()), true) => "saved",
             (Ok(()), false) => "RAM disk: not kept after reboot",
             (Err(_), _) => "could not save",
+        }
+    }
+
+    /// Start where the user's files are: on an installed disk that is the
+    /// data partition. (For the shells people type in; a new `Shell` starts in /.)
+    pub fn go_home(&mut self) {
+        if storage::has_data() {
+            self.cwd = String::from(storage::DATA_DIR);
         }
     }
 
@@ -557,6 +568,10 @@ impl Shell {
             ("desktop", []) => println!("desktop: off ('desktop on' starts it)"),
             ("desktop", [state @ ("on" | "off")]) => self.desktop(state),
             ("desktop", _) => error("usage: desktop [on | off]"),
+            ("install", []) => self.install_list(),
+            ("install", [disk]) => self.install(disk, ""),
+            ("install", [disk, option @ ("--erase" | "--reinstall")]) => self.install(disk, option),
+            ("install", _) => error("usage: install [DISK [--reinstall | --erase]]   (install alone lists the disks)"),
             ("lsusb", []) => println!("{}", crate::usb::describe()),
             ("slots", []) => match bootslots::describe() {
                 Some(text) => println!("{text}"),
@@ -1275,6 +1290,182 @@ impl Shell {
         }
     }
 
+    // ----- install ---------------------------------------------------------------
+
+    /// One line about what is on a disk, and what `install` would do with it.
+    fn disk_summary(contents: &install::Contents) -> (String, &'static str) {
+        use install::Contents::*;
+        match contents {
+            Empty => (String::from("empty"), "install"),
+            Unfinished => (String::from("an install that was not finished"), "install again"),
+            Installed { build, data } => (
+                format!(
+                    "BeeCodersOs{}{}",
+                    build.map(|b| format!(" b{b}")).unwrap_or_default(),
+                    if *data { " (boot, os, data)" } else { " (boot disk without a data partition)" }
+                ),
+                "upgrade: new kernel on trial, os and data kept (--reinstall: boot and os again; --erase: everything)",
+            ),
+            BeeFsDisk => (String::from("a BeeFS data disk, without the system"), "refuse; with --erase: erase it and install"),
+            Other(what) => (what.clone(), "refuse; with --erase: erase it and install"),
+        }
+    }
+
+    /// `install`: the disks, what is on them, and what would happen. Changes nothing.
+    fn install_list(&mut self) {
+        match install::image() {
+            Some(image) => {
+                let build = install::build_in(image).map(|b| format!("b{b}")).unwrap_or_else(|| String::from("an unknown build"));
+                println!("This install medium carries BeeCodersOs {build}.");
+            }
+            None => println!("Not started from an install medium: this can only show the disks."),
+        }
+        if disks::count() == 0 {
+            return println!("No disk found (IDE or SATA).");
+        }
+        for index in 0..disks::count() {
+            let Some(disk) = disks::get(index) else { continue };
+            let size = install::size_text(disk.sectors);
+            match install::inspect(&mut DiskRef(index)) {
+                Ok(contents) => {
+                    let (what, action) = Self::disk_summary(&contents);
+                    println!("  {:<6} {:>8}  \"{}\": {what}", disk.name, size, disk.model);
+                    println!("         install {}  would {action}", disk.name);
+                }
+                Err(e) => println!("  {:<6} {:>8}  \"{}\": cannot be read: {e}", disk.name, size, disk.model),
+            }
+        }
+        println!("Nothing was changed.");
+    }
+
+    /// Ask a question and read one line from the keyboard. `None`: Ctrl+C or Esc.
+    fn question(question: &str) -> Option<String> {
+        use crate::input::Key;
+        print!("{question} ");
+        let mut line = String::new();
+        loop {
+            match crate::input::read_key() {
+                Key::Enter => {
+                    println!();
+                    return Some(line);
+                }
+                Key::Char(c) => {
+                    line.push(c);
+                    print!("{c}");
+                }
+                Key::Backspace => {
+                    if line.pop().is_some() {
+                        print!("\x08 \x08");
+                    }
+                }
+                Key::Ctrl('c' | 'd') | Key::Escape => {
+                    println!();
+                    return None;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// `install DISK [--erase | --reinstall]`: after a clear question, put
+    /// the OS on that disk, or upgrade the BeeCodersOs that is on it.
+    fn install(&mut self, name: &str, option: &str) {
+        use install::Contents::*;
+        if session::current().is_some() {
+            return error("install: only from the machine's own console");
+        }
+        let Some(image) = install::image() else {
+            return error("install: this system was not started from an install medium (the ISO or the USB stick)");
+        };
+        let Some(index) = disks::find(name) else {
+            return error(&format!("install: no disk called {name} ('install' lists the disks)"));
+        };
+        let Some(disk) = disks::get(index) else { return };
+        let (sectors, model) = (disk.sectors, disk.model.clone());
+        let contents = match install::inspect(&mut DiskRef(index)) {
+            Ok(contents) => contents,
+            Err(e) => return error(&format!("install: {name} cannot be read: {e}")),
+        };
+        let Some(parts) = install::layout(sectors) else {
+            return error(&format!("install: {name} is too small ({}; at least 33 MiB)", install::size_text(sectors)));
+        };
+        let (what, _) = Self::disk_summary(&contents);
+        let build = install::build_in(image).map(|b| format!(" b{b}")).unwrap_or_default();
+        println!("Disk {name}: {}, \"{model}\"", install::size_text(sectors));
+        println!("  now:   {what}");
+
+        // What to do: an upgrade, boot and os again, or everything new.
+        #[derive(PartialEq)]
+        enum Plan {
+            Fresh,
+            Upgrade,
+            Reinstall,
+        }
+        let plan = match (&contents, option) {
+            (Empty | Unfinished, "" | "--erase") | (_, "--erase") => Plan::Fresh,
+            (Installed { .. }, "") => Plan::Upgrade,
+            (Installed { data: true, .. }, "--reinstall") => Plan::Reinstall,
+            (_, "--reinstall") => return error(&format!("install: --reinstall is for a disk with BeeCodersOs and a data partition. To erase everything: install {name} --erase")),
+            _ => return error(&format!("install: {name} is not empty. To erase everything on it: install {name} --erase")),
+        };
+        match plan {
+            Plan::Fresh => println!(
+                "  after: BeeCodersOs{build}: boot {}, os {}, data {}",
+                install::size_text(parts[0].2),
+                install::size_text(parts[1].2),
+                install::size_text(parts[2].2)
+            ),
+            Plan::Upgrade => println!("  after: the same, with kernel{build} on trial in the spare slot (the old kernel boots again if it fails)"),
+            Plan::Reinstall => println!("  after: BeeCodersOs{build}: boot and os written again (settings and logs are lost), data kept"),
+        }
+        let erases_something = plan == Plan::Fresh && !matches!(contents, Empty | Unfinished);
+        if erases_something {
+            println!("EVERYTHING on this disk will be erased. There is no undo.");
+            let sentence = install::erase_sentence(sectors, &model);
+            let typed = Self::question(&format!("To go on, type exactly:  {sentence}\n>"));
+            if !typed.is_some_and(|t| install::sentence_matches(&t, &sentence)) {
+                return println!("That is not the sentence: nothing was changed.");
+            }
+        } else {
+            let ask = match plan {
+                Plan::Upgrade => "Upgrade? Type yes to go on:",
+                Plan::Reinstall => "Write boot and os again? Type yes to go on:",
+                Plan::Fresh => "Install? Type yes to go on:",
+            };
+            if Self::question(ask).map(|t| t.trim().to_lowercase()) != Some(String::from("yes")) {
+                return println!("Nothing was changed.");
+            }
+        }
+        if plan != Plan::Upgrade && storage::mounted_disk() == Some(index) {
+            // The system runs from this disk: let go of it first.
+            self.storage = storage::detach();
+            self.cwd = String::from("/");
+        }
+        let mut disk = DiskRef(index);
+        let show = |step: &str| println!("  {step}");
+        let result = match plan {
+            Plan::Fresh => {
+                let stop = crate::bootargs::value("installstop").and_then(|n| n.parse().ok());
+                install::install(&mut disk, image, stop, show).map(|_| format!("Installed on {name}."))
+            }
+            Plan::Reinstall => install::reinstall(&mut disk, image, show).map(|_| format!("Boot and os written again on {name}; data kept.")),
+            Plan::Upgrade => install::upgrade(&mut disk, image, show)
+                .map(|(slot, build)| format!("Kernel b{build} is in slot {} of {name}, on trial at the next start from the disk.", slot as char)),
+        };
+        match result {
+            Ok(done) => {
+                println!("{done} Take out the install medium and type: reboot");
+                let ev = eventlog::event("install").str("result", "done").finish();
+                eventlog::write(&mut self.storage.fs(), ev);
+            }
+            Err(why) if plan == Plan::Fresh => {
+                error(&format!("install failed: {why}"));
+                println!("The disk has no partition table now; 'install {name}' starts over.");
+            }
+            Err(why) => error(&format!("install: {why}")),
+        }
+    }
+
     // ----- helpers -----------------------------------------------------------
 
     /// Absolute, normalized path for an argument relative to the cwd.
@@ -1388,17 +1579,24 @@ impl Shell {
     }
 
     fn df(&mut self) {
-        let s = self.storage.fs().stats();
-        let kib = |b: u32| b as u64 * s.block_size as u64 / 1024;
-        println!(
-            "{}: {} KiB used, {} KiB free, {} KiB total; {} of {} inodes free",
-            if self.storage.persistent { "disk" } else { "ramdisk" },
-            kib(s.total_blocks - s.free_blocks),
-            kib(s.free_blocks),
-            kib(s.total_blocks),
-            s.free_inodes,
-            s.total_inodes
-        );
+        let fs = self.storage.fs();
+        let (root, data) = (fs.stats(), fs.data_stats());
+        drop(fs);
+        let line = |name: &str, s: beefs::FsStats| {
+            let kib = |b: u32| b as u64 * s.block_size as u64 / 1024;
+            println!(
+                "{name}: {} KiB used, {} KiB free, {} KiB total; {} of {} inodes free",
+                kib(s.total_blocks - s.free_blocks),
+                kib(s.free_blocks),
+                kib(s.total_blocks),
+                s.free_inodes,
+                s.total_inodes
+            );
+        };
+        line(if self.storage.persistent { "disk" } else { "ramdisk" }, root);
+        if let Some(data) = data {
+            line("data (/data)", data);
+        }
     }
 
     fn set_layout(&mut self, id: &str) {
@@ -1465,6 +1663,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("tftp get|put HOST FILE", "copy a file from / to a TFTP server"),
     ("arp", "neighbours learned on the local network"),
     ("lspci [-v]", "list PCI devices (-v: what each one can do)"),
+    ("install [DISK]", "put the OS on a disk, or upgrade it (alone: list the disks)"),
     ("lsusb", "USB controller and devices"),
     ("threads", "what runs side by side inside the kernel"),
     ("display [mode WxH]", "screen: driver, resolution; 'display font 1|2|auto'; 'display test'"),

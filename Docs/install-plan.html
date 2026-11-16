@@ -82,7 +82,7 @@ nav.toc a:hover { text-decoration: underline; }
 <h1>Installing BeeCodersOs on the hard disk</h1>
 <p class="lede">A plan for an <code>install</code> command: it puts the OS on the machine's own disk, with a boot, an OS and a data partition, and the same command upgrades an installation that is already there.</p>
 <p class="meta">Plan v1 · 16 November 2026 · Starting point: BeeCodersOs 0.0.3 b47 · covers D2 of <a href="drivers-todo.html">the drivers todo</a> ("where BeeFS lives on the real machine").</p>
-<div class="callout"><b>Status:</b> approved on 16 November 2026, building started. Your answers: 1 yes (the heap setup may change); 2 the three partitions as proposed; 3 yes, <code>install</code> may erase another system's disk with <code>--erase</code> and the typed sentence (the HP is a test machine); 4 the HP's disk may go; 5 both legacy BIOS and UEFI boot from the disk must work.</div>
+<div class="callout"><b>Status:</b> I1, I2 and I3 are built and tested in QEMU, and the <code>--erase</code> part of I4 too (16 November 2026). <b>Installed on the HP on 16 November 2026: it worked.</b> Still to try there: an upgrade from a newer stick. Your answers: 1 yes (the heap setup may change); 2 the three partitions as proposed; 3 yes, <code>install</code> may erase another system's disk with <code>--erase</code> and the typed sentence (the HP is a test machine); 4 the HP's disk may go; 5 both legacy BIOS and UEFI boot from the disk must work.</div>
 
 <nav class="toc card">
 <b>Contents</b>
@@ -187,7 +187,7 @@ nav.toc a:hover { text-decoration: underline; }
 
 <h2 id="phases">6. Phases</h2>
 <div class="phase">
-<h3>I1 — The install image, and looking without touching <span class="tag t-next">Needs your approval</span></h3>
+<h3>I1 — The install image, and looking without touching <span class="tag t-now">Done</span></h3>
 <ul>
 <li><code>make iso</code> builds <code>install.img</code> and puts it on the ISO; the boot menu loads it.</li>
 <li>The kernel keeps the bootloader's modules: the heap starts above them (protected: <code>allocator.rs</code>, a few lines).</li>
@@ -197,7 +197,7 @@ nav.toc a:hover { text-decoration: underline; }
 <div class="done"><b>Done when:</b> the ISO boot in QEMU shows the image (size and the build inside it), its checksum matches the file on the PC after the heap has been used heavily, and <code>install</code> describes an empty disk, a BeeCodersOs disk and a foreign disk correctly.</div>
 </div>
 <div class="phase">
-<h3>I2 — A fresh install <span class="tag t-later">After I1</span></h3>
+<h3>I2 — A fresh install <span class="tag t-now">Done</span></h3>
 <ul>
 <li>Writing the image, the partition table, formatting, comparing; the confirmations for empty and BeeCodersOs disks. Foreign disks are still always refused.</li>
 <li>One BeeFS mounted for now: os. Data exists but is not mounted yet.</li>
@@ -206,7 +206,7 @@ nav.toc a:hover { text-decoration: underline; }
 <div class="done"><b>Done when:</b> a scenario boots the ISO with an empty disk, installs, restarts without the ISO, and the installed system boots, keeps a file across a restart, and reports its A/B slots. Cutting the power in the middle (the test kills QEMU at each step) never leaves a disk that boots something broken.</div>
 </div>
 <div class="phase">
-<h3>I3 — os and data, upgrade, reinstall <span class="tag t-later">After I2</span></h3>
+<h3>I3 — os and data, upgrade, reinstall <span class="tag t-now">Done</span></h3>
 <ul>
 <li>Two mounted file systems: os as <code>/</code>, data at <code>/data</code>; <code>df</code> shows both. (<code>storage::FsGuard</code> is protected: crash reports must keep working with two.)</li>
 <li>Upgrade into the spare slot with rollback; <code>--reinstall</code>.</li>
@@ -215,12 +215,26 @@ nav.toc a:hover { text-decoration: underline; }
 <div class="done"><b>Done when:</b> a scenario installs build N, boots a stick with build N+1, upgrades, and the disk boots N+1 with every file in / and /data intact; an upgrade to a kernel that crashes rolls back to N; a reinstall keeps /data.</div>
 </div>
 <div class="phase">
-<h3>I4 — The HP <span class="tag t-later">After I3</span></h3>
+<h3>I4 — The HP <span class="tag t-now">Installed; upgrade still to try</span></h3>
 <ul>
 <li><code>--erase</code> with the typed sentence, if you allow it.</li>
 <li>Install on the HP; boot it without the stick, in the boot mode you use.</li>
 </ul>
 <div class="done"><b>Done when:</b> the HP boots from its own disk, settings and the beehive pairing survive a restart, and an upgrade from a newer stick works.</div>
+<p class="meta"><b>How I1 to I3 went.</b> Built as planned, with these differences and findings:</p>
+<ul>
+<li><b>Kernel slots are files of a fixed 4 MiB</b> (the kernel filled up with zeros when the image is built). An upgrade then only overwrites blocks the slot file already has; the kernel still never changes the FAT file system's shape. A disk made before this (vm1's boot disk) has smaller slots: <code>install</code> says so and offers <code>--reinstall</code>.</li>
+<li><b>The data partition stops at 4 GiB.</b> Formatting BeeFS writes a table that grows with the partition: on a 500 GB disk that would be millions of single-sector writes. The rest of the disk stays unused until BeeFS can handle large partitions.</li>
+<li><b>A/B slots only worked on IDE disks.</b> The slot code opened the IDE disk itself. It now uses a shared list of all disks (<code>disks.rs</code>), as does the mounted file system: needed for the HP, whose disk is SATA.</li>
+<li><b>Only the used part of the boot area is written</b> (and compared): the boot code, the FAT tables and the clusters that belong to files.</li>
+<li><b>A reinstall never clears the partition table</b>, because the table is what says where the data partition is.</li>
+<li><b>Shells:</b> the console and remote shells start in <code>/data</code>; a file moved between <code>/</code> and <code>/data</code> is copied.</li>
+<li><b>UEFI:</b> the real ISO installs to a disk and the disk boots under OVMF in the tests. With the install image on board, a UEFI boot of the medium needs about 160 MiB of memory.</li>
+<li><b>QEMU's IDE disk is slow</b> for this (36 s for an install; SATA 1.4 s). The tests install on SATA disks, which is also what the HP has.</li>
+<li><b>Not solved:</b> crash reports are saved only when the disk is an IDE one. <code>crash.rs</code> opens the IDE disk itself and is protected: on the HP a crash is shown on screen but not kept. This needs your approval to change.</li>
+<li><b>Test runner</b> (<code>tests/boot_test.py</code>): <code>@install-medium</code>, <code>@blank-disk</code>, <code>@boot-disk [crash]</code>, <code>@boot-medium [newer]</code>, <code>@disk-untouched</code>, and two ISO tests that install and boot the disk.</li>
+</ul>
+<p class="meta"><b>For the HP:</b> write the new ISO to the stick, boot it, run <code>install</code> and look at what it says about the disk; then <code>install sata0 --erase</code> (the name it shows). Afterwards take the stick out and <code>reboot</code>. If the disk does not start in your boot mode, the stick still does, and <code>install</code> tells what is on the disk.</p>
 </div>
 
 <h2 id="testing">7. Testing</h2>

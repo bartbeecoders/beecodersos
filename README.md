@@ -195,6 +195,10 @@ kernel/
   src/aibridge.rs      AI bridge: JSON lines to beehive on the host, on COM2 or over the network
   src/bootslots.rs     A/B kernel slots: arm the rollback, health check, report failed trials
   src/pci.rs           PCI: find devices, read their configuration (`lspci`)
+  src/disks.rs         the machine's disks (IDE, SATA), each opened once and shared
+  src/install.rs       `install`: put the OS on a disk, upgrade it, write boot and os again
+  src/fat.rs           read-only FAT16, for the boot partition (boot settings, kernel slots)
+  src/bootmods.rs      files the bootloader loaded with the kernel (the install image)
   src/xhci.rs          USB host controller (xHCI): rings, ports, devices; polled by the usb thread
   src/usb.rs           USB descriptors, keyboard and mouse boot protocol (`lsusb`)
   src/e1000.rs         Intel network cards: e1000, e1000e, I217 (descriptor rings; interrupt + poll)
@@ -308,7 +312,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `ai`,
-`slots`, `display`, `desktop`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `install`, `display`, `desktop`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Under the hood:** interrupts are enabled (IDT + remapped PIC; IRQ0 timer,
 IRQ1 keyboard, IRQ3 COM2 AI bridge, IRQ4 COM1 serial). Handlers queue raw bytes; the shell decodes them and sleeps with
@@ -1146,6 +1150,73 @@ port 6: 0627:0001 mouse, high speed (in use, 2 reports)
   dragging. Scenarios `usb*.scn` attach QEMU's USB keyboard, mouse, tablet,
   hub and stick, type on the USB keyboard and move the mouse through QEMU
   (`@usb`, `@keys`, `@mouse`, `@button`) and check the screen.
+
+## Installing on the hard disk ✅ (works on the HP)
+
+```
+bee:/$ install
+This install medium carries BeeCodersOs b47.
+  sata0   465 GiB  "WDC WD5000AAKX": partitions of another system (2 partitions, type 07 27)
+         install sata0  would refuse; with --erase: erase it and install
+Nothing was changed.
+bee:/$ install sata0 --erase
+Disk sata0: 465 GiB, "WDC WD5000AAKX"
+  now:   partitions of another system (2 partitions, type 07 27)
+  after: BeeCodersOs b47: boot 16 MiB, os 256 MiB, data 4 GiB
+EVERYTHING on this disk will be erased. There is no undo.
+To go on, type exactly:  erase 465 GiB WDC WD5000AAKX
+> erase 465 GiB WDC WD5000AAKX
+  ...
+Installed on sata0. Take out the install medium and type: reboot
+```
+
+Started from the ISO or the USB stick, `install` puts the OS on one of the
+machine's own disks. Plan and reasons: `Docs/install-plan.html`.
+
+| Partition | Size | Holds | Upgrade | `--reinstall` |
+|---|---|---|---|---|
+| 1 boot | 16 MiB, FAT16 | bootloader (BIOS and UEFI), boot settings, both kernel slots | new kernel into the spare slot | written again |
+| 2 os | up to 256 MiB, BeeFS | the system's files, mounted as `/` (`/system`: settings, logs) | kept | formatted |
+| 3 data | the rest, up to 4 GiB for now, BeeFS | your files, mounted at `/data` | kept | kept |
+
+- **`install`** alone lists the disks, what is on each, and what would
+  happen. It changes nothing.
+- **`install DISK`** on an empty disk installs; on a disk with BeeCodersOs it
+  **upgrades**: the new kernel goes into the spare slot and is on trial at
+  the next start; if it crashes or fails its self-tests, the old kernel boots
+  again (the A/B rollback of phase 8). Both ask for `yes`.
+- **`install DISK --reinstall`** writes boot and os again and keeps data.
+- **`install DISK --erase`** is the only way to touch a disk that holds
+  anything else. It shows what is there and wants a sentence naming the
+  disk's size and model, typed out.
+- **Safety:** only from the machine's own console, never without a disk named,
+  never at boot. The first sector (boot code and partition table) is cleared
+  first and written last, so an interrupted install leaves a disk "without a
+  partition table", which `install` recognises and does again.
+- **How:** the boot area is not built by the kernel. `make iso` cuts the
+  first 17 MiB off a boot disk made by `tools/bootdisk.py`
+  (`build/install.img`), the bootloader loads it into memory next to the
+  kernel, and `install` copies it to the disk, adds the partition table for
+  that disk and formats the two BeeFS partitions. Kernel slots are files of
+  a fixed 4 MiB, so an upgrade only overwrites blocks the slot already has.
+- **Two file systems:** paths under `/data` go to the data partition,
+  everything else to os (`kernel/src/storage.rs`). `df` shows both; `mv`
+  between them copies. The console and remote shells start in `/data`.
+- **A/B slots on SATA:** the slot code now looks on every disk, not only IDE,
+  so rollback works on real hardware.
+- **Tests:** self-tests (layout, what is on a disk, damaged FAT chains,
+  memory kept from the heap, path routing); scenarios `install*.scn` on SATA
+  disks (install, boot, upgrade, a crashing upgrade rolled back, reinstall,
+  erase, a foreign disk left byte for byte unchanged, an interrupted
+  install); and the real ISO installs to a disk and boots it, under legacy
+  BIOS and UEFI.
+
+Limits: MBR partition table (disks up to 2 TiB); the data partition stops at
+4 GiB because BeeFS is not built for large partitions yet; under UEFI the
+install medium needs about 160 MiB of memory; on QEMU's emulated IDE disk an
+install takes half a minute (SATA: two seconds); crash reports are still only
+saved on IDE disks (`crash.rs` is protected and looks there only). `install`
+does not run from an installed system: an upgrade needs a newer medium.
 
 ## Versioning
 

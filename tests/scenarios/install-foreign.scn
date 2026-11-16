@@ -1,0 +1,34 @@
+# A disk that holds another system is never touched unless --erase and the
+# sentence naming it are given; looking at it changes nothing either.
+@sata
+@blank-disk 64 foreign
+@install-medium
+$ install
+~ ^  sata0 +64 MiB  "QEMU HARDDISK": partitions of another system \(1 partition, type 83\)$
+~ would refuse; with --erase: erase it and install
+$ install sata0
+~ ^install: sata0 is not empty\. To erase everything on it: install sata0 --erase$
+$ install sata0 --reinstall
+~ --reinstall is for a disk with BeeCodersOs
+$ install nosuchdisk
+~ no disk called nosuchdisk
+$ install sata0 --format
+~ ^usage: install
+$& install sata0 --erase
+> yes
+$wait
+That is not the sentence: nothing was changed.
+$& install sata0 --erase
+>^C
+$wait
+That is not the sentence: nothing was changed.
+@disk-untouched
+
+# With the sentence it is erased and installed.
+$& install sata0 --erase
+> erase 64 MiB QEMU HARDDISK
+$wait
+Installed on sata0. Take out the install medium and type: reboot
+@boot-disk
+$ pwd
+/data

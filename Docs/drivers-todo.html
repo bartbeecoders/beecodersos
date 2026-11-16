@@ -231,9 +231,10 @@ ul.items { list-style: none; padding: 0; margin: 12px 0; }
 <p>The slot code reads and patches the boot partition through the IDE driver only. Needed before a real machine can try a new kernel and roll back.</p>
 <p class="facts">Protected: <code>bootslots.rs</code>. Goes with D2 and D3.</p>
 </li>
-<li class="item" data-status="todo" id="D2">
+<li class="item" data-status="done" id="D2">
 <h4><span class="id">D2</span> Where BeeFS lives on the real machine <span class="size">S</span> <span class="st"></span></h4>
 <p>A decision for the owner: a second partition on the USB stick (needs U3), or a partition on the internal disk (needs D1 and a safe way to create it).</p>
+<p><b>Decided and built:</b> the internal disk. The <code>install</code> command puts the OS there with a boot, an os and a data partition, and upgrades it later (<a href="install-plan.html">install plan</a>). Works in QEMU on SATA disks under legacy BIOS and UEFI, and <b>on the HP</b> (installed 16 Nov 2026). An upgrade from a newer stick has not been tried there yet.</p>
 <p class="facts">No code until decided.</p>
 </li>
 <li class="item" data-status="done" id="D3">

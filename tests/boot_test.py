@@ -85,6 +85,20 @@ Without @wire or @net the machine has no network card.
                                with `$wait` to check what the shell printed
     @mouse DX DY               move the mouse that far right and down (pixels)
     @button NAME down|up       press or let go a mouse button (left, right, middle)
+    @install-medium [WORDS]    (first lines) boot as from the install medium (the ISO or the
+                               USB stick): the kernel, plus the install image the `install`
+                               command writes to a disk. Made for the test with
+                               tools/bootdisk.py; systems installed from it run in test mode.
+                               WORDS: more kernel arguments for the installed system
+    @blank-disk MIB [foreign]  (first lines) attach a disk of that size: empty, or with
+                               `foreign` holding another system's partition and some data
+    @boot-disk [crash]         shut down, and from now on boot from the disk (what the
+                               install put there); the boot messages are checked as output.
+                               `crash`: that boot must crash the kernel; it is booted again
+    @boot-medium [newer]       shut down, and boot from the install medium again (the disk
+                               stays attached). `newer`: a medium whose build number is one
+                               higher, for an upgrade
+    @disk-untouched            the disk holds, byte for byte, what it held at the start
     @bootdisk                  (first lines) boot from an A/B boot disk (tools/bootdisk.py)
                                with the kernel in both slots, BeeFS in partition 2
     $ COMMAND                  type a command, wait for the next prompt
@@ -164,19 +178,26 @@ class Vm:
 
     def __init__(self, *, kernel_args=None, cdrom=None, disk=None, uefi=False, ai_port=None, bootdisk=None,
                  wire=None, usernet=None, forward=None, forward_shell=None, sata=False, nic="e1000",
-                 extra_args=None, vga=None, qmp=None, usb=None):
-        cmd = ["qemu-system-x86_64", "-m", "128M", "-display", "none", "-serial", "stdio",
+                 extra_args=None, vga=None, qmp=None, usb=None, initrd=None):
+        # The ISO carries the install image (17 MiB), which the bootloader loads into
+        # memory: under UEFI that needs more than 128 MiB.
+        cmd = ["qemu-system-x86_64", "-m", "256M" if cdrom else "128M", "-display", "none", "-serial", "stdio",
                "-monitor", "none", "-no-reboot",
                "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04"]
         if USE_KVM:
             cmd += ["-enable-kvm", "-cpu", "host"]
         if cdrom:
             cmd += ["-cdrom", str(cdrom)]
+        elif bootdisk and sata:  # the same, from a SATA disk
+            cmd += ["-machine", "q35", "-drive", f"file={bootdisk},format=raw,if=none,id=sata0",
+                    "-device", "ide-hd,drive=sata0,bus=ide.0"]
         elif bootdisk:  # Limine on the disk picks the kernel slot
             cmd += ["-drive", f"file={bootdisk},format=raw,if=ide,index=0,media=disk"]
         else:
             args = kernel_args or ("test nodhcp" if wire else "test")
             cmd += ["-kernel", str(KERNEL), "-append", f"{args} {extra_args}" if extra_args else args]
+            if initrd:  # a file the bootloader loads next to the kernel: the install image
+                cmd += ["-initrd", str(initrd)]
         if vga:
             cmd += ["-vga", vga]
         if usb is not None:
@@ -410,6 +431,12 @@ def parse_scenario(path: Path):
             opts.add(line[1:])
         elif line.startswith("@dns "):
             opts.add("dns:" + line[5:])
+        elif line == "@install-medium" or line.startswith(("@install-medium ", "@blank-disk ")):
+            name, _, arg = line[1:].partition(" ")
+            opts.add(f"{name}:{arg.strip()}")
+        elif line in ("@boot-disk", "@boot-disk crash", "@disk-untouched", "@boot-medium") or line.startswith("@boot-medium "):
+            kind, _, arg = line[1:].partition(" ")
+            steps.append((kind, arg.strip() or f"({kind})", []))
         elif line.startswith(("@args ", "@vga ")):
             opts.add(line[1:].replace(" ", ":", 1))
         elif line.startswith("@screenshot "):
@@ -968,10 +995,48 @@ def test_scenario(path: Path):
         vga = next((o[4:] for o in opts if o.startswith("vga:")), None)
         usb = next((o[4:].split() for o in opts if o.startswith("usb:")), None)
         qmp = free_port() if any(kind in ("screenshot", "keys", "mouse", "button") for kind, _, _ in steps) else None
-        boot = lambda: Vm(disk=disk, ai_port=ai_port, bootdisk=bootdisk, wire=wire.ports if wire else None,
-                          usernet=usernet, forward=forward, forward_shell=forward_shell, sata="sata" in opts,
-                          nic="e1000e" if "e1000e" in opts else "e1000", extra_args=extra_args, vga=vga, qmp=qmp,
-                          usb=usb)
+        # Install tests: a blank (or foreign) disk, and install media made for the test.
+        blank = next((o[11:].split() for o in opts if o.startswith("blank-disk:")), None)
+        medium_words = next((o[15:] for o in opts if o.startswith("install-medium:")), None)
+        media, original, mode = {}, b"", {"disk": False, "medium": ""}
+        if blank:
+            disk = Path(tmp) / "disk.img"
+            with open(disk, "wb") as f:
+                f.truncate(int(blank[0]) * 1024 * 1024)
+                if blank[1:] == ["foreign"]:  # one Linux partition (type 0x83) with something in it
+                    table = bytearray(512)
+                    table[446:462] = bytes([0x80, 0xFE, 0xFF, 0xFF, 0x83, 0xFE, 0xFF, 0xFF]) + (2048).to_bytes(4, "little") \
+                        + (int(blank[0]) * 2048 - 2048).to_bytes(4, "little")
+                    table[510:512] = b"\x55\xAA"
+                    f.write(table)
+                    f.seek(2048 * 512)
+                    f.write(b"somebody's files\n" * 1000)
+            original = disk.read_bytes()
+
+        def medium(kind: str) -> Path:
+            """An install image, as `make` builds build/install.img, with test mode on the
+            installed system; "newer": with a build number one higher."""
+            if kind not in media:
+                slot = ROOT / "build" / "kernel-slot.elf"
+                if not slot.exists():
+                    raise TestFailure(f"{slot} missing: run `make build/install.img`")
+                build = int((ROOT / "BUILD_NUMBER").read_text()) + (1 if kind == "newer" else 0)
+                whole = Path(tmp) / f"medium-{kind or 'plain'}.disk"
+                run_tool([sys.executable, str(BOOTDISK), "create", str(whole), "--kernel", str(slot), "--size-mb", "20",
+                          "--build", str(build), "--cmdline", f"test {medium_words or ''}".strip()])
+                media[kind] = Path(tmp) / f"medium-{kind or 'plain'}.img"
+                media[kind].write_bytes(whole.read_bytes()[:17 * 1024 * 1024])
+                whole.unlink()
+            return media[kind]
+
+        def boot():
+            if mode["disk"]:
+                return Vm(bootdisk=disk, sata="sata" in opts, vga=vga, qmp=qmp, usb=usb)
+            return Vm(disk=disk, ai_port=ai_port, bootdisk=bootdisk, wire=wire.ports if wire else None,
+                      usernet=usernet, forward=forward, forward_shell=forward_shell, sata="sata" in opts,
+                      nic="e1000e" if "e1000e" in opts else "e1000", extra_args=extra_args, vga=vga, qmp=qmp,
+                      usb=usb, initrd=medium(mode["medium"]) if medium_words is not None else None)
+
         vm = boot()
         out = []
         try:
@@ -1036,9 +1101,24 @@ def test_scenario(path: Path):
                         raise TestFailure(f"{path.name}: @capture {name}: nothing in the last output matches {pattern}")
                     names["{%s}" % name] = found.group(1)
                     continue
-                if kind == "reboot":
-                    vm.shutdown()
+                if kind == "disk-untouched":
+                    vm.shutdown()  # so that everything the OS wrote has reached the file
+                    if disk.read_bytes() != original:
+                        raise TestFailure(f"{path.name}: the disk was changed")
                     vm = boot()
+                    boot_to_prompt(vm)
+                    continue
+                if kind in ("reboot", "boot-disk", "boot-medium"):
+                    vm.shutdown()
+                    if kind != "reboot":
+                        mode["disk"], mode["medium"] = kind == "boot-disk", "newer" if cmd == "newer" else ""
+                    vm = boot()
+                    if kind == "boot-disk" and cmd == "crash":
+                        status = vm.wait_exit(BOOT_TIMEOUT)
+                        if status != EXIT_FAILURE:
+                            raise TestFailure(f"{path.name}: the kernel on trial should crash (exit {EXIT_FAILURE}), "
+                                              f"QEMU exit status {status}\n{tail(vm.text())}")
+                        vm = boot()
                     out = boot_to_prompt(vm)
                 elif kind in ("deploy", "deploy-crash"):
                     vm.shutdown()
@@ -1139,6 +1219,40 @@ def test_iso(uefi=False, bootfb=False):
         vm.kill()
 
 
+def test_iso_install(uefi=False):
+    """The real install medium: boot the ISO with an empty SATA disk, install, then boot
+    the disk without the ISO, under the same firmware."""
+    if not ISO.exists():
+        raise TestFailure(f"{ISO} missing: run `make iso`")
+    with tempfile.TemporaryDirectory(prefix="beetest-") as tmp:
+        disk = Path(tmp) / "disk.img"
+        with open(disk, "wb") as f:
+            f.truncate(64 * 1024 * 1024)
+        vm = Vm(cdrom=ISO, uefi=uefi, disk=disk, sata=True)
+        try:
+            boot_to_prompt(vm)
+            listed = vm.command("install")
+            if not any(re.fullmatch(r"This install medium carries BeeCodersOs b\d+\.", l) for l in listed) \
+                    or not any("sata0" in l and l.endswith(": empty") for l in listed):
+                raise TestFailure("`install` should show the medium's build and an empty disk:\n" + "\n".join(listed))
+            vm.send("install sata0")
+            time.sleep(0.5)
+            done = vm.command("yes")
+            if not any(l.startswith("Installed on sata0.") for l in done):
+                raise TestFailure("the install did not finish:\n" + "\n".join(done))
+            vm.shutdown()
+            vm = Vm(bootdisk=disk, uefi=uefi, sata=True)
+            boot = boot_to_prompt(vm)
+            slots = vm.command("slots")
+            where = vm.command("pwd")
+            if "good slot:   a" not in slots or where != ["/data"]:
+                raise TestFailure("the installed disk did not come up as expected:\n" + "\n".join(boot + slots + where))
+            vm.shutdown()
+            return "installed and booted from the disk"
+        finally:
+            vm.kill()
+
+
 # --- main --------------------------------------------------------------------------
 
 def main():
@@ -1165,10 +1279,12 @@ def main():
     if args.suite in ("all", "iso"):
         tests.append(("iso (BIOS)", test_iso))
         tests.append(("iso (BIOS, bootloader's framebuffer)", lambda: test_iso(bootfb=True)))
+        tests.append(("iso (BIOS, install to a disk and boot it)", test_iso_install))
     if args.suite in ("all", "iso-uefi"):
         if OVMF_CODE.exists():
             tests.append(("iso (UEFI)", lambda: test_iso(uefi=True)))
             tests.append(("iso (UEFI, bootloader's framebuffer)", lambda: test_iso(uefi=True, bootfb=True)))
+            tests.append(("iso (UEFI, install to a disk and boot it)", lambda: test_iso_install(uefi=True)))
         else:
             print(f"skip  iso (UEFI): {OVMF_CODE} not found")
 

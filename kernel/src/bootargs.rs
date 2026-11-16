@@ -16,6 +16,7 @@
 //!               80x25 VGA text screen); see display.rs
 //!   `mode=1920x1080` the screen resolution to ask the display driver for
 //!   `wc=off`    don't make the framebuffer write-combining (paging.rs)
+//!   `installstop=N` tests: `install` gives up after step N, like a power cut
 //!   `usb=off`   don't touch the USB controller (xhci.rs)
 //!   `desktop=on|off` the desktop for this boot, whatever was saved (plain
 //!               `desktop` means on); see console::desktop_choice

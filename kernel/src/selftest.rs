@@ -74,6 +74,10 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("display: odd framebuffer sizes never write outside", fbcon_bounds),
     ("display: double-size font, saved settings, write-combining pages", display_g3),
     ("beehive link: saved settings, the hash the proof is built on", hive_link),
+    ("install: partition layout, first sector, the sentence to erase a disk", install_layout),
+    ("install: what is on a disk (empty, ours, unfinished, another system)", install_inspect),
+    ("install: files in the boot partition, also damaged ones", install_fat),
+    ("install: memory kept for the bootloader's files; paths on / and /data", install_memory_and_paths),
     ("usb: what devices say about themselves, also cut short", usb_descriptors),
     ("usb: keyboard reports become key presses, mouse reports movement", usb_reports),
     ("usb: xHCI rings and requests", xhci_rings),
@@ -1704,5 +1708,250 @@ fn hive_link() -> TestResult {
     }
     check!(Settings::new("", 4560, "hp", key).is_none() && Settings::new("host name", 4560, "hp", key).is_none());
     check!(Settings::new("pc.lan", 1, "hp", key).is_some());
+    Ok(())
+}
+
+fn install_layout() -> TestResult {
+    use crate::install::{erase_sentence, first_sector, layout, sentence_matches, size_text, DATA_PARTITION_TYPE};
+    const MIB: u64 = 2048;
+    // Boot is always the same; os is half of the rest up to 256 MiB; data the rest up to 4 GiB.
+    let parts = layout(96 * MIB).ok_or("no layout for 96 MiB")?;
+    check_eq!(parts[0], (0xEF, 2048, 16 * MIB));
+    check_eq!(parts[1], (0x7F, 17 * MIB, 39 * MIB));
+    check_eq!(parts[2], (DATA_PARTITION_TYPE, 56 * MIB, 40 * MIB));
+    let big = layout(500_000 * MIB).ok_or("no layout for a large disk")?;
+    check_eq!((big[1].2, big[2].2), (256 * MIB, 4096 * MIB));
+    check!(layout(u64::MAX).is_some() && layout(1 << 33).is_some()); // beyond 2 TiB: the start is used
+    for sectors in [33 * MIB, 40 * MIB, 64 * MIB, 1000 * MIB, 5000 * MIB, u32::MAX as u64, u64::MAX] {
+        let p = layout(sectors).ok_or(format!("no layout for {sectors} sectors"))?;
+        check!(p[0].1 + p[0].2 == p[1].1 && p[1].1 + p[1].2 == p[2].1); // one after the other
+        check!(p[2].1 + p[2].2 <= sectors.min(u32::MAX as u64)); // inside the disk and the table's reach
+        check!(p.iter().all(|x| x.1 % MIB == 0 && x.2 % MIB == 0 && x.2 >= 8 * MIB));
+    }
+    for too_small in [0, 1, 17 * MIB, 32 * MIB, 33 * MIB - 1] {
+        check_eq!((too_small, layout(too_small)), (too_small, None));
+    }
+    // The first sector: the image's boot code, our table, the signature.
+    let mut image: beefs::Block = [0xAB; 512];
+    image[446..510].fill(0x11);
+    let sector = first_sector(&image, &parts);
+    check!(sector[..446].iter().all(|b| *b == 0xAB));
+    check_eq!((sector[510], sector[511]), (0x55, 0xAA));
+    let table = beefs::mbr_partitions(&sector).ok_or("no table")?;
+    check_eq!(&table[..3], &parts[..]);
+    check_eq!(table[3], (0, 0, 0));
+    check_eq!((sector[446], sector[462], sector[478]), (0x80, 0, 0)); // only boot is active
+    // The sentence that erases a disk.
+    check_eq!((size_text(96 * MIB), size_text(2047 * MIB), size_text(476_940 * MIB)), (String::from("96 MiB"), String::from("2047 MiB"), String::from("465 GiB")));
+    let sentence = erase_sentence(476_940 * MIB, "WDC  WD5000AAKX-60U6AA0 ");
+    check_eq!(sentence, "erase 465 GiB WDC WD5000AAKX-60U6AA0");
+    check!(sentence_matches("erase 465 GiB WDC WD5000AAKX-60U6AA0", &sentence));
+    check!(sentence_matches("  ERASE 465 gib  wdc wd5000aakx-60u6aa0 ", &sentence));
+    for wrong in ["", "yes", "erase", "erase 465 GiB", "erase 466 GiB WDC WD5000AAKX-60U6AA0", "erase 465 GiB WDC WD5000AAKX-60U6AA", "erase465 GiB WDC WD5000AAKX-60U6AA0"] {
+        check!(!sentence_matches(wrong, &sentence));
+    }
+    check_eq!(erase_sentence(64 * MIB, ""), "erase 64 MiB");
+    // Not an install image: wrong size, or no boot partition where it belongs.
+    check!(!crate::install::is_image(&[]) && !crate::install::is_image(&[0u8; 512]) && !crate::install::is_image(&vec![0u8; 4096]));
+    check_eq!(crate::install::build_in(b"#slots good=a trial=- state=ok      build=000042\ndefault_entry: 1\n"), Some(42));
+    check_eq!(crate::install::build_in(b"timeout: 0"), None);
+    // A boot area that cannot be read as FAT is written whole.
+    check_eq!(crate::install::used_ranges(&[0u8; 2048]), vec![(1, 17 * MIB - 1)]);
+    Ok(())
+}
+
+fn install_inspect() -> TestResult {
+    use crate::install::{first_sector, inspect, layout, Contents};
+    let disk = |mib: usize| RamDisk::new(mib << 20);
+    let unchanged = |a: &mut RamDisk, b: &mut RamDisk| -> bool {
+        let (mut x, mut y) = ([0u8; 512], [0u8; 512]);
+        (0..a.block_count()).all(|i| a.read_block(i, &mut x).is_ok() && b.read_block(i, &mut y).is_ok() && x == y)
+    };
+    // Empty.
+    let mut d = disk(2);
+    check_eq!(inspect(&mut d), Ok(Contents::Empty));
+    // Something in the first sectors, no table.
+    d.write_block(5, &[7; 512]).map_err(|e| format!("{e}"))?;
+    check_eq!(inspect(&mut d), Ok(Contents::Other(String::from("data without a partition table"))));
+    // An empty table with boot code is not empty either.
+    let mut d = disk(2);
+    let mut sector = [0u8; 512];
+    sector[0] = 0xEB;
+    sector[510..].copy_from_slice(&[0x55, 0xAA]);
+    d.write_block(0, &sector).map_err(|e| format!("{e}"))?;
+    check!(matches!(inspect(&mut d), Ok(Contents::Other(_))));
+    // Another system: a Linux partition, a Windows one, a GPT disk.
+    let entry = |kind: u8, start: u32, len: u32| {
+        let mut e = [0u8; 16];
+        e[4] = kind;
+        e[8..12].copy_from_slice(&start.to_le_bytes());
+        e[12..16].copy_from_slice(&len.to_le_bytes());
+        e
+    };
+    let with_table = |entries: &[[u8; 16]]| {
+        let mut s = [0u8; 512];
+        for (i, e) in entries.iter().enumerate() {
+            s[446 + i * 16..462 + i * 16].copy_from_slice(e);
+        }
+        s[510..].copy_from_slice(&[0x55, 0xAA]);
+        s
+    };
+    let mut d = disk(2);
+    d.write_block(0, &with_table(&[entry(0x83, 2048, 2000)])).map_err(|e| format!("{e}"))?;
+    check_eq!(inspect(&mut d), Ok(Contents::Other(String::from("partitions of another system (1 partition, type 83)"))));
+    d.write_block(0, &with_table(&[entry(0x07, 2048, 1000), entry(0x83, 3048, 1000)])).map_err(|e| format!("{e}"))?;
+    check_eq!(inspect(&mut d), Ok(Contents::Other(String::from("partitions of another system (2 partitions, type 07 83)"))));
+    d.write_block(0, &with_table(&[entry(0xEE, 1, 4000)])).map_err(|e| format!("{e}"))?;
+    check_eq!(inspect(&mut d), Ok(Contents::Other(String::from("a GPT partition table (1 partition, type ee)"))));
+    // Our boot partition next to somebody else's: still another system.
+    d.write_block(0, &with_table(&[entry(0xEF, 2048, 32768), entry(0x83, 34816, 100)])).map_err(|e| format!("{e}"))?;
+    check!(matches!(inspect(&mut d), Ok(Contents::Other(_))));
+    // BeeFS over the whole disk.
+    let mut d = FileSystem::format(disk(2)).map_err(|e| format!("{e}"))?.into_device();
+    check_eq!(inspect(&mut d), Ok(Contents::BeeFsDisk));
+    // Ours: the table install writes, with and without a data partition; the build from the boot settings.
+    let mut d = disk(40);
+    let parts = layout(d.block_count()).ok_or("no layout")?;
+    d.write_block(0, &first_sector(&[0; 512], &parts)).map_err(|e| format!("{e}"))?;
+    check_eq!(inspect(&mut d), Ok(Contents::Installed { build: None, data: true }));
+    let mut conf = [b' '; 512];
+    let state = b"#slots good=a trial=- state=ok      build=000042\ndefault_entry: 1\n";
+    conf[..state.len()].copy_from_slice(state);
+    d.write_block(2048 + 300, &conf).map_err(|e| format!("{e}"))?;
+    check_eq!(inspect(&mut d), Ok(Contents::Installed { build: Some(42), data: true }));
+    d.write_block(0, &with_table(&[entry(0xEF, 2048, 32768), entry(0x7F, 34816, 1000)])).map_err(|e| format!("{e}"))?;
+    check_eq!(inspect(&mut d), Ok(Contents::Installed { build: Some(42), data: false }));
+    // An install that stopped before the table was written: a FAT boot partition, no first sector.
+    let mut d = disk(2);
+    let mut fat = [0u8; 512];
+    fat[54..59].copy_from_slice(b"FAT16");
+    fat[510..].copy_from_slice(&[0x55, 0xAA]);
+    d.write_block(2048, &fat).map_err(|e| format!("{e}"))?;
+    d.write_block(3, &[1; 512]).map_err(|e| format!("{e}"))?;
+    check_eq!(inspect(&mut d), Ok(Contents::Unfinished));
+    // Looking never writes.
+    let mut before = disk(2);
+    let mut after = disk(2);
+    for (i, fill) in [(0u64, 0x55u8), (1, 0xAA), (2048, 0x11), (4000, 0x77)] {
+        before.write_block(i, &[fill; 512]).map_err(|e| format!("{e}"))?;
+        after.write_block(i, &[fill; 512]).map_err(|e| format!("{e}"))?;
+    }
+    check!(inspect(&mut after).is_ok());
+    check!(unchanged(&mut before, &mut after));
+    // A disk too small to have the sectors we look at.
+    let mut tiny = RamDisk::new(512);
+    check_eq!(inspect(&mut tiny), Ok(Contents::Empty));
+    Ok(())
+}
+
+fn install_fat() -> TestResult {
+    use crate::fat::{Fat16, File, Memory, CONF, KERNEL_A, KERNEL_B};
+    // A small FAT16 partition at sector 8: 1 reserved sector, 1 table of 2
+    // sectors, 16 root entries (1 sector), 2 sectors per cluster.
+    const START: u64 = 8;
+    let mut d = RamDisk::new(256 * 512);
+    let mut boot = [0u8; 512];
+    boot[11..13].copy_from_slice(&512u16.to_le_bytes());
+    boot[13] = 2;
+    boot[14..16].copy_from_slice(&1u16.to_le_bytes());
+    boot[16] = 1;
+    boot[17..19].copy_from_slice(&16u16.to_le_bytes());
+    boot[22..24].copy_from_slice(&2u16.to_le_bytes());
+    d.write_block(START, &boot).map_err(|e| format!("{e}"))?;
+    let entry = |name: &[u8; 11], cluster: u16, size: u32| {
+        let mut e = [0u8; 32];
+        e[..11].copy_from_slice(name);
+        e[26..28].copy_from_slice(&cluster.to_le_bytes());
+        e[28..32].copy_from_slice(&size.to_le_bytes());
+        e
+    };
+    let mut root = [0u8; 512];
+    root[0] = 0xE5; // a deleted file
+    root[32 + 11] = 0x0F; // part of a long name
+    root[32] = 0x41;
+    root[64..96].copy_from_slice(&entry(CONF, 2, 100));
+    root[96..128].copy_from_slice(&entry(KERNEL_A, 3, 2500)); // clusters 3 -> 5 -> 4
+    root[128..160].copy_from_slice(&entry(b"CIRCLE  ELF", 6, 9000)); // 6 -> 7 -> 6 ...
+    root[160..192].copy_from_slice(&entry(b"OUTSIDE ELF", 9000, 600));
+    root[192..224].copy_from_slice(&entry(b"SHORT   ELF", 8, 5000)); // the chain ends too early
+    d.write_block(START + 3, &root).map_err(|e| format!("{e}"))?;
+    let mut table = [0u8; 512];
+    let mut link = |from: usize, to: u16| table[from * 2..from * 2 + 2].copy_from_slice(&to.to_le_bytes());
+    link(2, 0xFFFF);
+    link(3, 5);
+    link(5, 4);
+    link(4, 0xFFFF);
+    link(6, 7);
+    link(7, 6);
+    link(8, 0xFFFF);
+    d.write_block(START + 1, &table).map_err(|e| format!("{e}"))?;
+
+    let fat = Fat16::open(&mut d, START, 248).ok_or("the partition was not recognised")?;
+    let data = START + 4; // after the boot sector, the table and the root directory
+    check_eq!((fat.sector_of(2), fat.sector_of(3), fat.sector_of(1), fat.sector_of(0)), (Some(data), Some(data + 2), None, None));
+    check_eq!(fat.sector_of(60_000), None);
+    check_eq!(fat.find(&mut d, CONF), Some(File { first_cluster: 2, size: 100 }));
+    check_eq!(fat.find(&mut d, KERNEL_B), None);
+    let kernel = fat.find(&mut d, KERNEL_A).ok_or("kernel-a not found")?;
+    // 2500 bytes: 5 sectors, following the chain 3, 5, 4.
+    check_eq!(fat.sectors(&mut d, &kernel), Some(vec![data + 2, data + 3, data + 6, data + 7, data + 4]));
+    check_eq!(fat.sectors(&mut d, &File { first_cluster: 2, size: 0 }), Some(vec![]));
+    // Damaged chains give nothing rather than sectors that belong to something else.
+    for name in [b"CIRCLE  ELF", b"OUTSIDE ELF", b"SHORT   ELF"] {
+        let file = fat.find(&mut d, name).ok_or("a test file is missing")?;
+        check_eq!((name, fat.sectors(&mut d, &file)), (name, None));
+    }
+    check_eq!(fat.sectors(&mut d, &File { first_cluster: 3, size: u64::MAX }), None);
+    // Not FAT16: zero fields, a partition smaller than its own tables, one off the disk.
+    check!(Fat16::open(&mut d, 100, 100).is_none());
+    check!(Fat16::open(&mut d, START, 3).is_none());
+    check!(Fat16::open(&mut d, 10_000, 100).is_none());
+    check!(Fat16::open(&mut d, START, u64::MAX).is_none());
+    // Memory as a read-only disk.
+    let bytes = [9u8; 1024 + 100];
+    let mut memory = Memory(&bytes);
+    let mut block = [0u8; 512];
+    check_eq!(memory.block_count(), 2);
+    check!(memory.read_block(1, &mut block).is_ok() && block == [9u8; 512]);
+    check!(memory.read_block(2, &mut block).is_err() && memory.read_block(u64::MAX, &mut block).is_err());
+    check!(memory.write_block(0, &block).is_err());
+    Ok(())
+}
+
+fn install_memory_and_paths() -> TestResult {
+    use crate::storage::route;
+    use crate::{allocator, bootmods};
+    // The heap takes what is left of a free area around the bootloader's files.
+    check_eq!(allocator::without(0x10_0000, 0x800_0000, None), [(0x10_0000, 0x800_0000), (0, 0)]);
+    check_eq!(allocator::without(0x10_0000, 0x800_0000, Some((0x20_0000, 0x130_0123))), [(0x10_0000, 0x20_0000), (0x130_1000, 0x800_0000)]);
+    check_eq!(allocator::without(0x10_0000, 0x800_0000, Some((0x10_0000, 0x200_0000))), [(0x10_0000, 0x10_0000), (0x200_0000, 0x800_0000)]);
+    check_eq!(allocator::without(0x10_0000, 0x800_0000, Some((0x900_0000, 0xA00_0000))), [(0x10_0000, 0x800_0000), (0, 0)]);
+    let [below, above] = allocator::without(0x10_0000, 0x800_0000, Some((0x0, 0xFFFF_0000)));
+    check!(below.1 <= below.0 && above.1 <= above.0.max(above.1) && above.0 >= 0x800_0000); // nothing left
+    let [below, above] = allocator::without(0x10_0000, 0x800_0000, Some((0x30_0800, 0x30_0801)));
+    check!(below.1 <= 0x30_0800 && above.0 >= 0x30_0801);
+    // The bootloader's list of files: entries that make no sense are left out.
+    let list: [u32; 16] = [
+        0x20_0000, 0x130_0000, 0, 0, // a good one
+        0x500, 0x900, 0, 0, // in low memory
+        0x200_0000, 0x200_0000, 0, 0, // empty
+        0x300_0000, 0x200_0000, 0, 0, // end before start
+    ];
+    let read = |addr: u64| list.get(((addr - 0x1000) / 4) as usize).copied().unwrap_or(0xFFFF_FFFF);
+    check_eq!(bootmods::parse(1 << 3, 4, 0x1000, read), ([(0x20_0000, 0x130_0000), (0, 0), (0, 0), (0, 0)], 1));
+    check_eq!(bootmods::parse(0, 4, 0x1000, read).1, 0); // the flag is not set
+    check_eq!(bootmods::parse(1 << 3, 0, 0x1000, read).1, 0);
+    check_eq!(bootmods::parse(1 << 3, 4, 0, read).1, 0);
+    check!(bootmods::parse(1 << 3, u32::MAX, 0x1000, read).1 <= 4); // a count that lies
+    // Paths: /data and below go to the data partition, when there is one.
+    check_eq!(route("/data", true), (true, String::from("/")));
+    check_eq!(route("/data/notes.txt", true), (true, String::from("/notes.txt")));
+    check_eq!(route("/data/a/../b", true), (true, String::from("/b")));
+    check_eq!(route("/data/..", true), (false, String::from("/")));
+    check_eq!(route("/data/../system/x", true), (false, String::from("/system/x")));
+    check_eq!(route("/database", true), (false, String::from("/database")));
+    check_eq!(route("/system/data", true), (false, String::from("/system/data")));
+    check_eq!(route("/", true), (false, String::from("/")));
+    check_eq!(route("/data/notes.txt", false), (false, String::from("/data/notes.txt")));
     Ok(())
 }

@@ -22,12 +22,17 @@ extern "C" {
 /// Returns (start, size).
 pub fn init(multiboot_info: u32) -> Result<(u64, usize), &'static str> {
     let kernel_end = unsafe { &__kernel_end as *const u8 as u64 };
+    // Files the bootloader loaded with the kernel (the install image) must
+    // survive: the heap takes the free memory below or above them.
+    let keep = crate::bootmods::span();
     let mut best: Option<(u64, u64)> = None;
     for_each_free_region(multiboot_info, |base, len| {
         let start = align_up(base.max(kernel_end), 4096);
         let end = (base + len).min(MAPPED_LIMIT) & !4095;
-        if end > start && best.is_none_or(|(s, e)| end - start > e - s) {
-            best = Some((start, end));
+        for (start, end) in without(start, end, keep) {
+            if end > start && best.is_none_or(|(s, e)| end - start > e - s) {
+                best = Some((start, end));
+            }
         }
     })?;
     let (start, end) = best.ok_or("no usable memory found")?;
@@ -37,7 +42,8 @@ pub fn init(multiboot_info: u32) -> Result<(u64, usize), &'static str> {
     }
     // SAFETY: the region is RAM marked free by the bootloader, lies above the
     // kernel image and is identity-mapped. Multiboot data inside it is no
-    // longer needed: the memory map was fully read above.
+    // longer needed: the memory map was fully read above, and the modules
+    // lie outside it.
     unsafe {
         ALLOCATOR.lock().init(start as *mut u8, size as usize);
         HEAP_SIZE = size as usize;
@@ -51,6 +57,17 @@ pub fn heap_size() -> usize {
 
 pub fn used() -> usize {
     ALLOCATOR.lock().used()
+}
+
+/// The parts of `start..end` that do not touch `keep` (whole pages): the
+/// part below it and the part above it.
+pub fn without(start: u64, end: u64, keep: Option<(u64, u64)>) -> [(u64, u64); 2] {
+    match keep {
+        Some((low, high)) if low < end && high > start => {
+            [(start, (low & !4095).min(end)), (align_up(high, 4096).max(start), end)]
+        }
+        _ => [(start, end), (0, 0)],
+    }
 }
 
 fn align_up(v: u64, a: u64) -> u64 {
