@@ -2,11 +2,12 @@
 //! report to the BeeFS disk so the next boot (and the host) can see it.
 //!
 //! Safety rule: the report is only written when no filesystem operation was in
-//! progress (see `storage::FsGuard`), by mounting the disk afresh. A crash in
-//! the middle of a disk write is reported on screen/serial only, so a broken
-//! kernel can't make the damage worse.
+//! progress (see `storage::FsGuard`) and no disk driver was in the middle of a
+//! command (`disks::busy`), by mounting afresh the disk the system runs from
+//! (IDE or SATA). A crash in the middle of a disk write is reported on
+//! screen/serial only, so a broken kernel can't make the damage worse.
 
-use crate::ata::AtaDisk;
+use crate::disks::{self, DiskRef};
 use crate::json::{self, Obj};
 use crate::ring::Global;
 use crate::storage::Fs;
@@ -46,6 +47,10 @@ pub fn record(kind: &str, msg: fmt::Arguments) {
         println!("[crash] the filesystem was in use: report not saved to disk");
         return;
     }
+    if disks::busy() {
+        println!("[crash] a disk was in the middle of a command: report not saved to disk");
+        return;
+    }
     let mut buf = FixedBuf::<480>::new();
     let _ = buf.write_fmt(msg);
     // Panic messages read "panicked at file:line:col:\nmessage": keep one line.
@@ -58,9 +63,9 @@ pub fn record(kind: &str, msg: fmt::Arguments) {
         .str("cmd", COMMAND.get().as_str())
         .str("msg", &text)
         .finish();
-    let saved = AtaDisk::find()
+    let saved = storage::mounted_disk()
         .ok_or("no disk")
-        .and_then(|d| storage::open_beefs_device(d).map_err(|_| "no BeeFS device"))
+        .and_then(|d| storage::open_beefs_device(DiskRef(d)).map_err(|_| "no BeeFS device"))
         .and_then(|(dev, _)| FileSystem::mount(dev).map_err(|_| "mount failed"))
         .and_then(|mut fs: Fs| {
             eventlog::append(&mut fs, PENDING, "/system/crash/pending.old.jsonl", &line).map_err(|_| "write failed")?;

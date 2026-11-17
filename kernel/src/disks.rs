@@ -11,6 +11,24 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use beefs::{Block, BlockDevice, FsError};
+use core::sync::atomic::{AtomicUsize, Ordering};
+
+/// Number of disk commands in progress. A crash in the middle of one must
+/// not start another on the same controller (crash.rs checks this).
+static BUSY: AtomicUsize = AtomicUsize::new(0);
+
+/// Is a disk driver in the middle of a command?
+pub fn busy() -> bool {
+    BUSY.load(Ordering::SeqCst) > 0
+}
+
+/// Run one disk command, counted in `BUSY` while it lasts.
+fn command<T>(run: impl FnOnce() -> T) -> T {
+    BUSY.fetch_add(1, Ordering::SeqCst);
+    let result = run();
+    BUSY.fetch_sub(1, Ordering::SeqCst);
+    result
+}
 
 pub struct Disk {
     /// What to call it on a command line: "ide0", "sata0", "sata1", ...
@@ -73,14 +91,17 @@ impl BlockDevice for DiskRef {
     }
 
     fn read_block(&mut self, index: u64, buf: &mut Block) -> Result<(), FsError> {
-        all().get_mut(self.0).ok_or(FsError::OutOfRange)?.device.read_block(index, buf)
+        let disk = all().get_mut(self.0).ok_or(FsError::OutOfRange)?;
+        command(|| disk.device.read_block(index, buf))
     }
 
     fn write_block(&mut self, index: u64, buf: &Block) -> Result<(), FsError> {
-        all().get_mut(self.0).ok_or(FsError::OutOfRange)?.device.write_block(index, buf)
+        let disk = all().get_mut(self.0).ok_or(FsError::OutOfRange)?;
+        command(|| disk.device.write_block(index, buf))
     }
 
     fn flush(&mut self) -> Result<(), FsError> {
-        all().get_mut(self.0).ok_or(FsError::OutOfRange)?.device.flush()
+        let disk = all().get_mut(self.0).ok_or(FsError::OutOfRange)?;
+        command(|| disk.device.flush())
     }
 }

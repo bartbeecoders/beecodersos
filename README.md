@@ -421,7 +421,8 @@ found and fixed (by a person or, later, an AI):
 - **Crash reports:** a kernel panic or CPU exception writes a report to
   `/system/crash/pending.jsonl`; the next boot shows it, moves it to
   `history.jsonl` and offers `explain`. Safety rule: the report is only written
-  when no filesystem operation was in progress, so a crash can't corrupt files.
+  when no filesystem operation and no disk command was in progress, so a crash
+  can't corrupt files. It goes to the disk the system runs from (IDE or SATA).
   `crash` crashes the kernel on purpose (to test this).
 - **Host report:** `make report` reads the VM's disk (`build/beecoders.img` if
   it exists, else `build/disk.img`; the VM should be off) and beehive's

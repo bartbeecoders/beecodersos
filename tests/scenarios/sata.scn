@@ -41,3 +41,8 @@ $ ls /home/bee
 $ ls /home/bee
 ~ note\.txt$
 !~ copy
+# A crash report is saved on the SATA disk too, and shown at the next boot.
+$! crash
+~ \[crash\] the previous boot crashed \(b\d+, panic\): .*deliberate kernel panic
+$ cat /system/crash/history.jsonl
+~ "kind":"panic","build":"\d+","cmd":"crash","msg":".*deliberate kernel panic
