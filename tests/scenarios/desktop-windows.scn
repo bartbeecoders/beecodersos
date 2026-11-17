@@ -1,0 +1,73 @@
+# Several windows on the desktop: `terminal` opens one more terminal with a
+# shell of its own. The window on top has the focus: a blue title bar
+# (3a6ea5; the others are gray, 8a9bb0) and the keyboard.
+@usb kbd mouse
+$ layout us
+$ terminal
+a new terminal window (1 open): Alt+Tab or a click changes window, 'exit' or its close box ends it
+# The new window is at 32,32 on top of the desktop; the console's window
+# (from 70,74) lost the focus.
+@screenshot 1920x1080 pixels 300,36=3a6ea5 300,100=000000 1500,78=8a9bb0 0,0=a8d0f0
+$ threads
+~ terminal   waiting
+~ desktop    waiting
+
+# The keyboard now types in the new window; its shell writes a file.
+@keys e c h o spc h i spc shift+dot spc slash p a n e dot t x t ret
+$ sleep 1
+$ cat /pane.txt
+hi
+
+# Alt+Tab: the console's window comes to the top and gets the keys.
+@keys alt+tab
+@screenshot 1920x1080 pixels 1500,78=3a6ea5 300,100=000000
+@keys e c h o spc b a c k ret
+$wait
+back
+
+# A click on the other window brings it back to the top. The pointer
+# starts in the middle of the screen (960,540); 20,20 is desktop only.
+@mouse -940 -520
+@mouse 30 20
+@button left down
+@button left up
+@screenshot 1920x1080 pixels 300,36=3a6ea5 1500,78=8a9bb0
+
+# `exit` typed there ends its shell, and the window goes away.
+@keys e x i t ret
+@screenshot 1920x1080 pixels 300,36=a8d0f0 1500,78=3a6ea5 0,0=a8d0f0
+$ threads
+!~ terminal
+$ echo console again
+console again
+
+# A click on a window's close box (the pointer is at 50,40; the box of a
+# new window at 32,32 is around 668,46) ends its shell and takes it away.
+$ terminal
+@screenshot 1920x1080 pixels 300,36=3a6ea5 668,46=e06c5a
+@mouse 618 6
+@screenshot 1920x1080 pixels 300,36=3a6ea5 668,46=000000 672,44=e06c5a
+@button left down
+@button left up
+@screenshot 1920x1080 pixels 300,36=a8d0f0 1500,78=3a6ea5
+$ threads
+!~ terminal
+# The console's own window has a close box too, but stays.
+$ sleep
+usage: sleep SECONDS   (0 to 3600)
+$ sleep 0
+
+# At most four, and none without the desktop.
+$ terminal
+$ terminal
+$ terminal
+$ terminal
+$ terminal
+terminal: too many terminal windows
+$ desktop off
+$ threads
+!~ terminal
+$ terminal
+terminal: windows need the desktop (see desktop)
+$ terminal now
+usage: terminal

@@ -50,6 +50,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("crash: restart or halt afterwards", crash_then),
     ("gfx: the fast drawing paths give the same picture", gfx_fast_paths),
     ("screen in memory: changed parts are copied, in batches", screen_in_memory),
+    ("windows: order, focus by click, close box, contents", wm_windows),
     ("heap: alloc and free", heap_alloc_free),
     ("heap: 1 MiB buffer", heap_large_buffer),
     ("ring: order and overflow", ring_buffer),
@@ -2093,5 +2094,93 @@ fn screen_in_memory() -> TestResult {
     check!(show_due(true, false, 100, 100) && show_due(false, true, 100, 100));
     check!(!show_due(false, false, 119, 100) && show_due(false, false, 120, 100));
     check!(!show_due(false, false, 5, 100)); // a clock that went back: wait
+    Ok(())
+}
+
+fn wm_windows() -> TestResult {
+    use crate::display::PixelFormat::{Rgb565, Xrgb8888};
+    use crate::gfx::{Canvas, Rect, Surface};
+    use crate::wm::{self, Desktop, MouseEffect};
+    let screen = Rect::new(0, 0, 640, 480);
+    let mut desk = Desktop::new();
+    let (a, b, c) = (
+        desk.open("A", Rect::new(20, 20, 300, 200)),
+        desk.open("B", Rect::new(100, 100, 300, 200)),
+        desk.open("C", Rect::new(400, 300, 200, 150)),
+    );
+    // Numbers stay with their windows while the order changes.
+    check_eq!((a, b, c, desk.top()), (0, 1, 2, Some(c)));
+    check!(desk.raise(a) && !desk.raise(a) && !desk.raise(77));
+    check_eq!((desk.top(), desk.window(b).map(|w| w.title.as_str())), (Some(a), Some("B")));
+    // Alt+Tab: the window at the back comes up, so every window gets a turn.
+    let mut seen = Vec::new();
+    for _ in 0..3 {
+        check!(desk.cycle());
+        seen.push(desk.top());
+    }
+    check_eq!(seen, [Some(b), Some(c), Some(a)]);
+    // A click on a window that lies lower brings it up; on the top window: nothing new.
+    check_eq!(desk.mouse(0, 0, 0, screen), MouseEffect::PointerMoved(Rect::new(320, 240, wm::POINTER_WIDTH, wm::POINTER_HEIGHT)));
+    check_eq!(desk.mouse(1, 30, -60, screen), MouseEffect::Raised); // 350,180: only B is there
+    check_eq!(desk.top(), Some(b));
+    check_eq!(desk.mouse(0, 0, 0, screen), MouseEffect::Nothing);
+    check_eq!(desk.mouse(1, 0, 0, screen), MouseEffect::Nothing);
+    desk.mouse(0, 0, 0, screen);
+    // Where A and B overlap, the click goes to the one on top (B) ...
+    desk.mouse(0, -150, -30, screen); // 200,150
+    check_eq!(desk.mouse(1, 0, 0, screen), MouseEffect::Nothing);
+    desk.mouse(0, 0, 0, screen);
+    // ... and on the desktop itself to nobody.
+    desk.mouse(0, 300, 100, screen); // 500,250
+    check_eq!((desk.mouse(1, 0, 0, screen), desk.top()), (MouseEffect::Nothing, Some(b)));
+    desk.mouse(0, 0, 0, screen);
+    // The close box of a lower window: it comes up and asks to be closed.
+    let close = desk.window(c).and_then(|w| w.close_box()).ok_or("no close box")?;
+    let p = desk.pointer().ok_or("no pointer")?;
+    desk.mouse(0, close.x as i32 + 2 - p.x as i32, close.y as i32 + 2 - p.y as i32, screen);
+    check_eq!((desk.mouse(1, 0, 0, screen), desk.top()), (MouseEffect::Close(c), Some(c)));
+    // Moving with the button still down does not drag it: the box is no handle.
+    check_eq!(desk.mouse(1, 5, 5, screen), MouseEffect::PointerMoved(Rect::new(close.x + 2, close.y + 2, wm::POINTER_WIDTH, wm::POINTER_HEIGHT)));
+    desk.mouse(0, 0, 0, screen);
+    check!(desk.close(c) && !desk.close(c) && desk.window(c).is_none());
+    check_eq!(desk.top(), Some(b));
+    check_eq!(desk.open("D", Rect::new(0, 0, 50, 50)), 3); // numbers are not used again
+    check!(desk.close(3));
+    // A window too narrow for a close box has none.
+    check!(wm::Window { title: String::new(), frame: Rect::new(0, 0, 20, 60) }.close_box().is_none());
+    check_eq!(wm::frame_size(640, 400), (640 + 12, 400 + 12 + 24));
+
+    // Contents: each window's picture is put in after its frame, back to
+    // front, so a window on top covers what lies below.
+    let mut t = TestScreen::new(640, 480, 0, Xrgb8888);
+    let canvas = Canvas::new(t.pixels.as_mut_ptr(), t.mode);
+    let (red, green) = (Surface::new(40, 30, Xrgb8888).ok_or("surface")?, Surface::new(40, 30, Xrgb8888).ok_or("surface")?);
+    red.canvas().fill_rect(Rect::new(0, 0, 40, 30), 0xFF0000);
+    green.canvas().fill_rect(Rect::new(0, 0, 40, 30), 0x00FF00);
+    let mut order = Vec::new();
+    desk.draw_with(&canvas, |id, window| {
+        order.push(id);
+        let at = window.content();
+        canvas.blit(&(if id == a { red.canvas() } else { green.canvas() }), at.x, at.y);
+    });
+    check_eq!(order, [a, b]);
+    let (in_a, in_b) = (desk.window(a).ok_or("a")?.content(), desk.window(b).ok_or("b")?.content());
+    check_eq!((t.rgb(in_a.x, in_a.y), t.rgb(in_a.x + 39, in_a.y + 29), t.rgb(in_a.x + 40, in_a.y + 29)), (0xFF0000, 0xFF0000, wm::CONTENT));
+    check_eq!((t.rgb(in_b.x, in_b.y), t.rgb(in_b.x + 39, in_b.y + 29)), (0x00FF00, 0x00FF00));
+    check_eq!(t.rgb(150, 101), 0x1F3A5F); // B's border lies over A's content
+    check_eq!((t.rgb(0, 0), t.rgb(639, 479)), (wm::BACKGROUND, wm::BACKGROUND));
+    // A picture that sticks out of the canvas is cut off; one in another
+    // pixel format is refused; one without pixels cannot be made.
+    canvas.blit(&red.canvas(), 620, 465);
+    check_eq!((t.rgb(639, 479), t.rgb(619, 479), t.rgb(620, 464)), (0xFF0000, wm::BACKGROUND, wm::BACKGROUND));
+    check!(t.pixels[t.mode.bytes() as usize..].iter().all(|b| *b == 0xEE));
+    canvas.clipped(Rect::new(0, 0, 5, 5)).blit(&green.canvas(), 3, 3);
+    check_eq!((t.rgb(3, 3), t.rgb(4, 4), t.rgb(5, 4), t.rgb(4, 5)), (0x00FF00, 0x00FF00, wm::BACKGROUND, wm::BACKGROUND));
+    let other = Surface::new(8, 8, Rgb565).ok_or("surface")?;
+    other.canvas().fill_rect(Rect::new(0, 0, 8, 8), 0xFFFFFF);
+    canvas.blit(&other.canvas(), 0, 0);
+    check_eq!(t.rgb(0, 0), wm::BACKGROUND);
+    check!(Surface::new(0, 10, Xrgb8888).is_none() && Surface::new(10, 0, Xrgb8888).is_none());
+    check!(Surface::new(usize::MAX, 2, Xrgb8888).is_none());
     Ok(())
 }

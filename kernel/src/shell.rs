@@ -592,6 +592,22 @@ impl Shell {
                 }
             }
             ("desktop", []) => println!("desktop: off ('desktop on' starts it)"),
+            ("sleep", [seconds]) => match seconds.parse::<u64>() {
+                Ok(seconds @ 0..=3600) => {
+                    // Ctrl+C ends it early.
+                    let end = time::uptime_ms() + seconds * 1000;
+                    while time::uptime_ms() < end && !net::cancelled() {
+                        thread::sleep_ms(50);
+                    }
+                }
+                _ => error("usage: sleep SECONDS   (0 to 3600)"),
+            },
+            ("sleep", _) => error("usage: sleep SECONDS   (0 to 3600)"),
+            ("terminal", []) => match crate::desk::open_terminal() {
+                Ok(_) => println!("a new terminal window ({} open): Alt+Tab or a click changes window, 'exit' or its close box ends it", crate::desk::count()),
+                Err(why) => error(&format!("terminal: {why}")),
+            },
+            ("terminal", _) => error("usage: terminal"),
             ("desktop", [state @ ("on" | "off")]) => self.desktop(state),
             ("desktop", _) => error("usage: desktop [on | off]"),
             ("install", []) => self.install_list(),
@@ -1773,6 +1789,8 @@ const COMMANDS: &[(&str, &str)] = &[
     ("lsusb", "USB controller and devices"),
     ("threads", "what runs side by side inside the kernel"),
     ("display [mode WxH]", "screen: driver, resolution; 'display font 1|2|auto'; 'display test'; 'display speed'"),
+    ("sleep SECONDS", "wait (Ctrl+C ends it)"),
+    ("terminal", "one more terminal window on the desktop, with a shell of its own"),
     ("desktop [on|off]", "graphical desktop: the terminal in a window (on by default; saved)"),
     ("slots", "A/B kernel slots: which one runs, last trial"),
     ("crash [exception]", "deliberately crash the kernel: a panic, or a CPU exception (tests crash reports)"),

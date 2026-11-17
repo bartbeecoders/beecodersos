@@ -1,6 +1,6 @@
 //! Unified input: key events from the PS/2 keyboard and the serial port.
 
-use crate::{acpi, aibridge, keyboard, serial, session, thread};
+use crate::{acpi, aibridge, desk, keyboard, serial, session, thread};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
@@ -21,8 +21,22 @@ pub enum Key {
     PageUp,
     PageDown,
     Insert,
+    /// Alt+Tab: the next window gets the focus (the desktop takes this key
+    /// itself; no program sees it).
+    NextWindow,
     /// The (ACPI) power button was pressed, e.g. virt-manager "Shut Down".
     PowerButton,
+}
+
+/// The next key from the machine's keyboard that is meant for the console:
+/// on the desktop, keys go to the window that has the focus (desk.rs).
+fn console_key() -> Option<Key> {
+    while let Some(key) = keyboard::poll() {
+        if let Some(key) = desk::route(key) {
+            return Some(key);
+        }
+    }
+    None
 }
 
 /// The next key if one is waiting, without blocking.
@@ -36,7 +50,7 @@ pub fn poll_key() -> Option<Key> {
     if acpi::take_power_button() {
         return Some(Key::PowerButton);
     }
-    keyboard::poll().or_else(serial::poll_key)
+    console_key().or_else(serial::poll_key)
 }
 
 /// True when a key (or the power button) is waiting.
@@ -61,7 +75,7 @@ pub fn read_key() -> Key {
         if acpi::take_power_button() {
             return Key::PowerButton;
         }
-        if let Some(k) = keyboard::poll() {
+        if let Some(k) = console_key() {
             return k;
         }
         if let Some(k) = serial::poll_key() {

@@ -19,12 +19,12 @@
 use crate::display::{self, DisplayError, Target};
 use crate::fbcon::{self, FbCon};
 use crate::font::{GLYPH_HEIGHT, GLYPH_WIDTH};
-use crate::gfx::{Canvas, Rect};
+use crate::gfx::{Canvas, Rect, Surface};
 use crate::ring::Global;
 use crate::bootfb::{self, Boot};
 use crate::wm::MouseEffect;
 use crate::{bootargs, serial, session, thread, time, vga, wm};
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -170,15 +170,31 @@ pub fn flush() {
     show(true);
 }
 
-/// The screen is being rebuilt (another size, desktop on or off): the timer
-/// keeps its hands off meanwhile.
-static LAYING_OUT: AtomicBool = AtomicBool::new(false);
+/// The screen or the windows are being rebuilt (another size, a window
+/// opened, closed or brought to the top): the timer keeps its hands off
+/// meanwhile.
+static REBUILDING: AtomicUsize = AtomicUsize::new(0);
+
+struct Rebuilding;
+
+impl Rebuilding {
+    fn start() -> Rebuilding {
+        REBUILDING.fetch_add(1, Ordering::SeqCst);
+        Rebuilding
+    }
+}
+
+impl Drop for Rebuilding {
+    fn drop(&mut self) {
+        REBUILDING.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 /// From the timer interrupt, 100 times a second: lines that were held back
 /// for a batch reach the screen even when the command that printed them is
 /// busy and prints nothing more for a while. It only copies pixels.
 pub fn on_tick() {
-    if !IMMEDIATE.load(Ordering::Relaxed) && !LAYING_OUT.load(Ordering::Relaxed) {
+    if !IMMEDIATE.load(Ordering::Relaxed) && REBUILDING.load(Ordering::Relaxed) == 0 {
         show(false);
     }
 }
@@ -195,18 +211,59 @@ fn damage(rect: Rect) {
     *pending = pending.union(&rect);
 }
 
+/// Draw this part of the desktop again in memory: the background, and
+/// every window with what it shows, back to front.
+fn compose(rect: Rect) {
+    let (Some(desk), Some(shadow)) = (DESKTOP.get().as_ref(), SHADOW.get().as_ref()) else { return };
+    let canvas = shadow.back.clipped(rect);
+    desk.draw_with(&canvas, |id, window| {
+        let content = if id == TERMINAL {
+            CONSOLE_SURFACE.get().as_ref().map(|s| s.canvas())
+        } else {
+            PANES.get().iter().find(|p| p.window == id).map(|p| p.surface.canvas())
+        };
+        if let Some(content) = content {
+            let at = window.content();
+            canvas.blit(&content, at.x, at.y);
+        }
+    });
+    damage(rect.clip(&shadow.back.bounds()));
+}
+
+/// A window's owner drew on `rect` of its content: that part of the screen
+/// is put together again.
+fn window_changed(id: usize, rect: Rect) {
+    if rect.is_empty() {
+        return;
+    }
+    let Some(content) = DESKTOP.get().as_ref().and_then(|desk| desk.window(id)).map(|w| w.content()) else { return };
+    compose(Rect::new(content.x + rect.x, content.y + rect.y, rect.width, rect.height).clip(&content));
+}
+
 /// Bring what was drawn to the screen (`force`: now, whatever the time).
 fn show(force: bool) {
     let Screen::Graphics(screen) = SCREEN.get() else { return };
-    damage(screen.take_dirty());
     let Some(shadow) = SHADOW.get() else {
-        // Drawn straight on the screen: only the pointer may need repair.
-        *PENDING.get() = Rect::new(0, 0, 0, 0);
-        return pointer_on_top();
+        // Drawn straight on the screen: nothing to copy.
+        screen.take_dirty();
+        return;
     };
-    let rect = *PENDING.get();
     let now = time::uptime_ms();
-    if rect.is_empty() || !show_due(force, IMMEDIATE.load(Ordering::Relaxed), now, *SHOWN_AT.get()) {
+    if !show_due(force, IMMEDIATE.load(Ordering::Relaxed), now, *SHOWN_AT.get()) {
+        return;
+    }
+    if DESKTOP.get().is_some() {
+        window_changed(TERMINAL, screen.take_dirty());
+        for i in 0..PANES.get().len() {
+            let pane = &mut PANES.get()[i];
+            let (id, dirty) = (pane.window, pane.con.take_dirty());
+            window_changed(id, dirty);
+        }
+    } else {
+        damage(screen.take_dirty());
+    }
+    let rect = *PENDING.get();
+    if rect.is_empty() {
         return;
     }
     *PENDING.get() = Rect::new(0, 0, 0, 0);
@@ -218,6 +275,127 @@ fn show(force: bool) {
             desk.draw_pointer(&shadow.front);
         }
     }
+}
+
+/// What the console's window shows; the console draws on it.
+static CONSOLE_SURFACE: Global<Option<Surface>> = Global::new(None);
+
+/// One more terminal window (`terminal`): the text it shows. The shell
+/// that runs in it belongs to desk.rs.
+struct Pane {
+    window: usize,
+    /// `con` keeps its characters in here.
+    _cells: Vec<u16>,
+    con: FbCon<'static>,
+    surface: Surface,
+}
+
+static PANES: Global<Vec<Pane>> = Global::new(Vec::new());
+
+/// Windows whose close box was clicked, for their owner (desk.rs) to end.
+static CLOSING: Global<Vec<usize>> = Global::new(Vec::new());
+
+pub const MAX_PANES: usize = 4;
+/// The size of a new terminal window, in characters.
+pub const PANE_SIZE: (usize, usize) = (80, 25);
+
+/// Open one more terminal window on the desktop, on top; returns its
+/// number. Each new one lies a little further right and down.
+pub fn open_pane(title: &str) -> Result<usize, &'static str> {
+    let (Some(shadow), Screen::Graphics(screen)) = (SHADOW.get().as_ref(), SCREEN.get()) else {
+        return Err("windows need the desktop (see desktop)");
+    };
+    if DESKTOP.get().is_none() {
+        return Err("windows need the desktop (see desktop)");
+    }
+    if PANES.get().len() >= MAX_PANES {
+        return Err("too many terminal windows");
+    }
+    let (scale, bounds) = (screen.scale(), shadow.back.bounds());
+    let (cols, rows) = PANE_SIZE;
+    let (width, height) = wm::frame_size(cols * GLYPH_WIDTH * scale, rows * GLYPH_HEIGHT * scale);
+    if width > bounds.width || height > bounds.height {
+        return Err("the screen is too small for another window");
+    }
+    let step = 32 * (PANES.get().len() + 1);
+    let frame = Rect::new(step.min(bounds.width - width), step.min(bounds.height - height), width, height);
+    let surface = Surface::new(cols * GLYPH_WIDTH * scale, rows * GLYPH_HEIGHT * scale, shadow.back.format())
+        .ok_or("not enough memory for another window")?;
+    let mut cells = alloc::vec![0u16; cols * rows];
+    // The console keeps a reference to its cells; they live as long as it does, in the same `Pane`.
+    let slice: &'static mut [u16] = unsafe { core::slice::from_raw_parts_mut(cells.as_mut_ptr(), cells.len()) };
+    let mut con = FbCon::in_area(surface.canvas(), surface.canvas().bounds(), slice, scale);
+    con.clear();
+    let _rebuilding = Rebuilding::start();
+    let Some(desk) = DESKTOP.get().as_mut() else { return Err("windows need the desktop (see desktop)") };
+    let window = desk.open(title, frame);
+    PANES.get().push(Pane { window, _cells: cells, con, surface });
+    compose(bounds);
+    show(true);
+    Ok(window)
+}
+
+/// Print text in a terminal window. A backspace character steps back one place.
+pub fn pane_write(window: usize, text: &str) {
+    let Some(pane) = PANES.get().iter_mut().find(|p| p.window == window) else { return };
+    for c in text.chars() {
+        if c == '\x08' {
+            let (row, col) = pane.con.pos();
+            pane.con.set_pos(row, col.saturating_sub(1));
+        } else {
+            pane.con.write_char(c);
+        }
+    }
+    pane.con.sync_cursor();
+    show(true);
+}
+
+pub fn pane_exists(window: usize) -> bool {
+    PANES.get().iter().any(|p| p.window == window)
+}
+
+/// Take a terminal window off the desktop.
+pub fn close_pane(window: usize) {
+    let _rebuilding = Rebuilding::start();
+    let before = PANES.get().len();
+    PANES.get().retain(|p| p.window != window);
+    if PANES.get().len() == before {
+        return;
+    }
+    if let Some(desk) = DESKTOP.get().as_mut() {
+        desk.close(window);
+    }
+    if let Some(bounds) = SHADOW.get().as_ref().map(|s| s.back.bounds()) {
+        compose(bounds);
+    }
+    show(true);
+}
+
+/// The window that has the focus, if it is one of the extra terminals
+/// (`None`: the console has it, or there is no desktop).
+pub fn focused_pane() -> Option<usize> {
+    DESKTOP.get().as_ref()?.top().filter(|id| *id != TERMINAL)
+}
+
+/// Give the focus to the next window (Alt+Tab).
+pub fn next_window() {
+    let _rebuilding = Rebuilding::start();
+    let Some(desk) = DESKTOP.get().as_mut() else { return };
+    if desk.cycle() {
+        if let Some(bounds) = SHADOW.get().as_ref().map(|s| s.back.bounds()) {
+            compose(bounds);
+        }
+        show(true);
+    }
+}
+
+/// Windows whose close box was clicked since the last call.
+pub fn take_closing() -> Vec<usize> {
+    core::mem::take(CLOSING.get())
+}
+
+pub fn closing() -> bool {
+    !CLOSING.get().is_empty()
 }
 
 /// The terminal's window on the desktop (the first one opened).
@@ -319,15 +497,27 @@ pub fn describe_display() -> String {
 pub fn screen_text() -> String {
     let (cols, rows) = size();
     let mut text = String::new();
-    for row in 0..rows {
-        let mut line = String::new();
-        for col in 0..cols {
-            let cell = match SCREEN.get() {
-                Screen::Text(screen) => screen.cell(row, col),
-                Screen::Graphics(screen) => screen.cells().get(row * cols + col).copied().unwrap_or(0x20),
-            };
-            line.push(vga::from_cp437(cell as u8));
+    match SCREEN.get() {
+        Screen::Text(screen) => {
+            let cells: Vec<u16> = (0..rows * cols).map(|i| screen.cell(i / cols, i % cols)).collect();
+            text += &cells_text(&cells, cols);
         }
+        Screen::Graphics(screen) => text += &cells_text(screen.cells(), cols),
+    }
+    // The other terminal windows follow, each under a line with its number.
+    for pane in PANES.get().iter() {
+        text += &format!("--- terminal window {} ---\n", pane.window);
+        text += cells_text(pane.con.cells(), pane.con.width()).trim_end();
+        text.push('\n');
+    }
+    text
+}
+
+/// Cells (VGA format) as text, line by line, trailing spaces left out.
+fn cells_text(cells: &[u16], cols: usize) -> String {
+    let mut text = String::new();
+    for line in cells.chunks(cols.max(1)) {
+        let line: String = line.iter().map(|cell| vga::from_cp437(*cell as u8)).collect();
         text += line.trim_end();
         text.push('\n');
     }
@@ -339,7 +529,7 @@ pub fn screen_text() -> String {
 /// so the mouse pointer is not in it.
 pub fn capture(scale: usize) -> Option<(usize, usize, Vec<u8>)> {
     let Screen::Graphics(screen) = SCREEN.get() else { return None };
-    let canvas = screen.canvas();
+    let canvas = SHADOW.get().as_ref().map_or(screen.canvas(), |s| s.back);
     let scale = scale.max(1);
     let (width, height) = (canvas.width() / scale, canvas.height() / scale);
     let mut pixels = Vec::with_capacity(width * height * 3);
@@ -394,26 +584,29 @@ fn lay_out(target: Target, desktop: bool) -> bool {
     if let Some(pointer) = DESKTOP.get().as_ref().and_then(|desk| desk.pointer()) {
         *POINTER.get() = Some(pointer);
     }
-    LAYING_OUT.store(true, Ordering::SeqCst);
+    let rebuilding = Rebuilding::start();
+    // The extra terminal windows do not move along: their shells end (desk.rs).
+    PANES.get().clear();
     // The old in-memory screen stays until the console has moved off it.
     let shadow = Shadow::new(&target);
     let canvas = shadow.as_ref().map_or(Canvas::new(target.framebuffer, target.mode), |s| s.back);
     let scale = font_scale(*FONT.get(), canvas.height());
-    let frame = if desktop { wm::terminal_frame(canvas.width(), canvas.height(), scale) } else { None };
-    let mut screen = match frame {
-        Some(frame) => {
+    // The desktop needs the screen in memory, and memory for what the window shows.
+    let windowed = (if desktop && shadow.is_some() { wm::terminal_frame(canvas.width(), canvas.height(), scale) } else { None })
+        .and_then(|frame| {
             let mut desk = wm::Desktop::new();
-            desk.open("Terminal", frame);
+            let id = desk.open("Terminal", frame);
+            let inside = desk.window(id)?.content();
+            let surface = Surface::new(inside.width, inside.height, target.mode.format)?;
             desk.set_pointer(*POINTER.get(), canvas.bounds());
-            desk.draw(&canvas);
-            let area = desk.window(TERMINAL).map_or(frame, |w| w.content());
-            *DESKTOP.get() = Some(desk);
-            FbCon::in_area(canvas, area, CELLS.get(), scale)
+            Some((desk, surface))
+        });
+    let (mut screen, desk, surface) = match windowed {
+        Some((desk, surface)) => {
+            let inside = surface.canvas();
+            (FbCon::in_area(inside, inside.bounds(), CELLS.get(), scale), Some(desk), Some(surface))
         }
-        None => {
-            *DESKTOP.get() = None;
-            FbCon::in_area(canvas, canvas.bounds(), CELLS.get(), scale)
-        }
+        None => (FbCon::in_area(canvas, canvas.bounds(), CELLS.get(), scale), None, None),
     };
     screen.clear();
     if let Some((cells, cols, (row, col), attr)) = old {
@@ -427,12 +620,20 @@ fn lay_out(target: Target, desktop: bool) -> bool {
         screen.set_attr(attr);
         screen.sync_cursor();
     }
+    let on = desk.is_some();
     *SCREEN.get() = Screen::Graphics(screen);
+    *DESKTOP.get() = desk;
+    *CONSOLE_SURFACE.get() = surface;
     *SHADOW.get() = shadow;
-    LAYING_OUT.store(false, Ordering::SeqCst);
-    damage(canvas.bounds());
+    *PENDING.get() = Rect::new(0, 0, 0, 0);
+    drop(rebuilding);
+    if on {
+        compose(canvas.bounds());
+    } else {
+        damage(canvas.bounds());
+    }
     show(true);
-    frame.is_some()
+    on
 }
 
 /// Change the resolution (`display mode`). The desktop stays on if the new
@@ -455,49 +656,29 @@ pub fn set_font(size: usize) {
 /// timer tick): buttons, then how far right and down. Only the desktop has
 /// a pointer; a full-screen terminal ignores the mouse.
 pub fn mouse_event(buttons: u8, dx: i32, dy: i32) {
-    let (Some(desk), Screen::Graphics(screen)) = (DESKTOP.get().as_mut(), SCREEN.get()) else { return };
-    let canvas = screen.canvas();
-    match desk.mouse(buttons, dx, dy, canvas.bounds()) {
+    let _rebuilding = Rebuilding::start();
+    let (Some(desk), Some(shadow)) = (DESKTOP.get().as_mut(), SHADOW.get().as_ref()) else { return };
+    let bounds = shadow.back.bounds();
+    match desk.mouse(buttons, dx, dy, bounds) {
         MouseEffect::Nothing => {}
-        MouseEffect::PointerMoved(old) => match SHADOW.get() {
+        MouseEffect::PointerMoved(old) => {
             // What the pointer covered comes back from memory.
-            Some(shadow) => {
-                shadow.front.copy_from(&shadow.back, old);
-                desk.draw_pointer(&shadow.front);
-            }
-            None => {
-                desk.draw(&canvas.clipped(old));
-                screen.redraw_in(old);
-                desk.draw_pointer(&canvas);
-            }
-        },
-        MouseEffect::WindowMoved => {
-            if let Some(window) = desk.window(TERMINAL) {
-                let area = window.content();
-                screen.move_to(area.x, area.y);
-            }
-            desk.draw(&canvas);
-            screen.redraw();
-            damage(canvas.bounds());
+            shadow.front.copy_from(&shadow.back, old);
+            desk.draw_pointer(&shadow.front);
+        }
+        MouseEffect::WindowMoved | MouseEffect::Raised => {
+            compose(bounds);
             show(true);
         }
+        // The console's own window stays.
+        MouseEffect::Close(TERMINAL) => {}
+        MouseEffect::Close(id) => CLOSING.get().push(id),
     }
 }
 
 /// Where the pointer is on the desktop: for `desktop` and the tests.
 pub fn pointer() -> Option<(usize, usize)> {
     DESKTOP.get().as_ref()?.pointer().map(|p| (p.x, p.y))
-}
-
-/// Without the screen in memory: text was drawn and may have covered the
-/// pointer, so put it back on top.
-fn pointer_on_top() {
-    if SHADOW.get().is_some() {
-        return;
-    }
-    if let (Some(desk), Screen::Graphics(screen)) = (DESKTOP.get().as_ref(), SCREEN.get()) {
-        desk.draw_pointer(&screen.canvas());
-    }
 }
 
 pub fn desktop_on() -> bool {
@@ -516,8 +697,22 @@ pub fn set_desktop(on: bool) -> Result<(), &'static str> {
 
 /// Color bars over the whole screen (`display test`); nothing on the text screen.
 pub fn show_color_bars() {
+    // What was printed so far goes to the screen first, so that it is not
+    // put over the bars afterwards.
+    show(true);
     if let Screen::Graphics(screen) = SCREEN.get() {
-        screen.color_bars();
+        match SHADOW.get() {
+            // Over the whole screen, not only inside the console's window.
+            Some(shadow) if DESKTOP.get().is_some() => {
+                let (width, height) = (shadow.back.width(), shadow.back.height());
+                for (i, color) in fbcon::BARS.iter().enumerate() {
+                    let (from, to) = (width * i / fbcon::BARS.len(), width * (i + 1) / fbcon::BARS.len());
+                    shadow.back.fill_rect(Rect::new(from, 0, to - from, height), fbcon::PALETTE[*color as usize]);
+                }
+                damage(shadow.back.bounds());
+            }
+            _ => screen.color_bars(),
+        }
     }
     show(true);
 }
@@ -526,11 +721,16 @@ pub fn show_color_bars() {
 pub fn redraw() -> u64 {
     let start = crate::time::micros();
     if let Screen::Graphics(screen) = SCREEN.get() {
-        if let Some(desk) = DESKTOP.get() {
-            desk.draw(&screen.canvas());
-        }
         screen.redraw();
-        damage(screen.canvas().bounds());
+        match SHADOW.get() {
+            Some(shadow) if DESKTOP.get().is_some() => {
+                for pane in PANES.get().iter_mut() {
+                    pane.con.redraw();
+                }
+                compose(shadow.back.bounds());
+            }
+            _ => damage(screen.canvas().bounds()),
+        }
     }
     show(true);
     crate::time::micros() - start

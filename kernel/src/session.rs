@@ -89,6 +89,11 @@ pub fn close(id: u32) {
     }
 }
 
+/// Has the session printed something that was not taken yet?
+pub fn has_output(id: u32) -> bool {
+    find(id).is_some_and(|s| !s.output.is_empty())
+}
+
 /// Everything printed in the session since the last call.
 pub fn take_output(id: u32) -> String {
     find(id).map(|s| core::mem::take(&mut s.output)).unwrap_or_default()

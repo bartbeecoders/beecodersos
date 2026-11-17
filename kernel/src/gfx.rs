@@ -3,7 +3,8 @@
 //! position, so nothing is ever written outside the framebuffer. Used by the
 //! framebuffer console (fbcon.rs) and the window system (wm.rs).
 
-use crate::display::Mode;
+use crate::display::{Mode, PixelFormat};
+use alloc::vec::Vec;
 use crate::font::{FONT, GLYPH_HEIGHT, GLYPH_WIDTH};
 use crate::vga;
 
@@ -87,6 +88,10 @@ impl Canvas {
         self.mode.height as usize
     }
 
+    pub fn format(&self) -> PixelFormat {
+        self.mode.format
+    }
+
     /// The whole canvas.
     pub fn bounds(&self) -> Rect {
         Rect::new(0, 0, self.width(), self.height())
@@ -107,6 +112,25 @@ impl Canvas {
         for y in r.y..r.y + r.height {
             let at = y * self.mode.pitch as usize + r.x * bytes;
             unsafe { core::ptr::copy_nonoverlapping(other.framebuffer.add(at), self.framebuffer.add(at), r.width * bytes) };
+        }
+    }
+
+    /// Copy the whole picture of another canvas (a window's content) onto
+    /// this one with its top left corner at (x, y); what falls outside is cut
+    /// off. Both must store pixels the same way, or nothing is copied.
+    pub fn blit(&self, source: &Canvas, x: usize, y: usize) {
+        if self.mode.format != source.mode.format {
+            return;
+        }
+        let r = Rect::new(x, y, source.width(), source.height()).clip(&self.clip);
+        if r.is_empty() {
+            return;
+        }
+        let bytes = self.mode.format.bytes();
+        for line in r.y..r.y + r.height {
+            let from = (line - y) * source.mode.pitch as usize + (r.x - x) * bytes;
+            let to = line * self.mode.pitch as usize + r.x * bytes;
+            unsafe { core::ptr::copy_nonoverlapping(source.framebuffer.add(from), self.framebuffer.add(to), r.width * bytes) };
         }
     }
 
@@ -224,5 +248,31 @@ impl Canvas {
                 }
             }
         }
+    }
+}
+
+/// A picture in memory to draw on: what a window shows. The window system
+/// copies it to the screen (`Canvas::blit`).
+pub struct Surface {
+    /// The canvas draws in here.
+    _pixels: Vec<u8>,
+    canvas: Canvas,
+}
+
+impl Surface {
+    /// `None` when there is no memory for it (or it would have no pixels).
+    pub fn new(width: usize, height: usize, format: PixelFormat) -> Option<Surface> {
+        let (w, h) = (u32::try_from(width).ok()?, u32::try_from(height).ok()?);
+        let mode = Mode { width: w, height: h, pitch: w.checked_mul(format.bytes() as u32)?, format };
+        let size = usize::try_from(mode.bytes()).ok().filter(|size| *size > 0)?;
+        let mut pixels = Vec::new();
+        pixels.try_reserve_exact(size).ok()?;
+        pixels.resize(size, 0);
+        let canvas = Canvas::new(pixels.as_mut_ptr(), mode);
+        Some(Surface { _pixels: pixels, canvas })
+    }
+
+    pub fn canvas(&self) -> Canvas {
+        self.canvas
     }
 }

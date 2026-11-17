@@ -20,6 +20,7 @@ mod bootfb;
 mod bootmods;
 #[macro_use]
 mod console;
+mod desk;
 // After `console`: uses println!.
 mod bootslots;
 mod crash;

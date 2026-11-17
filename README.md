@@ -221,7 +221,8 @@ kernel/
   src/font.rs          the 8x16 console font (Spleen, BSD license), generated table
   src/paging.rs        page table changes after boot: write-combining for the framebuffer
   src/gfx.rs           drawing on a framebuffer: rectangles and characters, always clipped
-  src/wm.rs            window system: desktop background, window frames, the terminal window
+  src/wm.rs            window system: desktop background, window frames, order and focus
+  src/desk.rs          the extra terminal windows: their shells, keys for the focused window
   src/keyboard.rs      PS/2 keyboard driver + scancode decoder (modifiers, dead keys)
   src/layouts.rs       keyboard layouts (US, Belgian Period)
   src/uart.rs          16550 serial port: detection, sending and receiving with limits
@@ -315,7 +316,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `ai`,
-`slots`, `install`, `update`, `display`, `desktop`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `sleep`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Under the hood:** interrupts are enabled (IDT + remapped PIC; IRQ0 timer,
 IRQ1 keyboard, IRQ3 COM2 AI bridge, IRQ4 COM1 serial). Handlers queue raw bytes; the shell decodes them and sleeps with
@@ -1141,7 +1142,7 @@ video memory: write-combining
   of rectangles and characters (`gfx.rs`) took the HP from 16.1 ms to 9.4 ms
   for a whole 1280x1024 screen.
 
-## Graphical desktop: a terminal in a window ✅
+## Graphical desktop: terminals in windows ✅
 
 ```
 bee:/$ desktop
@@ -1162,18 +1163,32 @@ desktop.
 - **Window system** (`kernel/src/wm.rs`): a desktop holds windows, back to
   front; each has a border, a title bar with its title, and a content area its
   owner draws in. The top window has the focus (a blue title bar; others gray).
-- **Terminal** (the only app): the framebuffer console drawn in the window's
-  content area. Everything works as before: colors, scrolling, line editing.
+- **Terminal:** the console is the first window; everything in it works as
+  before: colors, scrolling, line editing.
+- **More windows:** `terminal` opens one more terminal window (80x25
+  characters, at most four) with a shell of its own (`kernel/src/desk.rs`; a
+  simple one for now: no colors, history or cursor keys). Windows may
+  overlap. Each window's owner draws on a picture in memory (`gfx::Surface`)
+  and the desktop is put together from those, back to front. The window on
+  top has the focus and gets the keyboard; **Alt+Tab** gives it to the next
+  window, a **click** on a window brings it to the top. `exit` in the window
+  or a click on its **close box** ends its shell and the window. The
+  console's own window cannot be closed. Changing the resolution or font, or
+  `desktop off`, closes the extra windows. What the serial port types always
+  goes to the console.
+- `sleep SECONDS` waits (used by the tests while another window works).
 - The boot flags `desktop=off` and `desktop=on` decide for one boot, whatever
   was saved. The screen is set up before the disk is read, so a machine with
   the desktop switched off shows it for a moment while booting.
 - **Mouse** (USB, see the USB section): a pointer appears when the mouse
-  first moves, and the terminal window can be dragged by its title bar; it
-  stays completely on the screen. The close box does nothing yet. `desktop`
-  shows where the pointer is.
+  first moves, and the window on top can be dragged by its title bar; it
+  stays completely on the screen. `desktop` shows where the pointer is.
 - **Tests:** self-tests for the layout at every screen size and for drawing on
   a framebuffer in RAM; scenarios `desktop*.scn` check real pixels of the
-  screen (`@screenshot WxH pixels X,Y=RRGGBB ...`).
+  screen (`@screenshot WxH pixels X,Y=RRGGBB ...`); `desktop-windows.scn`
+  types in a second window, changes focus with Alt+Tab and the mouse, and
+  closes windows. Through `beectl.py text` the host sees the text of every
+  terminal window.
 
 ## USB: keyboard and mouse (xHCI) ✅ in QEMU, not yet tried on the HP
 

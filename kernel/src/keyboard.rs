@@ -233,6 +233,7 @@ impl Decoder {
         match code {
             0x01 => Some(Key::Escape),
             0x0E => Some(Key::Backspace),
+            0x0F if self.alt => Some(Key::NextWindow),
             0x0F => Some(Key::Tab),
             0x1C => Some(Key::Enter),
             0x3A => {
