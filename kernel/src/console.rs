@@ -295,6 +295,13 @@ static PANES: Global<Vec<Pane>> = Global::new(Vec::new());
 /// Windows whose close box was clicked, for their owner (desk.rs) to end.
 static CLOSING: Global<Vec<usize>> = Global::new(Vec::new());
 
+static CLICKS: Global<Vec<(usize, u16, u16)>> = Global::new(Vec::new());
+static LAUNCHES: Global<Vec<usize>> = Global::new(Vec::new());
+
+/// The buttons on the desktop, left to right: what a click on each starts
+/// is up to desk.rs.
+pub const BUTTONS: [&str; 3] = ["Terminal", "Files", "Notes"];
+
 pub const MAX_PANES: usize = 4;
 /// The size of a new terminal window, in characters.
 pub const PANE_SIZE: (usize, usize) = (80, 25);
@@ -411,10 +418,6 @@ pub fn next_window() {
 /// Windows whose close box was clicked since the last call.
 pub fn take_closing() -> Vec<usize> {
     core::mem::take(CLOSING.get())
-}
-
-pub fn closing() -> bool {
-    !CLOSING.get().is_empty()
 }
 
 /// The terminal's window on the desktop (the first one opened).
@@ -618,6 +621,7 @@ fn lay_out(target: Target, desktop: bool) -> bool {
             let inside = desk.window(id)?.content();
             let surface = Surface::new(inside.width, inside.height, target.mode.format)?;
             desk.set_pointer(*POINTER.get(), canvas.bounds());
+            desk.set_buttons(&BUTTONS, canvas.width());
             Some((desk, surface))
         });
     let (mut screen, desk, surface) = match windowed {
@@ -692,7 +696,42 @@ pub fn mouse_event(buttons: u8, dx: i32, dy: i32) {
         // The console's own window stays.
         MouseEffect::Close(TERMINAL) => {}
         MouseEffect::Close(id) => CLOSING.get().push(id),
+        MouseEffect::Click { id, x, y, raised } => {
+            if raised {
+                compose(bounds);
+                show(true);
+            }
+            // For the program in that window: the character under the pointer.
+            if let Some(pane) = PANES.get().iter().find(|p| p.window == id) {
+                let (w, h) = (GLYPH_WIDTH * pane.con.scale(), GLYPH_HEIGHT * pane.con.scale());
+                if CLICKS.get().len() < 16 {
+                    CLICKS.get().push((id, (x / w) as u16, (y / h) as u16));
+                }
+            }
+        }
+        MouseEffect::Launch(button) => {
+            if LAUNCHES.get().len() < 4 {
+                LAUNCHES.get().push(button);
+            }
+            // The thread that opens it may not be there yet.
+            crate::desk::start();
+        }
     }
+}
+
+/// Clicks inside windows since the last call: (window, column, line).
+pub fn take_clicks() -> Vec<(usize, u16, u16)> {
+    core::mem::take(CLICKS.get())
+}
+
+/// Desktop buttons clicked since the last call (their place in `BUTTONS`).
+pub fn take_launches() -> Vec<usize> {
+    core::mem::take(LAUNCHES.get())
+}
+
+/// Is there something the mouse asked for that desk.rs has not done yet?
+pub fn mouse_work() -> bool {
+    !CLICKS.get().is_empty() || !LAUNCHES.get().is_empty() || !CLOSING.get().is_empty()
 }
 
 /// Where the pointer is on the desktop: for `desktop` and the tests.

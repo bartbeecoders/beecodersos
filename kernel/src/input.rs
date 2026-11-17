@@ -24,6 +24,9 @@ pub enum Key {
     /// Alt+Tab: the next window gets the focus (the desktop takes this key
     /// itself; no program sees it).
     NextWindow,
+    /// The mouse was clicked in the program's window: column and line of
+    /// the character under the pointer, counted from 0.
+    Click(u16, u16),
     /// The (ACPI) power button was pressed, e.g. virt-manager "Shut Down".
     PowerButton,
 }

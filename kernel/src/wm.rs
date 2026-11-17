@@ -138,6 +138,12 @@ pub enum MouseEffect {
     Raised,
     /// The button went down on the close box of this window (its number).
     Close(usize),
+    /// The button went down inside a window, on what it shows: the
+    /// window's number and the place, in pixels from the top left of its
+    /// content. `raised`: the window also came to the top by it.
+    Click { id: usize, x: usize, y: usize, raised: bool },
+    /// The button went down on a button of the desktop (its place in the row).
+    Launch(usize),
 }
 
 pub struct Desktop {
@@ -148,11 +154,35 @@ pub struct Desktop {
     next_id: usize,
     /// `None` until a mouse moves.
     pointer: Option<Pointer>,
+    /// Buttons on the desktop itself, in a row at the top: label and place.
+    buttons: Vec<(String, Rect)>,
 }
+
+/// Where the row of desktop buttons starts, and how high a button is.
+const BUTTONS_AT: (usize, usize) = (100, 6);
+const BUTTON_HEIGHT: usize = GLYPH_HEIGHT + 8;
+const BUTTON_GAP: usize = 8;
 
 impl Desktop {
     pub fn new() -> Self {
-        Desktop { windows: Vec::new(), ids: Vec::new(), next_id: 0, pointer: None }
+        Desktop { windows: Vec::new(), ids: Vec::new(), next_id: 0, pointer: None, buttons: Vec::new() }
+    }
+
+    /// Put a row of buttons on the desktop (to start programs with the
+    /// mouse). Those that do not fit on a screen `width` pixels wide are
+    /// left out. Returns where each one is.
+    pub fn set_buttons(&mut self, labels: &[&str], width: usize) -> Vec<Rect> {
+        self.buttons.clear();
+        let mut x = BUTTONS_AT.0;
+        for label in labels {
+            let w = (label.chars().count() + 2) * GLYPH_WIDTH;
+            if x + w > width {
+                break;
+            }
+            self.buttons.push((String::from(*label), Rect::new(x, BUTTONS_AT.1, w, BUTTON_HEIGHT)));
+            x += w + BUTTON_GAP;
+        }
+        self.buttons.iter().map(|(_, rect)| *rect).collect()
     }
 
     /// Add a window on top of the others; returns its number (the first
@@ -219,6 +249,12 @@ impl Desktop {
     /// draw what is inside before the next window goes over it.
     pub fn draw_with(&self, canvas: &Canvas, mut content: impl FnMut(usize, &Window)) {
         canvas.fill_rect(canvas.bounds(), BACKGROUND);
+        for (label, rect) in &self.buttons {
+            canvas.fill_rect(*rect, BORDER_COLOR);
+            let inside = Rect::new(rect.x + 1, rect.y + 1, rect.width - 2, rect.height - 2);
+            canvas.fill_rect(inside, TITLE_BAR);
+            canvas.text(rect.x + GLYPH_WIDTH, rect.y + 4, label, TITLE_TEXT, TITLE_BAR, rect.width);
+        }
         for (i, window) in self.windows.iter().enumerate() {
             window.draw(canvas, i + 1 == self.windows.len());
             content(self.ids[i], window);
@@ -270,13 +306,15 @@ impl Desktop {
         let mut new = Pointer { x: step(old.x, dx, screen.width), y: step(old.y, dy, screen.height), buttons, grab: old.grab };
         let (was_down, is_down) = (old.buttons & 1 != 0, buttons & 1 != 0);
         let inside = |r: Rect| new.x >= r.x && new.x < r.x + r.width && new.y >= r.y && new.y < r.y + r.height;
-        let (mut raised, mut close) = (false, None);
+        let (mut raised, mut close, mut click, mut launch) = (false, None, None, None);
         if !is_down {
             new.grab = None;
         } else if !was_down {
             // The topmost window under the pointer comes to the top.
-            if let Some(at) = self.windows.iter().rposition(|w| inside(w.frame)) {
-                raised = self.raise(self.ids[at]);
+            match self.windows.iter().rposition(|w| inside(w.frame)) {
+                Some(at) => raised = self.raise(self.ids[at]),
+                // On the desktop itself: one of its buttons?
+                None => launch = self.buttons.iter().position(|(_, rect)| inside(*rect)),
             }
             let top = self.windows.last().filter(|w| inside(w.frame));
             if top.and_then(|w| w.close_box()).is_some_and(inside) {
@@ -286,11 +324,18 @@ impl Desktop {
                     let f = w.frame;
                     (new.y < f.y + BORDER + TITLE_HEIGHT).then(|| (new.x - f.x, new.y - f.y))
                 });
+                click = top.map(|w| w.content()).filter(|c| inside(*c)).map(|c| (new.x - c.x, new.y - c.y));
             }
         }
         self.pointer = Some(new);
         if let Some(id) = close {
             return MouseEffect::Close(id);
+        }
+        if let (Some((x, y)), Some(id)) = (click, self.top()) {
+            return MouseEffect::Click { id, x, y, raised };
+        }
+        if let Some(button) = launch {
+            return MouseEffect::Launch(button);
         }
         if let (Some((gx, gy)), Some(window)) = (new.grab, self.windows.last_mut()) {
             let f = window.frame;

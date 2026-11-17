@@ -54,6 +54,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("text editor: typing, moving, lines, what the window shows", text_editor),
     ("remote control: the keys a text stands for", remote_keys),
     ("file manager: order, choosing, questions, what the window shows", file_manager),
+    ("mouse: clicks inside windows, desktop buttons", mouse_clicks),
     ("heap: alloc and free", heap_alloc_free),
     ("heap: 1 MiB buffer", heap_large_buffer),
     ("ring: order and overflow", ring_buffer),
@@ -2122,16 +2123,28 @@ fn wm_windows() -> TestResult {
         seen.push(desk.top());
     }
     check_eq!(seen, [Some(b), Some(c), Some(a)]);
-    // A click on a window that lies lower brings it up; on the top window: nothing new.
+    // A click on a window that lies lower brings it up; on the top window
+    // the order stays. (Inside a window the click is also for its program:
+    // see the test of mouse clicks.)
+    let in_b = desk.window(b).ok_or("b")?.content();
     check_eq!(desk.mouse(0, 0, 0, screen), MouseEffect::PointerMoved(Rect::new(320, 240, wm::POINTER_WIDTH, wm::POINTER_HEIGHT)));
-    check_eq!(desk.mouse(1, 30, -60, screen), MouseEffect::Raised); // 350,180: only B is there
+    // 350,180: only B is there
+    check_eq!(desk.mouse(1, 30, -60, screen), MouseEffect::Click { id: b, x: 350 - in_b.x, y: 180 - in_b.y, raised: true });
     check_eq!(desk.top(), Some(b));
     check_eq!(desk.mouse(0, 0, 0, screen), MouseEffect::Nothing);
-    check_eq!(desk.mouse(1, 0, 0, screen), MouseEffect::Nothing);
+    check_eq!(desk.mouse(1, 0, 0, screen), MouseEffect::Click { id: b, x: 350 - in_b.x, y: 180 - in_b.y, raised: false });
+    check_eq!(desk.top(), Some(b));
     desk.mouse(0, 0, 0, screen);
+    // On its title bar: it comes up, and that is all.
+    check!(desk.raise(a));
+    desk.mouse(0, 0, -75, screen); // 350,105
+    check_eq!((desk.mouse(1, 0, 0, screen), desk.top()), (MouseEffect::Raised, Some(b)));
+    desk.mouse(0, 0, 0, screen);
+    desk.mouse(0, 0, 75, screen);
     // Where A and B overlap, the click goes to the one on top (B) ...
     desk.mouse(0, -150, -30, screen); // 200,150
-    check_eq!(desk.mouse(1, 0, 0, screen), MouseEffect::Nothing);
+    check_eq!(desk.mouse(1, 0, 0, screen), MouseEffect::Click { id: b, x: 200 - in_b.x, y: 150 - in_b.y, raised: false });
+    check_eq!(desk.top(), Some(b));
     desk.mouse(0, 0, 0, screen);
     // ... and on the desktop itself to nobody.
     desk.mouse(0, 300, 100, screen); // 500,250
@@ -2417,5 +2430,82 @@ fn file_manager() -> TestResult {
     b.key(Key::End, 4);
     check_eq!(row_text(&b.render(30, 6).0[4]).trim_end(), "         49  f49");
     check_eq!(b.render(0, 0).0.len(), 3);
+    Ok(())
+}
+
+fn mouse_clicks() -> TestResult {
+    use crate::display::PixelFormat::Xrgb8888;
+    use crate::filemgr::{Action, Browser, Entry};
+    use crate::gfx::{Canvas, Rect};
+    use crate::input::Key;
+    use crate::wm::{self, Desktop, MouseEffect};
+    let screen = Rect::new(0, 0, 640, 480);
+    let mut desk = Desktop::new();
+    // Buttons in a row at the top; one that does not fit is left out.
+    let places = desk.set_buttons(&["Terminal", "Files", "Notes"], 640);
+    check_eq!(places, [Rect::new(100, 6, 80, 24), Rect::new(188, 6, 56, 24), Rect::new(252, 6, 56, 24)]);
+    check_eq!(Desktop::new().set_buttons(&["Terminal", "Files", "Notes"], 250).len(), 2);
+    let (a, b) = (desk.open("A", Rect::new(20, 60, 300, 200)), desk.open("B", Rect::new(200, 100, 300, 200)));
+    let mut t = TestScreen::new(640, 480, 0, Xrgb8888);
+    desk.draw(&Canvas::new(t.pixels.as_mut_ptr(), t.mode));
+    check_eq!((t.rgb(100, 6), t.rgb(102, 8), t.rgb(99, 6), t.rgb(180, 6), t.rgb(184, 10)), (0x1F3A5F, wm::TITLE_BAR, wm::BACKGROUND, wm::BACKGROUND, wm::BACKGROUND));
+    check!(t.shows_at(108, 10, 'T', 0xFFFFFF, wm::TITLE_BAR) && t.shows_at(196, 10, 'F', 0xFFFFFF, wm::TITLE_BAR));
+
+    // Move the pointer to a place and press and let go there.
+    let click = |desk: &mut Desktop, x: usize, y: usize| {
+        desk.mouse(0, 0, 0, screen);
+        let p = desk.pointer().unwrap_or_else(|| panic!("no pointer"));
+        desk.mouse(0, x as i32 - p.x as i32, y as i32 - p.y as i32, screen);
+        let effect = desk.mouse(1, 0, 0, screen);
+        desk.mouse(0, 0, 0, screen);
+        effect
+    };
+    // On a button: start what it stands for. Next to it, on the desktop: nothing.
+    check_eq!(click(&mut desk, 110, 10), MouseEffect::Launch(0));
+    check_eq!(click(&mut desk, 300, 29), MouseEffect::Launch(2));
+    check_eq!(click(&mut desk, 184, 10), MouseEffect::Nothing);
+    check_eq!(click(&mut desk, 600, 400), MouseEffect::Nothing);
+    // Inside the top window: where, counted from the top left of its content.
+    let inside = desk.window(b).ok_or("b")?.content();
+    check_eq!(click(&mut desk, inside.x, inside.y), MouseEffect::Click { id: b, x: 0, y: 0, raised: false });
+    check_eq!(click(&mut desk, inside.x + 17, inside.y + 40), MouseEffect::Click { id: b, x: 17, y: 40, raised: false });
+    // In a window that lies lower: it comes up, and the click counts.
+    let inside_a = desk.window(a).ok_or("a")?.content();
+    check_eq!(click(&mut desk, inside_a.x + 5, inside_a.y + 100), MouseEffect::Click { id: a, x: 5, y: 100, raised: true });
+    check_eq!(desk.top(), Some(a));
+    // On the frame around the content (the padding, the title bar): no click for the program.
+    check_eq!(click(&mut desk, inside_a.x - 2, inside_a.y + 5), MouseEffect::Nothing);
+    check_eq!(click(&mut desk, 30, 65), MouseEffect::Nothing);
+    // A window over a button gets the click, not the button.
+    let c = desk.open("C", Rect::new(90, 0, 200, 100));
+    check!(matches!(click(&mut desk, 110, 10), MouseEffect::Nothing | MouseEffect::Click { .. }));
+    check_eq!(desk.top(), Some(c));
+
+    // The file manager: a click on an entry puts the bar there, a second one opens it.
+    let entry = |name: &str, folder: bool| Entry { name: String::from(name), folder, size: 1 };
+    let mut files = Browser::new();
+    files.show("/", vec![entry("docs", true), entry("a.txt", false), entry("b.txt", false)], None);
+    files.render(40, 8);
+    check_eq!(files.key(Key::Click(3, 3), 6), Action::None);
+    check_eq!(files.chosen().map(|e| e.name.as_str()), Some("b.txt"));
+    check_eq!(files.key(Key::Click(30, 3), 6), Action::Edit(String::from("/b.txt")));
+    check_eq!(files.key(Key::Click(0, 1), 6), Action::None);
+    check_eq!(files.key(Key::Click(0, 1), 6), Action::Go(String::from("/docs")));
+    // On the status line, below the list, or on the line of keys: nothing.
+    for (col, row) in [(0, 0), (5, 4), (5, 7), (0, 200)] {
+        check_eq!(files.key(Key::Click(col, row), 6), Action::None);
+        check_eq!(files.chosen().map(|e| e.name.as_str()), Some("docs"));
+    }
+    // The editor: a click puts the cursor there, within the text.
+    let mut edit = crate::textedit::Editor::new("first\nsecond line\nthird");
+    edit.render("f", 40, 10);
+    edit.key(Key::Click(3, 2), 9);
+    check_eq!(edit.position(), (2, 4));
+    edit.key(Key::Click(30, 1), 9);
+    check_eq!(edit.position(), (1, 6)); // past the end of the line: at its end
+    edit.key(Key::Click(2, 9), 9);
+    check_eq!(edit.position(), (3, 3)); // below the text: on the last line
+    edit.key(Key::Click(0, 0), 9);
+    check_eq!((edit.position(), edit.modified()), ((3, 3), false)); // the status line is not text
     Ok(())
 }

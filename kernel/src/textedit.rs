@@ -172,6 +172,11 @@ impl Editor {
             Key::Down => self.row = (self.row + 1).min(self.lines.len() - 1),
             Key::PageUp => self.row = self.row.saturating_sub(page),
             Key::PageDown => self.row = (self.row + page).min(self.lines.len() - 1),
+            // A click in the text puts the cursor there.
+            Key::Click(col, row) if row >= 1 => {
+                self.row = (self.top + row as usize - 1).min(self.lines.len() - 1);
+                self.col = self.left + col as usize;
+            }
             Key::Home => self.col = 0,
             Key::End => self.col = usize::MAX,
             _ => {}

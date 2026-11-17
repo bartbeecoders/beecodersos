@@ -177,6 +177,16 @@ impl Browser {
             Key::PageDown => self.chosen = (self.chosen + page.max(1)).min(last),
             Key::Home => self.chosen = 0,
             Key::End => self.chosen = last,
+            // A click on an entry puts the bar there; on the bar itself it opens.
+            Key::Click(_, row) if row >= 1 && self.top + row as usize - 1 < self.entries.len() && row as usize <= page => {
+                let at = self.top + row as usize - 1;
+                if at != self.chosen {
+                    self.chosen = at;
+                } else if let Some(entry) = self.chosen() {
+                    let path = join(&self.folder, &entry.name);
+                    return if entry.folder { Action::Go(path) } else { Action::Edit(path) };
+                }
+            }
             Key::Enter | Key::Right => {
                 if let Some(entry) = self.chosen() {
                     let path = join(&self.folder, &entry.name);

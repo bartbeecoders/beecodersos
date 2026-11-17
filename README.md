@@ -1202,8 +1202,8 @@ desktop.
   the bar on the folder just left. **n** makes a folder and **r** renames
   (the name is typed in the status line; Escape drops it), **d** or Delete
   deletes after a `y` (a folder only when it is empty), **u** reads the
-  folder again, **q** leaves. It is a list of text for now: no icons, no
-  mouse inside the window yet.
+  folder again, **q** leaves. A **click** on an entry puts the bar there, a
+  second click opens it. It is a list of text for now: no icons.
 - `sleep SECONDS` waits (used by the tests while another window works).
 - The boot flags `desktop=off` and `desktop=on` decide for one boot, whatever
   was saved. The screen is set up before the disk is read, so a machine with
@@ -1211,12 +1211,18 @@ desktop.
 - **Mouse** (USB, see the USB section): a pointer appears when the mouse
   first moves, and the window on top can be dragged by its title bar; it
   stays completely on the screen. `desktop` shows where the pointer is.
+  **Buttons** at the top of the desktop start programs with a click:
+  Terminal, Files (the file manager on the home folder) and Notes (the
+  editor on `notes.txt` there). A click **inside a window** goes to its
+  program as the character under the pointer: the file manager chooses and
+  opens, the editor puts its cursor there.
 - **Tests:** self-tests for the layout at every screen size and for drawing on
   a framebuffer in RAM; scenarios `desktop*.scn` check real pixels of the
   screen (`@screenshot WxH pixels X,Y=RRGGBB ...`); `desktop-windows.scn`
   types in a second window, changes focus with Alt+Tab and the mouse, and
   closes windows; `desktop-edit.scn` edits and saves files;
-  `desktop-files.scn` drives the file manager from the host. Through
+  `desktop-files.scn` drives the file manager from the host,
+  `desktop-launch.scn` uses the buttons and clicks in windows. Through
   `beectl.py text` the host sees the text of every window.
 
 ## USB: keyboard and mouse (xHCI) ✅ in QEMU, not yet tried on the HP

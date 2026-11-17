@@ -51,6 +51,31 @@ pub fn open_files(folder: &str) -> Result<usize, &'static str> {
     open("Files", "files", false, move |window| filemgr::run(window, folder, storage))
 }
 
+/// The folder new windows start in: the data partition if there is one.
+fn home() -> &'static str {
+    if storage::has_data() { storage::DATA_DIR } else { "/" }
+}
+
+/// What a click on a desktop button starts (`console::BUTTONS`): a
+/// terminal, the file manager on the home folder, or the editor on
+/// `notes.txt` there.
+pub fn launch(button: usize) -> Result<usize, &'static str> {
+    match button {
+        0 => open_terminal(),
+        1 => open_files(home()),
+        2 => open_editor(&filemgr::join(home(), "notes.txt")),
+        _ => Err("no such button"),
+    }
+}
+
+/// The mouse may ask for a window before any was opened with a command:
+/// the thread that looks after them must be there.
+pub fn start() {
+    if !*STARTED.get() {
+        *STARTED.get() = thread::spawn("desktop", None, serve).is_some();
+    }
+}
+
 /// A window, a session for its keys, and a thread that runs `program` in it.
 fn open(title: &str, thread_name: &str, prints: bool, program: impl FnOnce(usize) + 'static) -> Result<usize, &'static str> {
     let session = session::open().ok_or("too many sessions")?;
@@ -116,7 +141,7 @@ pub fn type_keys(keys: &[Key]) -> Result<usize, &'static str> {
 }
 
 fn work_waiting() -> bool {
-    console::closing()
+    console::mouse_work()
         || (console::focused_pane().is_some() && keyboard::pending())
         || TERMINALS.get().iter().any(|t| session::has_output(t.session) || !thread::is_alive(t.thread) || !console::pane_exists(t.window))
 }
@@ -143,6 +168,16 @@ fn step() {
         if let Some(terminal) = TERMINALS.get().iter().find(|t| t.window == window) {
             session::hang_up(terminal.session);
         }
+    }
+    for (window, col, row) in console::take_clicks() {
+        if let Some(terminal) = TERMINALS.get().iter().find(|t| t.window == window) {
+            session::push_key(terminal.session, Key::Click(col, row));
+        }
+    }
+    for button in console::take_launches() {
+        // Nothing to tell when it does not work (too many windows): the
+        // desktop simply stays as it is.
+        let _ = launch(button);
     }
     let mut i = 0;
     while i < TERMINALS.get().len() {
