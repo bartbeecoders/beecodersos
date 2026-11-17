@@ -1129,9 +1129,17 @@ video memory: write-combining
   VM it changes nothing. `display` shows `video memory: write-combining`, or
   `plain` and why. The boot flag `wc=off` switches it off.
 - **Measuring:** `display test` and `display speed` print how long drawing the whole screen takes.
-
-Not done: scrolling in jumps when output comes faster than the screen draws
-(only if the HP shows it is needed).
+- **The screen in memory:** everything is drawn on a copy of the screen in
+  normal memory, and only the parts that changed are copied to the video
+  memory (`console.rs`). A prompt, typed text or a word without a line end
+  appears at once; whole lines from a running command go to the screen in
+  batches, at most every 20 ms (the timer sees to the last ones), so a long
+  listing scrolls in jumps instead of drawing every line. What the mouse
+  pointer covered comes back from the copy. A crashing kernel shows every
+  change at once. The kernel heap may now take up to 1 GiB of the free RAM
+  (it was 64 MiB): the copy needs 8 MiB at full HD. Lines-at-a-time drawing
+  of rectangles and characters (`gfx.rs`) took the HP from 16.1 ms to 9.4 ms
+  for a whole 1280x1024 screen.
 
 ## Graphical desktop: a terminal in a window ✅
 

@@ -67,6 +67,8 @@ pub fn read_key() -> Key {
         if let Some(k) = serial::poll_key() {
             return k;
         }
+        // Nothing more will be printed until a key comes: show it all.
+        crate::console::flush();
         // Handle messages from beehive while idle (welcome after it connects).
         aibridge::drain();
         // The network is looked after by its own thread (`net::start_task`).

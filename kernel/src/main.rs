@@ -165,6 +165,7 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info: u32) -> ! {
     }
     println!();
     println!("Type 'help' for a list of commands.");
+    console::settle();
     shell.run()
 }
 

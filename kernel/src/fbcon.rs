@@ -51,6 +51,9 @@ pub struct FbCon<'a> {
     cursor: Option<usize>,
     /// Font size: 1 = 8x16 pixels per character, 2 = 16x32.
     scale: usize,
+    /// What was drawn since `take_dirty`: when the canvas is not the screen
+    /// itself but a copy in memory, this is the part to bring to the screen.
+    dirty: Rect,
 }
 
 impl<'a> FbCon<'a> {
@@ -75,7 +78,7 @@ impl<'a> FbCon<'a> {
             rows = rows.min(cells.len() / cols);
         }
         let cols = if rows == 0 { 0 } else { cols };
-        FbCon { canvas, area, cells, cols, rows, col: 0, row: 0, attr: 0x07, scrolls: 0, cursor: None, scale }
+        FbCon { canvas, area, cells, cols, rows, col: 0, row: 0, attr: 0x07, scrolls: 0, cursor: None, scale, dirty: Rect::new(0, 0, 0, 0) }
     }
 
     /// Font size: 1 or 2.
@@ -85,6 +88,15 @@ impl<'a> FbCon<'a> {
 
     pub fn canvas(&self) -> Canvas {
         self.canvas
+    }
+
+    /// The part of the canvas drawn on since the last call (empty: nothing).
+    pub fn take_dirty(&mut self) -> Rect {
+        core::mem::replace(&mut self.dirty, Rect::new(0, 0, 0, 0))
+    }
+
+    fn touch(&mut self, rect: Rect) {
+        self.dirty = self.dirty.union(&rect);
     }
 
     pub fn width(&self) -> usize {
@@ -121,6 +133,7 @@ impl<'a> FbCon<'a> {
     pub fn clear(&mut self) {
         if self.cols > 0 {
             self.canvas.fill_rect(self.area, PALETTE[(self.attr >> 4) as usize]);
+            self.touch(self.area);
         }
         let blank = self.blank();
         self.cells[..self.cols * self.rows].fill(blank);
@@ -196,6 +209,7 @@ impl<'a> FbCon<'a> {
         let (x, y) = self.origin(index);
         let s = self.scale;
         self.canvas.fill_rect(Rect::new(x, y + CURSOR_ROWS.start * s, GLYPH_WIDTH * s, CURSOR_ROWS.len() * s), color);
+        self.touch(Rect::new(x, y, GLYPH_WIDTH * s, GLYPH_HEIGHT * s));
     }
 
     /// Draw the part of the console inside `rect` again.
@@ -223,6 +237,7 @@ impl<'a> FbCon<'a> {
             return;
         }
         self.canvas.fill_rect(self.area, PALETTE[(self.attr >> 4) as usize]);
+        self.touch(self.area);
         for index in 0..self.cols * self.rows {
             self.draw_cell(index);
         }
@@ -242,6 +257,7 @@ impl<'a> FbCon<'a> {
             let (from, to) = (width * i / BARS.len(), width * (i + 1) / BARS.len());
             self.canvas.fill_rect(Rect::new(from, 0, to - from, height), PALETTE[*color as usize]);
         }
+        self.touch(self.canvas.bounds());
     }
 
     fn new_line(&mut self) {
@@ -280,5 +296,6 @@ impl<'a> FbCon<'a> {
         let (fg, bg) = (PALETTE[(cell >> 8) as usize & 0x0F], PALETTE[(cell >> 12) as usize]);
         let (x, y) = self.origin(index);
         self.canvas.glyph(x, y, cell as u8, fg, bg, self.scale);
+        self.touch(Rect::new(x, y, GLYPH_WIDTH * self.scale, GLYPH_HEIGHT * self.scale));
     }
 }

@@ -37,6 +37,8 @@ pub fn set_command(cmd: &str) {
 
 /// Called by the panic and exception handlers, before halting.
 pub fn record(kind: &str, msg: fmt::Arguments) {
+    // The message is on the screen before anything else is tried.
+    crate::console::show_now();
     if CRASHING.swap(true, Ordering::SeqCst) {
         return; // crashed while reporting a crash
     }

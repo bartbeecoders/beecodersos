@@ -29,6 +29,28 @@ impl Rect {
         let bottom = self.y.saturating_add(self.height).min(outer.y.saturating_add(outer.height));
         Rect { x, y, width: right.saturating_sub(x), height: bottom.saturating_sub(y) }
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.width == 0 || self.height == 0
+    }
+
+    /// The smallest rectangle that holds both (an empty one adds nothing).
+    pub fn union(&self, other: &Rect) -> Rect {
+        if self.is_empty() {
+            return *other;
+        }
+        if other.is_empty() {
+            return *self;
+        }
+        let (x, y) = (self.x.min(other.x), self.y.min(other.y));
+        let right = (self.x + self.width).max(other.x + other.width);
+        let bottom = (self.y + self.height).max(other.y + other.height);
+        Rect { x, y, width: right - x, height: bottom - y }
+    }
+
+    pub fn overlaps(&self, other: &Rect) -> bool {
+        !self.clip(other).is_empty()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -68,6 +90,24 @@ impl Canvas {
     /// The whole canvas.
     pub fn bounds(&self) -> Rect {
         Rect::new(0, 0, self.width(), self.height())
+    }
+
+    /// Copy the pixels inside `rect` from another canvas of exactly the same
+    /// mode (the screen kept in memory, see console.rs), line by line. With
+    /// a different mode nothing is copied.
+    pub fn copy_from(&self, other: &Canvas, rect: Rect) {
+        if self.mode != other.mode {
+            return;
+        }
+        let r = rect.clip(&self.clip);
+        if r.is_empty() {
+            return;
+        }
+        let bytes = self.mode.format.bytes();
+        for y in r.y..r.y + r.height {
+            let at = y * self.mode.pitch as usize + r.x * bytes;
+            unsafe { core::ptr::copy_nonoverlapping(other.framebuffer.add(at), self.framebuffer.add(at), r.width * bytes) };
+        }
     }
 
     /// Fill a rectangle with a 0xRRGGBB color; the part outside the canvas is left out.

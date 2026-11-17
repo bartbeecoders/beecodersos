@@ -7,7 +7,9 @@ use linked_list_allocator::LockedHeap;
 static ALLOCATOR: LockedHeap = LockedHeap::empty();
 
 /// Upper bound for the heap; the rest of RAM stays free for later use.
-const MAX_HEAP: u64 = 64 * 1024 * 1024;
+/// Room for a copy of the screen in memory (console.rs: 8 MiB at full HD,
+/// 33 MiB at 4K) and a window's worth of pixels for each application.
+const MAX_HEAP: u64 = 1024 * 1024 * 1024;
 const MIN_HEAP: u64 = 4 * 1024 * 1024;
 /// Only memory covered by the boot page tables (identity-mapped) is usable.
 const MAPPED_LIMIT: u64 = 4 * 1024 * 1024 * 1024;

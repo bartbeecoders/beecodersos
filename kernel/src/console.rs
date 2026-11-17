@@ -6,6 +6,12 @@
 //! display driver; from then on it is the framebuffer console (fbcon.rs),
 //! over the whole screen or inside the terminal window of the desktop (wm.rs).
 //!
+//! Drawing goes to a copy of the screen in memory (`Shadow`), and the parts
+//! that changed are copied to the video memory afterwards: at once for a
+//! prompt or anything else that does not end a line, and at most every
+//! 20 ms while lines pour out. Writing a line of text then costs memory
+//! writes only, and nothing is ever read back from video memory.
+//!
 //! When the bootloader started a graphics mode there is no text screen: what
 //! is printed before `start_display` only reaches the serial port, and is
 //! shown on screen afterwards from a small buffer (`EARLY`).
@@ -13,11 +19,12 @@
 use crate::display::{self, DisplayError, Target};
 use crate::fbcon::{self, FbCon};
 use crate::font::{GLYPH_HEIGHT, GLYPH_WIDTH};
-use crate::gfx::Canvas;
+use crate::gfx::{Canvas, Rect};
 use crate::ring::Global;
 use crate::bootfb::{self, Boot};
 use crate::wm::MouseEffect;
-use crate::{bootargs, serial, session, vga, wm};
+use crate::{bootargs, serial, session, thread, time, vga, wm};
+use core::sync::atomic::{AtomicBool, Ordering};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -107,6 +114,111 @@ static DESKTOP: Global<Option<wm::Desktop>> = Global::new(None);
 /// Where the pointer was when the desktop was last laid out or switched
 /// off: a mouse that was in use keeps its pointer.
 static POINTER: Global<Option<wm::Pointer>> = Global::new(None);
+
+/// The screen in memory: everything is drawn on `back`, and `show` copies
+/// what changed to `front`, the video memory.
+struct Shadow {
+    /// `back` draws in here.
+    _pixels: Vec<u8>,
+    front: Canvas,
+    back: Canvas,
+}
+
+impl Shadow {
+    /// `None` when there is no memory for it: drawing then goes straight
+    /// to the screen, as it did before.
+    fn new(target: &Target) -> Option<Shadow> {
+        let size = usize::try_from(target.mode.bytes()).ok()?;
+        let mut pixels = Vec::new();
+        pixels.try_reserve_exact(size).ok()?;
+        pixels.resize(size, 0);
+        let back = Canvas::new(pixels.as_mut_ptr(), target.mode);
+        Some(Shadow { _pixels: pixels, front: Canvas::new(target.framebuffer, target.mode), back })
+    }
+}
+
+static SHADOW: Global<Option<Shadow>> = Global::new(None);
+
+/// Drawn in memory, not yet on the screen.
+static PENDING: Global<Rect> = Global::new(Rect::new(0, 0, 0, 0));
+
+/// When the screen last got what was drawn (uptime in ms).
+static SHOWN_AT: Global<u64> = Global::new(0);
+
+/// Lines pouring out reach the screen this often.
+const SHOW_EVERY_MS: u64 = 20;
+
+/// Show every change at once: during boot, when the clock does not tick
+/// yet, and once the kernel is crashing.
+static IMMEDIATE: AtomicBool = AtomicBool::new(true);
+
+/// The boot is over: from now on, lines that pour out are shown in batches.
+pub fn settle() {
+    show(true);
+    IMMEDIATE.store(false, Ordering::SeqCst);
+}
+
+/// Put everything drawn so far on the screen, and keep doing so after every
+/// change: the first thing a crashing kernel does (crash.rs).
+pub fn show_now() {
+    IMMEDIATE.store(true, Ordering::SeqCst);
+    show(true);
+}
+
+/// Bring everything drawn so far to the screen (before waiting for a key).
+pub fn flush() {
+    show(true);
+}
+
+/// The screen is being rebuilt (another size, desktop on or off): the timer
+/// keeps its hands off meanwhile.
+static LAYING_OUT: AtomicBool = AtomicBool::new(false);
+
+/// From the timer interrupt, 100 times a second: lines that were held back
+/// for a batch reach the screen even when the command that printed them is
+/// busy and prints nothing more for a while. It only copies pixels.
+pub fn on_tick() {
+    if !IMMEDIATE.load(Ordering::Relaxed) && !LAYING_OUT.load(Ordering::Relaxed) {
+        show(false);
+    }
+}
+
+/// Is a batch due? `force`, crash or boot: yes. Otherwise when the last one
+/// is `SHOW_EVERY_MS` ago.
+pub fn show_due(force: bool, immediate: bool, now_ms: u64, shown_at_ms: u64) -> bool {
+    force || immediate || now_ms.saturating_sub(shown_at_ms) >= SHOW_EVERY_MS
+}
+
+/// Something was drawn on the canvas outside the console's cells.
+fn damage(rect: Rect) {
+    let pending = PENDING.get();
+    *pending = pending.union(&rect);
+}
+
+/// Bring what was drawn to the screen (`force`: now, whatever the time).
+fn show(force: bool) {
+    let Screen::Graphics(screen) = SCREEN.get() else { return };
+    damage(screen.take_dirty());
+    let Some(shadow) = SHADOW.get() else {
+        // Drawn straight on the screen: only the pointer may need repair.
+        *PENDING.get() = Rect::new(0, 0, 0, 0);
+        return pointer_on_top();
+    };
+    let rect = *PENDING.get();
+    let now = time::uptime_ms();
+    if rect.is_empty() || !show_due(force, IMMEDIATE.load(Ordering::Relaxed), now, *SHOWN_AT.get()) {
+        return;
+    }
+    *PENDING.get() = Rect::new(0, 0, 0, 0);
+    *SHOWN_AT.get() = now;
+    shadow.front.copy_from(&shadow.back, rect);
+    // The pointer lives on the screen only: put it back where it was covered.
+    if let Some(desk) = DESKTOP.get() {
+        if desk.pointer().is_some_and(|p| Rect::new(p.x, p.y, wm::POINTER_WIDTH, wm::POINTER_HEIGHT).overlaps(&rect)) {
+            desk.draw_pointer(&shadow.front);
+        }
+    }
+}
 
 /// The terminal's window on the desktop (the first one opened).
 const TERMINAL: usize = 0;
@@ -223,7 +335,8 @@ pub fn screen_text() -> String {
 }
 
 /// A picture of the screen: every `scale`-th pixel, as (width, height, RGB
-/// bytes). `None` on the text screen.
+/// bytes). `None` on the text screen. It is read from the screen in memory,
+/// so the mouse pointer is not in it.
 pub fn capture(scale: usize) -> Option<(usize, usize, Vec<u8>)> {
     let Screen::Graphics(screen) = SCREEN.get() else { return None };
     let canvas = screen.canvas();
@@ -281,7 +394,10 @@ fn lay_out(target: Target, desktop: bool) -> bool {
     if let Some(pointer) = DESKTOP.get().as_ref().and_then(|desk| desk.pointer()) {
         *POINTER.get() = Some(pointer);
     }
-    let canvas = Canvas::new(target.framebuffer, target.mode);
+    LAYING_OUT.store(true, Ordering::SeqCst);
+    // The old in-memory screen stays until the console has moved off it.
+    let shadow = Shadow::new(&target);
+    let canvas = shadow.as_ref().map_or(Canvas::new(target.framebuffer, target.mode), |s| s.back);
     let scale = font_scale(*FONT.get(), canvas.height());
     let frame = if desktop { wm::terminal_frame(canvas.width(), canvas.height(), scale) } else { None };
     let mut screen = match frame {
@@ -312,7 +428,10 @@ fn lay_out(target: Target, desktop: bool) -> bool {
         screen.sync_cursor();
     }
     *SCREEN.get() = Screen::Graphics(screen);
-    pointer_on_top();
+    *SHADOW.get() = shadow;
+    LAYING_OUT.store(false, Ordering::SeqCst);
+    damage(canvas.bounds());
+    show(true);
     frame.is_some()
 }
 
@@ -340,12 +459,18 @@ pub fn mouse_event(buttons: u8, dx: i32, dy: i32) {
     let canvas = screen.canvas();
     match desk.mouse(buttons, dx, dy, canvas.bounds()) {
         MouseEffect::Nothing => {}
-        MouseEffect::PointerMoved(old) => {
-            // Repair what the pointer covered, then draw it in its new place.
-            desk.draw(&canvas.clipped(old));
-            screen.redraw_in(old);
-            desk.draw_pointer(&canvas);
-        }
+        MouseEffect::PointerMoved(old) => match SHADOW.get() {
+            // What the pointer covered comes back from memory.
+            Some(shadow) => {
+                shadow.front.copy_from(&shadow.back, old);
+                desk.draw_pointer(&shadow.front);
+            }
+            None => {
+                desk.draw(&canvas.clipped(old));
+                screen.redraw_in(old);
+                desk.draw_pointer(&canvas);
+            }
+        },
         MouseEffect::WindowMoved => {
             if let Some(window) = desk.window(TERMINAL) {
                 let area = window.content();
@@ -353,7 +478,8 @@ pub fn mouse_event(buttons: u8, dx: i32, dy: i32) {
             }
             desk.draw(&canvas);
             screen.redraw();
-            desk.draw_pointer(&canvas);
+            damage(canvas.bounds());
+            show(true);
         }
     }
 }
@@ -363,8 +489,12 @@ pub fn pointer() -> Option<(usize, usize)> {
     DESKTOP.get().as_ref()?.pointer().map(|p| (p.x, p.y))
 }
 
-/// Text was drawn and may have covered the pointer: put it back on top.
+/// Without the screen in memory: text was drawn and may have covered the
+/// pointer, so put it back on top.
 fn pointer_on_top() {
+    if SHADOW.get().is_some() {
+        return;
+    }
     if let (Some(desk), Screen::Graphics(screen)) = (DESKTOP.get().as_ref(), SCREEN.get()) {
         desk.draw_pointer(&screen.canvas());
     }
@@ -389,6 +519,7 @@ pub fn show_color_bars() {
     if let Screen::Graphics(screen) = SCREEN.get() {
         screen.color_bars();
     }
+    show(true);
 }
 
 /// Draw the whole screen again; returns how long it took in microseconds.
@@ -399,8 +530,9 @@ pub fn redraw() -> u64 {
             desk.draw(&screen.canvas());
         }
         screen.redraw();
+        damage(screen.canvas().bounds());
     }
-    pointer_on_top();
+    show(true);
     crate::time::micros() - start
 }
 
@@ -409,7 +541,7 @@ pub fn clear() {
         return;
     }
     SCREEN.get().clear();
-    pointer_on_top();
+    show(true);
     serial::write_str("\x1b[2J\x1b[H");
 }
 
@@ -436,7 +568,10 @@ fn ansi(c: vga::Color) -> &'static str {
     }
 }
 
-struct Console;
+struct Console {
+    /// The last piece written ended a line.
+    ended_line: bool,
+}
 
 impl Write for Console {
     fn write_str(&mut self, s: &str) -> fmt::Result {
@@ -447,7 +582,7 @@ impl Write for Console {
         let screen = SCREEN.get();
         screen.write_str(s);
         screen.sync_cursor();
-        pointer_on_top();
+        self.ended_line = s.ends_with('\n');
         if let Screen::Text(_) = screen {
             let (early, len) = EARLY.get();
             let n = s.len().min(early.len() - *len);
@@ -466,7 +601,13 @@ impl Write for Console {
 
 #[doc(hidden)]
 pub fn _print(args: fmt::Arguments) {
-    let _ = Console.write_fmt(args);
+    let mut console = Console { ended_line: false };
+    let _ = console.write_fmt(args);
+    if session::current().is_none() {
+        // A prompt, a progress dot, a word from a background thread: on the
+        // screen at once. Whole lines from a running command: in batches.
+        show(!console.ended_line || !thread::on_console());
+    }
 }
 
 #[macro_export]
@@ -519,7 +660,7 @@ pub fn redraw_line(mark: &Mark, text: &[char], old_len: usize, cursor: usize, ol
     }
     screen.set_pos(end.0, end.1);
     screen.set_cursor(mark.start(screen) + cursor);
-    pointer_on_top();
+    show(true);
 
     // Serial fast paths: typing or backspacing at the end of the line.
     let mut buf = [0u8; 4];

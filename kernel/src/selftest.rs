@@ -49,6 +49,7 @@ macro_rules! check_eq {
 const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("crash: restart or halt afterwards", crash_then),
     ("gfx: the fast drawing paths give the same picture", gfx_fast_paths),
+    ("screen in memory: changed parts are copied, in batches", screen_in_memory),
     ("heap: alloc and free", heap_alloc_free),
     ("heap: 1 MiB buffer", heap_large_buffer),
     ("ring: order and overflow", ring_buffer),
@@ -2051,5 +2052,46 @@ fn gfx_fast_paths() -> TestResult {
         let size = t.mode.bytes() as usize;
         check!(t.pixels[size..].iter().all(|b| *b == 0xEE));
     }
+    Ok(())
+}
+
+fn screen_in_memory() -> TestResult {
+    use crate::console::show_due;
+    use crate::display::PixelFormat::{Rgb565, Xrgb8888};
+    use crate::gfx::{Canvas, Rect};
+    // Rectangles: what must be copied is the union of what was drawn.
+    let (a, b, none) = (Rect::new(10, 20, 5, 5), Rect::new(12, 2, 30, 20), Rect::new(7, 7, 0, 9));
+    check_eq!(a.union(&b), Rect::new(10, 2, 32, 23));
+    check_eq!((a.union(&none), none.union(&a), none.union(&none).is_empty()), (a, a, true));
+    check!(a.overlaps(&b) && !a.overlaps(&Rect::new(15, 20, 5, 5)) && !a.overlaps(&none));
+    // The console says which part of its canvas it drew on.
+    let mut cells = [0u16; 80 * 30];
+    let mut back = TestScreen::new(640, 480, 0, Xrgb8888);
+    let mut con = crate::fbcon::FbCon::new(back.pixels.as_mut_ptr(), back.mode, &mut cells);
+    con.clear();
+    check_eq!(con.take_dirty(), Rect::new(0, 0, 640, 480));
+    check!(con.take_dirty().is_empty());
+    con.set_pos(3, 10);
+    con.write_str("hi");
+    con.sync_cursor();
+    check_eq!(con.take_dirty(), Rect::new(0, 0, 8, 16).union(&Rect::new(80, 48, 24, 16))); // old cursor, text, new cursor
+    // Copying that part to the screen: exactly those pixels arrive.
+    let mut front = TestScreen::new(640, 480, 0, Xrgb8888);
+    let (from, to) = (Canvas::new(back.pixels.as_mut_ptr(), back.mode), Canvas::new(front.pixels.as_mut_ptr(), front.mode));
+    to.copy_from(&from, Rect::new(80, 48, 16, 16));
+    check!(front.shows(3, 10, 'h', Color::LightGray, Color::Black) && front.shows(3, 11, 'i', Color::LightGray, Color::Black));
+    check_eq!((front.pixel(79, 48), front.pixel(96, 48), front.pixel(80, 47), front.pixel(80, 64)), (0xEEEEEEEE, 0xEEEEEEEE, 0xEEEEEEEE, 0xEEEEEEEE));
+    // A part that sticks out is cut off; another pixel format is refused.
+    to.copy_from(&from, Rect::new(632, 470, 100, 100));
+    check_eq!((front.pixel(639, 479), front.pixel(631, 479)), (0, 0xEEEEEEEE));
+    check!(front.pixels[front.mode.bytes() as usize..].iter().all(|b| *b == 0xEE));
+    let mut other = TestScreen::new(640, 480, 0, Rgb565);
+    Canvas::new(other.pixels.as_mut_ptr(), other.mode).copy_from(&from, Rect::new(0, 0, 640, 480));
+    check!(other.pixels.iter().all(|b| *b == 0xEE));
+    // When a batch is due: at once if forced or during boot or a crash,
+    // else 20 ms after the last one.
+    check!(show_due(true, false, 100, 100) && show_due(false, true, 100, 100));
+    check!(!show_due(false, false, 119, 100) && show_due(false, false, 120, 100));
+    check!(!show_due(false, false, 5, 100)); // a clock that went back: wait
     Ok(())
 }

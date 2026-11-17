@@ -34,6 +34,7 @@ pub fn init() {
 /// Called from the IRQ0 handler.
 pub fn on_tick() {
     TICKS.fetch_add(1, Ordering::Relaxed);
+    crate::console::on_tick();
 }
 
 pub fn uptime_ms() -> u64 {
