@@ -78,6 +78,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("install: what is on a disk (empty, ours, unfinished, another system)", install_inspect),
     ("install: files in the boot partition, also damaged ones", install_fat),
     ("install: memory kept for the bootloader's files; paths on / and /data", install_memory_and_paths),
+    ("remote work: which kernel to fetch, where a command's output ends, reading the screen", remote_work),
     ("usb: what devices say about themselves, also cut short", usb_descriptors),
     ("usb: keyboard reports become key presses, mouse reports movement", usb_reports),
     ("usb: xHCI rings and requests", xhci_rings),
@@ -1953,5 +1954,47 @@ fn install_memory_and_paths() -> TestResult {
     check_eq!(route("/system/data", true), (false, String::from("/system/data")));
     check_eq!(route("/", true), (false, String::from("/")));
     check_eq!(route("/data/notes.txt", false), (false, String::from("/data/notes.txt")));
+    Ok(())
+}
+
+fn remote_work() -> TestResult {
+    use crate::bootslots::Phase;
+    use crate::display::PixelFormat::*;
+    use crate::hivectl::before_prompt;
+    use crate::update::wanted;
+    // A kernel on offer is fetched unless we know it already.
+    check_eq!(wanted(48, 47, (Phase::Ok, 47)), Ok(()));
+    check_eq!(wanted(46, 47, (Phase::Ok, 47)), Ok(())); // an older one too: the host decides
+    check!(wanted(47, 47, (Phase::Ok, 40)).is_err()); // it is running
+    check!(wanted(48, 47, (Phase::Ok, 48)).is_err()); // installed (the other slot runs for now)
+    check!(wanted(48, 47, (Phase::Failed, 48)).is_err()); // tried and failed: not again
+    check_eq!(wanted(49, 47, (Phase::Failed, 48)), Ok(())); // the next one is tried
+    check!(wanted(49, 47, (Phase::Pending, 48)).is_err() && wanted(49, 47, (Phase::Armed, 48)).is_err());
+    // A command is done when the output ends with the shell's prompt.
+    check_eq!(before_prompt("hello\nbee:/$ "), Some("hello\n"));
+    check_eq!(before_prompt("bee:/data/work$ "), Some(""));
+    check_eq!(before_prompt("a\nb\nbee:/x$ "), Some("a\nb\n"));
+    for not_yet in ["", "hello\n", "hello", "bee:/$", "bee:/$ x", "bee:/$ \n", "xbee:/$ ", "bee:/a b$ ", "see bee:/$ "] {
+        check_eq!((not_yet, before_prompt(not_yet)), (not_yet, None));
+    }
+    // Reading pixels back: what was encoded comes out again (565 loses the low bits).
+    for rgb in [0x000000, 0xFFFFFF, 0xA8D0F0, 0x123456, 0xFF0000, 0x00FF00, 0x0000FF] {
+        check_eq!(Xrgb8888.decode(Xrgb8888.encode(rgb)), rgb);
+        check_eq!(Xbgr8888.decode(Xbgr8888.encode(rgb)), rgb);
+        check_eq!(Rgb888.decode(Rgb888.encode(rgb)), rgb);
+        let back = Rgb565.decode(Rgb565.encode(rgb));
+        check!((0..3).all(|i| ((back >> (i * 8)) & 0xFF).abs_diff((rgb >> (i * 8)) & 0xFF) <= 8));
+    }
+    check_eq!((Rgb565.decode(0xFFFF), Rgb565.decode(0)), (0xFFFFFF, 0));
+    let mut t = TestScreen::new(16, 8, 3, Rgb888);
+    let canvas = crate::gfx::Canvas::new(t.pixels.as_mut_ptr(), t.mode);
+    canvas.fill_rect(crate::gfx::Rect::new(2, 1, 3, 2), 0xA8D0F0);
+    check_eq!((canvas.pixel(2, 1), canvas.pixel(4, 2), canvas.pixel(5, 2)), (0xA8D0F0, 0xA8D0F0, 0xEEEEEE));
+    check_eq!((canvas.pixel(16, 0), canvas.pixel(0, 8), canvas.pixel(usize::MAX, usize::MAX)), (0, 0, 0));
+    // Characters of the screen font back to text.
+    for c in ['a', 'Z', '~', ' ', 'é', 'ü', '§', '■', 'ñ'] {
+        check_eq!(crate::vga::from_cp437(crate::vga::cp437(c)), c);
+    }
+    check_eq!((crate::vga::from_cp437(0), crate::vga::from_cp437(0x7F), crate::vga::from_cp437(0xB0)), (' ', ' ', ' '));
     Ok(())
 }

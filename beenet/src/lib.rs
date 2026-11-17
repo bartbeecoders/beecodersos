@@ -19,6 +19,7 @@ extern crate alloc;
 
 mod dhcp;
 mod dns;
+pub mod base64;
 pub mod hive;
 pub mod http;
 pub mod sha256;

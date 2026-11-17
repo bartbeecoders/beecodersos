@@ -122,6 +122,21 @@ impl Canvas {
         }
     }
 
+    /// The 0xRRGGBB color of a pixel; black outside the canvas. Reading
+    /// video memory is slow on real hardware: for screenshots only.
+    pub fn pixel(&self, x: usize, y: usize) -> u32 {
+        if x >= self.width() || y >= self.height() {
+            return 0;
+        }
+        let bytes = self.mode.format.bytes();
+        let at = y * self.mode.pitch as usize + x * bytes;
+        let mut value = [0u8; 4];
+        for (i, b) in value[..bytes].iter_mut().enumerate() {
+            *b = unsafe { self.framebuffer.add(at + i).read_volatile() };
+        }
+        self.mode.format.decode(u32::from_le_bytes(value))
+    }
+
     /// Callers have checked: x < width and y < height.
     fn put(&self, x: usize, y: usize, value: u32) {
         let bytes = self.mode.format.bytes();

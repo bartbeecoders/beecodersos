@@ -333,15 +333,9 @@ fn slot_file(slot: u8) -> &'static [u8; 11] {
     }
 }
 
-/// Upgrade a disk that holds BeeCodersOs: write the image's kernel into the
-/// slot that is not the good one and put it on trial. At the next boot the
-/// new kernel arms the rollback, checks itself and becomes the good slot;
-/// if it fails, the old one boots again (bootslots.rs). os and data are not
-/// touched. Only the contents of clusters the slot file already has are
-/// written: the FAT file system keeps its shape.
-/// Returns the slot written and the build number of the new kernel.
-pub fn upgrade<D: BlockDevice>(disk: &mut D, image: &[u8], mut step: impl FnMut(&str)) -> Result<(u8, u32), String> {
-    let fail = |what: &str, e: FsError| format!("{what}: {e}");
+/// Upgrade a disk that holds BeeCodersOs with the kernel of an install
+/// image: see `write_trial`. Returns the slot written and the build number.
+pub fn upgrade<D: BlockDevice>(disk: &mut D, image: &[u8], step: impl FnMut(&str)) -> Result<(u8, u32), String> {
     if !is_image(image) {
         return Err(String::from("this is not an install image"));
     }
@@ -349,9 +343,36 @@ pub fn upgrade<D: BlockDevice>(disk: &mut D, image: &[u8], mut step: impl FnMut(
     let mut source = fat::Memory(image);
     let new = Fat16::open(&mut source, BOOT_START, BOOT_SECTORS)
         .and_then(|f| Some((f, f.find(&mut source, fat::KERNEL_A)?)))
-        .and_then(|(f, file)| Some((f.sectors(&mut source, &file)?, file.size)));
-    let (new_sectors, new_size) = new.ok_or("the install image has no kernel in it")?;
+        .and_then(|(f, file)| f.sectors(&mut source, &file));
+    let sectors = new.ok_or("the install image has no kernel in it")?;
+    let mut kernel = Vec::with_capacity(sectors.len() * BLOCK_SIZE);
+    for from in sectors {
+        kernel.extend_from_slice(&image[from as usize * BLOCK_SIZE..][..BLOCK_SIZE]);
+    }
+    write_trial(disk, &kernel, build, step).map(|slot| (slot, build))
+}
 
+/// The disk this machine's installed system is on: the first one that
+/// holds BeeCodersOs with kernel slots.
+pub fn boot_disk() -> Option<crate::disks::DiskRef> {
+    (0..crate::disks::count())
+        .map(crate::disks::DiskRef)
+        .find(|disk| matches!(inspect(&mut disk.clone()), Ok(Contents::Installed { .. })))
+}
+
+/// Write a new kernel into the slot that is not the good one and put it on
+/// trial. At the next boot the new kernel arms the rollback, checks itself
+/// and becomes the good slot; if it fails, the old one boots again
+/// (bootslots.rs). os and data are not touched. Only the contents of clusters
+/// the slot file already has are written: the FAT file system keeps its
+/// shape. `kernel` may end in zeros (a padded slot file). Returns the slot.
+pub fn write_trial<D: BlockDevice>(disk: &mut D, kernel: &[u8], build: u32, mut step: impl FnMut(&str)) -> Result<u8, String> {
+    let fail = |what: &str, e: FsError| format!("{what}: {e}");
+    // What counts is the kernel without the zeros a slot file is filled up with.
+    let real = kernel.len() - kernel.iter().rev().take_while(|b| **b == 0).count();
+    if real < 64 || &kernel[..4] != b"\x7fELF" {
+        return Err(String::from("that is not a kernel"));
+    }
     let boot = Fat16::open(disk, BOOT_START, BOOT_SECTORS).ok_or("the disk's boot partition cannot be read")?;
     let conf = boot.find(disk, fat::CONF).and_then(|f| boot.sector_of(f.first_cluster)).ok_or("the disk's boot settings were not found")?;
     let mut sector: Block = [0; BLOCK_SIZE];
@@ -362,11 +383,11 @@ pub fn upgrade<D: BlockDevice>(disk: &mut D, image: &[u8], mut step: impl FnMut(
     }
     let spare = if state.good == b'a' { b'b' } else { b'a' };
     let old = boot.find(disk, slot_file(spare)).ok_or("the disk has no file for the spare kernel slot")?;
-    if old.size < new_size {
+    if old.size < real as u64 {
         return Err(format!(
             "the kernel slots on this disk hold {} KiB and the new kernel needs {} KiB: this disk was made by an older version (use --reinstall, or --erase)",
             old.size / 1024,
-            new_size / 1024
+            real.div_ceil(1024)
         ));
     }
     let target = boot.sectors(disk, &old).ok_or("the spare kernel slot on the disk is damaged")?;
@@ -374,8 +395,9 @@ pub fn upgrade<D: BlockDevice>(disk: &mut D, image: &[u8], mut step: impl FnMut(
     step(&format!("writing the new kernel (b{build}) into slot {}", spare as char));
     let content = |i: usize| -> Block {
         let mut b: Block = [0; BLOCK_SIZE];
-        if let Some(&from) = new_sectors.get(i) {
-            b.copy_from_slice(&image[from as usize * BLOCK_SIZE..][..BLOCK_SIZE]);
+        if let Some(from) = kernel.get(i * BLOCK_SIZE..) {
+            let n = from.len().min(BLOCK_SIZE);
+            b[..n].copy_from_slice(&from[..n]);
         }
         b // past the new kernel's end: zeros
     };
@@ -399,7 +421,7 @@ pub fn upgrade<D: BlockDevice>(disk: &mut D, image: &[u8], mut step: impl FnMut(
     state.default = spare;
     bootslots::render(&mut sector, &state);
     disk.write_block(conf, &sector).and_then(|_| disk.flush()).map_err(|e| fail("writing the boot settings", e))?;
-    Ok((spare, build))
+    Ok(spare)
 }
 
 /// Write the boot area and the os partition again; keep the data partition

@@ -38,7 +38,8 @@ const REPLY_TIMEOUT_MS: u64 = 120_000;
 const MAX_LINE: usize = 8192;
 
 static PORT: Global<Uart> = Global::new(Uart::new(COM2));
-static RX: Ring<4096> = Ring::new();
+/// Room for two of the longest lines the host sends (pieces of a kernel).
+static RX: Ring<16384> = Ring::new();
 static PRESENT: AtomicBool = AtomicBool::new(false);
 static STATE: Global<State> = Global::new(State { line: Vec::new(), peer: None, next_id: 1, status: None });
 
@@ -75,7 +76,7 @@ pub fn on_interrupt() {
 }
 
 pub fn pending() -> bool {
-    !RX.is_empty() || !LINK.get().incoming.is_empty()
+    !RX.is_empty() || !LINK.get().incoming.is_empty() || !ANSWERS.get().is_empty()
 }
 
 /// Send one JSON message (a line). Silently dropped without a COM2 port,
@@ -98,16 +99,85 @@ pub fn send(msg: &str) {
     }
 }
 
-/// Next complete message from the host. Welcome messages are handled here.
-fn poll_message() -> Option<Object> {
+/// Answers waiting for whoever asked, and requests from the host (remote
+/// control) waiting for the control thread. Both are bounded.
+static ANSWERS: Global<VecDeque<Object>> = Global::new(VecDeque::new());
+static REQUESTS: Global<VecDeque<Object>> = Global::new(VecDeque::new());
+const MAX_WAITING: usize = 64;
+/// `ai control on`: the host may run commands here and look at the screen.
+static CONTROL: AtomicBool = AtomicBool::new(false);
+
+/// Sort one message from the host: a welcome is handled at once, a request
+/// goes to the control thread (or is refused), everything else is an answer.
+fn sort(msg: Object) {
+    match msg.str("type") {
+        Some("welcome") => {
+            let st = STATE.get();
+            let backend = msg.str("backend").unwrap_or("?");
+            let model = msg.str("model").unwrap_or("");
+            st.peer = Some(alloc::format!("{backend} {model}").trim_end().into());
+            if let Some(s) = st.status.clone() {
+                send(&s);
+            }
+        }
+        Some("run" | "screenshot") => {
+            let rid = msg.str("rid").unwrap_or("");
+            // The kill switch (`ai off`) stops the host from acting here too.
+            if !CONTROL.load(Ordering::Relaxed) || !LINK.get().enabled {
+                let kind = if msg.str("type") == Some("run") { "ran" } else { "shot" };
+                let why = "remote control is switched off on this machine (ai control on, typed on its own console)";
+                send(&Obj::new().str("type", kind).str("rid", rid).bool("done", true).str("error", why).finish());
+            } else if REQUESTS.get().len() < MAX_WAITING {
+                REQUESTS.get().push_back(msg);
+            }
+        }
+        _ => {
+            if ANSWERS.get().len() >= MAX_WAITING {
+                ANSWERS.get().pop_front(); // nobody is listening: the oldest goes
+            }
+            ANSWERS.get().push_back(msg);
+        }
+    }
+}
+
+/// Read what the serial port holds, without waiting for its interrupt. The
+/// interrupt handler takes a limited number of bytes per interrupt; when a
+/// long line arrives in one burst (a piece of a kernel), the port keeps its
+/// interrupt line raised and no further interrupt comes. So whoever waits
+/// for the host also looks at the port itself. Interrupts are off meanwhile:
+/// the handler and this must not fill the ring at the same time.
+fn poll_port() {
+    if !PRESENT.load(Ordering::Relaxed) {
+        return;
+    }
+    let flags: u64;
+    unsafe { core::arch::asm!("pushfq", "pop {}", "cli", out(reg) flags) };
+    for _ in 0..64 {
+        let mut taken = 0;
+        PORT.get().receive(&mut Hardware, |b| {
+            RX.push(b);
+            taken += 1;
+        });
+        if taken < crate::uart::RECEIVE_LIMIT {
+            break;
+        }
+    }
+    if flags & 0x200 != 0 {
+        unsafe { core::arch::asm!("sti", options(nomem, nostack)) };
+    }
+}
+
+/// Take in what has arrived from the host, whichever way it came.
+pub fn pump() {
+    poll_port();
     // The network link hands over whole lines, already checked.
     while let Some(line) = LINK.get().incoming.pop_front() {
         if let Some(msg) = json::parse(&line) {
-            return Some(msg);
+            sort(msg);
         }
     }
-    let st = STATE.get();
     while let Some(b) = RX.pop() {
+        let st = STATE.get();
         if b != b'\n' {
             if st.line.len() < MAX_LINE {
                 st.line.push(b);
@@ -115,19 +185,92 @@ fn poll_message() -> Option<Object> {
             continue;
         }
         let line = core::mem::take(&mut st.line);
-        let Some(msg) = core::str::from_utf8(&line).ok().and_then(json::parse) else { continue };
-        if msg.str("type") == Some("welcome") {
-            let backend = msg.str("backend").unwrap_or("?");
-            let model = msg.str("model").unwrap_or("");
-            st.peer = Some(alloc::format!("{backend} {model}").trim_end().into());
-            if let Some(s) = st.status.clone() {
-                send(&s);
-            }
-            continue;
+        if let Some(msg) = core::str::from_utf8(&line).ok().and_then(json::parse) {
+            sort(msg);
         }
-        return Some(msg);
     }
-    None
+}
+
+/// Next answer from the host.
+fn poll_message() -> Option<Object> {
+    pump();
+    ANSWERS.get().pop_front()
+}
+
+/// Remote control (`ai control on|off`): may the host run commands here?
+pub fn set_control(on: bool) {
+    CONTROL.store(on, Ordering::SeqCst);
+    if !on {
+        REQUESTS.get().clear();
+    }
+}
+
+/// False after `ai off`: nothing from the host is acted on.
+pub fn enabled() -> bool {
+    LINK.get().enabled
+}
+
+pub fn control() -> bool {
+    CONTROL.load(Ordering::Relaxed)
+}
+
+/// The next request from the host, for the control thread (hivectl.rs).
+pub fn take_request() -> Option<Object> {
+    pump();
+    REQUESTS.get().pop_front()
+}
+
+/// Send a message, waiting (a few seconds at most) while the network link's
+/// queue is full: for answers that come in many pieces.
+pub fn send_all(msg: &str) {
+    let give_up = time::uptime_ms() + 5_000;
+    thread::wait_until(|| {
+        let link = LINK.get();
+        link.settings.is_none() || !link.connected || link.outgoing.len() < MAX_QUEUED || time::uptime_ms() >= give_up
+    });
+    send(msg);
+}
+
+/// Ask the host one thing and wait for the one answer of type `answer`
+/// (matched by request id). No keys are read: this is for work in the
+/// background. `fields` must not contain "type" or "id".
+pub fn call(kind: &str, fields: Obj, answer: &str, timeout_ms: u64) -> Result<Object, &'static str> {
+    if !present() {
+        return Err("no link to the AI host");
+    }
+    if REQUEST_RUNNING.swap(true, Ordering::SeqCst) {
+        return Err("the link to the AI host is busy with another request");
+    }
+    struct Running;
+    impl Drop for Running {
+        fn drop(&mut self) {
+            REQUEST_RUNNING.store(false, Ordering::SeqCst);
+        }
+    }
+    let _running = Running;
+    let over_network = LINK.get().settings.is_some();
+    if over_network && !LINK.get().connected {
+        return Err("the AI host is not connected");
+    }
+    let st = STATE.get();
+    let id = st.next_id;
+    st.next_id += 1;
+    send(&fields.str("type", kind).num("id", id).finish());
+    let deadline = time::uptime_ms() + timeout_ms;
+    loop {
+        // Other answers stay for whoever waits for them; ours is taken out.
+        pump();
+        if let Some(at) = ANSWERS.get().iter().position(|m| m.num("id") == Some(id) && m.str("type") == Some(answer)) {
+            return ANSWERS.get().remove(at).ok_or("the answer got lost");
+        }
+        if over_network && !LINK.get().connected {
+            return Err("the connection to the AI host was lost");
+        }
+        if time::uptime_ms() > deadline {
+            return Err("the AI host did not answer");
+        }
+        thread::pause(pending);
+    }
 }
 
 /// Handle anything the host sent while we were not listening.
@@ -409,12 +552,19 @@ fn hive_thread() {
         if was_connected {
             wait = RETRY_MS;
         }
-        // Wait before the next try, unless the settings change meanwhile.
+        // Wait before the next try, unless the settings change meanwhile, or
+        // the network gets the address it was missing.
         let until = time::uptime_ms() + wait;
-        thread::wait_until(|| time::uptime_ms() >= until || LINK.get().generation != generation);
+        let no_address = net::address().is_none();
+        thread::wait_until(|| {
+            time::uptime_ms() >= until || LINK.get().generation != generation || (no_address && net::address().is_some())
+        });
         wait = (wait * 2).min(RETRY_MAX_MS);
     }
 }
+
+/// Why there is no connection while the network is still starting.
+pub const NO_ADDRESS: &str = "the network has no address yet (see net)";
 
 /// One line from the connection, waiting until `deadline`. `Err`: why not.
 fn read_line(stream: &net::TcpStream, pending: &mut Vec<u8>, deadline: u64) -> Result<String, &'static str> {
@@ -447,7 +597,7 @@ fn read_line(stream: &net::TcpStream, pending: &mut Vec<u8>, deadline: u64) -> R
 fn session(settings: &Settings, generation: u32) -> (bool, String) {
     let fail = |why: &str| (false, String::from(why));
     if net::address().is_none() {
-        return fail("the network has no address yet (see net)");
+        return fail(NO_ADDRESS);
     }
     let ip = match net::resolve(&settings.host) {
         Ok(ip) => ip,

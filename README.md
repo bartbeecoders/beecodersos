@@ -172,6 +172,7 @@ tests/boot_test.py     boot tests: drives the kernel in headless QEMU over seria
 tests/scenarios/       shell scenario tests (*.scn)
 tests/test_*.py        unit tests of the host tools (beehive, evolve, bootdisk)
 tools/beehive/         beehive: host daemon for the AI bridge (Claude / local models)
+tools/beectl.py        run commands on a machine, see its screen, deploy a kernel (through beehive)
 tools/bee_report.py    report of what the OS recorded (crashes, missing commands, wishes)
 tools/evolve/          improvement loop: signals -> backlog -> coding agent -> review
 tools/bootdisk.py      A/B boot disk: FAT16 boot partition (Limine, two kernels) + BeeFS
@@ -193,6 +194,8 @@ kernel/
   src/crash.rs         crash reports saved to disk, shown on the next boot
   src/json.rs          minimal JSON (event log, crash reports, AI protocol)
   src/aibridge.rs      AI bridge: JSON lines to beehive on the host, on COM2 or over the network
+  src/update.rs        `update`: fetch a kernel the host offers, put it on trial; automatic mode
+  src/hivectl.rs       remote control through beehive: run commands, send the screen
   src/bootslots.rs     A/B kernel slots: arm the rollback, health check, report failed trials
   src/pci.rs           PCI: find devices, read their configuration (`lspci`)
   src/disks.rs         the machine's disks (IDE, SATA), each opened once and shared
@@ -312,7 +315,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `ai`,
-`slots`, `install`, `display`, `desktop`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `install`, `update`, `display`, `desktop`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Under the hood:** interrupts are enabled (IDT + remapped PIC; IRQ0 timer,
 IRQ1 keyboard, IRQ3 COM2 AI bridge, IRQ4 COM1 serial). Handlers queue raw bytes; the shell decodes them and sleeps with
@@ -974,6 +977,49 @@ do over the serial port. Plan: `Docs/beehive-network-plan.html`.
 - **Not done:** the link's state on the status page (that page is protected);
   a new kernel over the link (H4). On the HP the key is lost at every restart
   until BeeFS lives on a disk there (it runs from a RAM disk).
+
+## Driven from the host: kernels over the link, remote control ✅ in QEMU
+
+```
+host$ tools/beectl.py deploy hp
+kernel b52 is on offer (1078 KiB): machines get it with `update`, ...
+  fetching kernel b52 (1078 KiB)
+  writing the new kernel (b52) into slot b
+kernel b52 is in slot b, on trial at the next start: reboot
+hp: b52 passed its health check and is now the good slot
+
+host$ tools/beectl.py run hp "df"
+host$ tools/beectl.py screenshot hp screen.ppm
+```
+
+What lets a new build reach a machine nobody sits at, and lets the developer
+(or an AI working for them) see what it does there. Both go through beehive,
+over the link the machine already has; both are off until switched on at the
+machine's own console.
+
+- **`update`** asks beehive for the kernel it has on offer
+  (`beehive.py offer`), downloads it, checks its SHA-256, writes it into the
+  spare kernel slot and marks it on trial. The A/B rollback decides at the
+  next boot, and the machine reports "healthy" or "failed" back to beehive.
+  A build that failed on a machine is not fetched there again.
+- **`update auto on`** (saved): the machine asks every minute by itself and
+  restarts to try what it fetched.
+- **`ai control on`** (saved): beehive may run shell commands on the machine
+  and fetch its screen, as text or as a picture (`tools/beectl.py run`,
+  `text`, `screenshot`). The commands run in a shell of their own, like a
+  remote session: what only the console may do (`install`, `ai connect`,
+  these switches) stays refused.
+- **`tools/beectl.py deploy MACHINE`** does a whole deploy: offer, tell the
+  machine to update and restart, wait for its report.
+- **`ai off`** stops all of it.
+- **Trust:** whoever is at the other end of the link can do this. Over the
+  network that is the beehive the machine was paired with (every line is
+  sealed with the pairing key); there is no further signature on a kernel.
+- Over a VM's serial link a kernel takes most of a minute (the port's speed);
+  over the network a few seconds.
+- **Tests:** scenarios `update.scn`, `update-auto.scn` (boot disk, network
+  link: fetch, trial, health report; the machine restarting by itself) and
+  `remote-control.scn`; `tests/test_beehive.py`; self-tests.
 
 ## Display — phase G1: a graphics console, full HD in QEMU ✅
 

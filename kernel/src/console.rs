@@ -202,6 +202,43 @@ pub fn describe_display() -> String {
     )
 }
 
+/// The text on the machine's own screen, line by line (trailing spaces
+/// left out): for a remote look at it (hivectl.rs).
+pub fn screen_text() -> String {
+    let (cols, rows) = size();
+    let mut text = String::new();
+    for row in 0..rows {
+        let mut line = String::new();
+        for col in 0..cols {
+            let cell = match SCREEN.get() {
+                Screen::Text(screen) => screen.cell(row, col),
+                Screen::Graphics(screen) => screen.cells().get(row * cols + col).copied().unwrap_or(0x20),
+            };
+            line.push(vga::from_cp437(cell as u8));
+        }
+        text += line.trim_end();
+        text.push('\n');
+    }
+    text
+}
+
+/// A picture of the screen: every `scale`-th pixel, as (width, height, RGB
+/// bytes). `None` on the text screen.
+pub fn capture(scale: usize) -> Option<(usize, usize, Vec<u8>)> {
+    let Screen::Graphics(screen) = SCREEN.get() else { return None };
+    let canvas = screen.canvas();
+    let scale = scale.max(1);
+    let (width, height) = (canvas.width() / scale, canvas.height() / scale);
+    let mut pixels = Vec::with_capacity(width * height * 3);
+    for y in 0..height {
+        for x in 0..width {
+            let rgb = canvas.pixel(x * scale, y * scale);
+            pixels.extend_from_slice(&[(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8]);
+        }
+    }
+    Some((width, height, pixels))
+}
+
 /// Characters per line, and lines, of the machine's own screen.
 pub fn size() -> (usize, usize) {
     let screen = SCREEN.get();

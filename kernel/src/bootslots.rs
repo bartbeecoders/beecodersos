@@ -227,6 +227,11 @@ pub fn health_check(healthy: bool) -> Option<bool> {
     Some(healthy && saved)
 }
 
+/// The slot state on the boot disk, if this machine has one.
+pub fn state() -> Option<State> {
+    read().map(|(state, _)| state)
+}
+
 /// For the `slots` command.
 pub fn describe() -> Option<String> {
     let booted = booted_slot()?;

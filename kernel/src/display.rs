@@ -43,6 +43,19 @@ impl PixelFormat {
         }
     }
 
+    /// The 0xRRGGBB color of a pixel value (the reverse of `encode`, as far
+    /// as the format keeps the color).
+    pub const fn decode(self, value: u32) -> u32 {
+        match self {
+            PixelFormat::Xrgb8888 | PixelFormat::Rgb888 => value & 0xFF_FFFF,
+            PixelFormat::Xbgr8888 => (value & 0xFF) << 16 | value & 0xFF00 | (value >> 16) & 0xFF,
+            PixelFormat::Rgb565 => {
+                let (r, g, b) = ((value >> 11) & 0x1F, (value >> 5) & 0x3F, value & 0x1F);
+                (r << 3 | r >> 2) << 16 | (g << 2 | g >> 4) << 8 | (b << 3 | b >> 2)
+            }
+        }
+    }
+
     /// The pixel value for a 0xRRGGBB color; its low `bytes()` bytes are
     /// stored little-endian.
     pub const fn encode(self, rgb: u32) -> u32 {

@@ -8,6 +8,8 @@ limits).
     python3 tests/test_beehive.py        (part of `make check`)
 """
 
+import base64 as b64
+import hashlib
 import json
 import socket
 import stat
@@ -366,6 +368,80 @@ class Network(unittest.TestCase):
         self.assertIsNone(first.recv())
         second.send({"type": "ping"})
         self.assertEqual(second.recv(), {"type": "pong"})
+
+    def test_a_kernel_on_offer_is_handed_out_in_pieces(self):
+        kernel = Path(self.tmp.name) / "k.elf"
+        data = b"\x7fELF" + bytes(range(256)) * 60  # 15 KiB: several pieces
+        kernel.write_bytes(data)
+        c = self.client()
+        c.send({"type": "update-check", "id": 1, "build": "7"})
+        self.assertEqual(c.recv(), {"type": "update", "id": 1, "none": True})  # nothing on offer
+        self.assertEqual(b.offer_kernel(self.state, ["offer", str(kernel)], 8), 0)
+        c.send({"type": "update-check", "id": 2, "build": "8"})
+        self.assertEqual(c.recv(), {"type": "update", "id": 2, "none": True})  # it has that build
+        c.send({"type": "update-check", "id": 3, "build": "7"})
+        offer = c.recv()
+        self.assertEqual((offer["build"], offer["size"]), (8, len(data)))
+        got = b""
+        while len(got) < offer["size"]:
+            c.send({"type": "update-chunk", "id": 4, "offset": len(got)})
+            piece = c.recv()
+            self.assertEqual((piece["type"], piece["offset"]), ("update-data", len(got)))
+            got += b64.b64decode(piece["data"])
+        self.assertEqual(got, data)
+        self.assertEqual(hashlib.sha256(got).hexdigest(), offer["sha256"])
+        # Past the end, a negative offset, a missing offset: empty or no answer, never a crash.
+        c.send({"type": "update-chunk", "id": 5, "offset": 10 ** 9})
+        self.assertEqual(c.recv()["data"], "")
+        c.send({"type": "update-chunk", "id": 6, "offset": -5})
+        self.assertEqual(b64.b64decode(c.recv()["data"])[:4], b"\x7fELF")
+        c.send({"type": "update-chunk", "id": 7})
+        c.send({"type": "ping"})
+        self.assertEqual(c.recv(), {"type": "pong"})
+        # Not a kernel, a missing file, taking the offer away.
+        junk = Path(self.tmp.name) / "junk"
+        junk.write_bytes(b"hello")
+        self.assertEqual(b.offer_kernel(self.state, ["offer", str(junk)], 9), 2)
+        self.assertEqual(b.offer_kernel(self.state, ["offer", "/nonexistent"], 9), 2)
+        self.assertEqual(self.state.offer()["build"], 8)
+        self.assertEqual(b.offer_kernel(self.state, ["offer", "none"], None), 0)
+        self.assertIsNone(self.state.offer())
+
+    def test_control_requests_reach_the_machine_and_answers_come_back(self):
+        control = b.Control(self.hive)
+        control.start()
+        inbox, out = Path(self.tmp.name) / "control" / "in", Path(self.tmp.name) / "control" / "out"
+
+        def ask(rid, machine, **fields):
+            (inbox / f"{rid}.json").write_text(json.dumps({"rid": rid, "machine": machine, **fields}))
+
+        def answer(rid):
+            deadline = time.monotonic() + 3
+            while not (out / f"{rid}.done").exists():
+                self.assertLess(time.monotonic(), deadline, f"no answer to {rid}")
+                time.sleep(0.02)
+            pieces = [json.loads(l) for l in (out / f"{rid}.jsonl").read_text().splitlines()]
+            for f in (out / f"{rid}.jsonl", out / f"{rid}.done"):
+                f.unlink()
+            return pieces
+
+        # Nobody connected under that name: said at once.
+        ask("r1", "hp", type="run", cmd="ls")
+        self.assertIn("not connected", answer("r1")[0]["error"])
+        c = self.client()
+        ask("r2", "hp", type="run", cmd="echo hi", timeout=5)
+        self.assertEqual(c.recv(), {"rid": "r2", "type": "run", "cmd": "echo hi", "timeout": 5})
+        c.send({"type": "ran", "rid": "r2", "text": "hi\n"})
+        c.send({"type": "ran", "rid": "r2", "done": True})
+        self.assertEqual([p.get("text") for p in answer("r2")], ["hi\n", None])
+        # Requests that are not ours to send, and answers with a name that is no file name.
+        ask("r3", "hp", type="shutdown-the-host")
+        (inbox / "bad.json").write_text("{not json")
+        c.send({"type": "ran", "rid": "../../escape", "done": True})
+        c.send({"type": "ping"})
+        self.assertEqual(c.recv(), {"type": "pong"})
+        self.assertFalse(list(Path(self.tmp.name).parent.glob("escape*")))
+        self.assertEqual(sorted(p.name for p in out.iterdir()), [])  # nothing was written for any of those
 
     def test_a_slow_stranger_is_dropped(self):
         old, b.PROOF_SECONDS = b.PROOF_SECONDS, 0.3

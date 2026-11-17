@@ -1,0 +1,48 @@
+# A new kernel from the AI host (beehive), over the network link the machine
+# already has: `update` fetches it, checks it and puts it on trial in the
+# spare slot; the A/B rollback decides at the next boot.
+@bootdisk
+@net
+@ai-net
+$ net dhcp
+~ 10\.0\.2\.15
+$ update
+~ no AI bridge
+$ ai connect {hive} {hive-name} {hive-key}
+connected (fake fake)
+$ update
+~ ^no newer kernel on offer \(this is b\d+\)$
+$ update auto
+automatic updates: off ('update auto on' allows them)
+
+@offer newer
+$ update
+~ ^  fetching kernel b\d+ \(\d+ KiB\)$
+~ ^  writing the new kernel \(b\d+\) into slot b$
+  checking what was written
+  putting slot b on trial
+~ ^kernel b\d+ is in slot b, on trial at the next start: reboot$
+$ update
+~ ^kernel b\d+ is on offer, but another kernel is still on trial$
+@reboot
+~ ^\[slots\] trying slot b \(b\d+\): rollback armed
+~ ^\[slots\] slot b passed its health check: it is now the good slot$
+$ slots
+booted slot: b
+good slot:   b
+$ net dhcp
+$ ai
+~ beehive online
+$ update
+~ ^kernel b\d+ is on offer, but it is installed already$
+
+# The same kernel under its own build number, or no offer: nothing to do.
+@offer
+$ update
+~ ^no newer kernel on offer
+@offer none
+$ update
+~ ^no newer kernel on offer
+$ update sideways
+usage: update [auto [on | off]]
+@signal "target": "test", "kind": "health", "text": "slot b b\d+ passed its health check"

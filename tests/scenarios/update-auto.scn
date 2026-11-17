@@ -1,0 +1,31 @@
+# `update auto on`: the machine asks the AI host by itself, fetches a kernel
+# that is offered, and restarts to try it. Nobody types anything: this is
+# how a new build reaches a machine nobody sits at.
+@bootdisk
+@net
+@ai-net
+$ net dhcp
+~ 10\.0\.2\.15
+$ ai connect {hive} {hive-name} {hive-key}
+connected (fake fake)
+$ update auto on
+automatic updates on (saved)
+this machine now fetches kernels the AI host offers and restarts by itself to try them
+$ cat /system/update
+auto
+@offer newer
+@restart
+~ ^\[slots\] trying slot b \(b\d+\): rollback armed
+~ ^\[slots\] slot b passed its health check: it is now the good slot$
+$ slots
+good slot:   b
+
+# Once the network is up again the host hears that the new kernel is healthy.
+$ net dhcp
+$ ai
+~ beehive online
+$ update auto
+automatic updates: on
+$ update auto off
+automatic updates off (saved)
+@signal "target": "test", "kind": "health", "text": "slot b b\d+ passed its health check"

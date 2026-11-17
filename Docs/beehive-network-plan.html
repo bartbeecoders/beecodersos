@@ -282,7 +282,8 @@ nav.toc a:hover { text-decoration: underline; }
 </div>
 
 <div class="phase" id="h4">
-<h3>H4 — A new kernel over the link <span class="tag t-later">Designed, not built: three answers needed</span></h3>
+<h3>H4 — A new kernel over the link <span class="tag t-now">Done in QEMU (17 Nov 2026)</span></h3>
+<p><b>Built</b> after the owner asked for deploys driven from the host: <code>update</code>, <code>update auto on</code>, <code>beehive.py offer</code>, and remote control (<code>ai control on</code>, <code>tools/beectl.py</code>). The pairing key vouches for the kernel; the machine checks the SHA-256 beehive announced. The text below is the design as it was written before.</p>
 <p>The network plan's "kernel download": the OS fetches a new kernel into the spare slot and tries it, with the A/B rollback as the net. Nothing in H1 to H3 lets the host push anything into the OS; H4 is the first thing that would. What looking at the code showed:</p>
 <ul>
 <li><b>The kernel cannot write a kernel file today.</b> By design it only rewrites two lines of <code>limine.conf</code> in place, "so the FAT file system never changes shape" (<code>bootslots.rs</code>). A deploy is done by the host with the VM switched off: <code>tools/bootdisk.py</code> rebuilds the whole FAT partition. H4 needs the kernel to write a file there for the first time.</li>

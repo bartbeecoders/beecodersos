@@ -8,7 +8,7 @@ use crate::vga::Color;
 use crate::aibridge::{self, Outcome};
 use crate::json::Obj;
 use crate::ring::Global;
-use crate::{allocator, bootslots, display, httpd, install, remote, session, console, crash, eventlog, keyboard, net, pci, power, selftest, thread, time};
+use crate::{allocator, bootslots, display, hivectl, httpd, install, update, remote, session, console, crash, eventlog, keyboard, net, pci, power, selftest, thread, time};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -25,6 +25,10 @@ const AI_SWITCH: &str = "/system/ai";
 /// The network link to beehive (`ai connect`): host, port, this machine's
 /// name and its pairing key. See aibridge::Settings.
 const HIVE_FILE: &str = "/system/hive";
+/// "on": the host may run commands here and look at the screen (`ai control on`).
+const CONTROL_FILE: &str = "/system/hive-control";
+/// "auto": fetch new kernels from the host and restart to try them (`update auto on`).
+const UPDATE_FILE: &str = "/system/update";
 /// Network settings: "dhcp", "none" or "static IP/PREFIX [GATEWAY]", and
 /// optionally a line "dns ADDRESS[:PORT]". No file: DHCP.
 const NET_FILE: &str = "/system/net";
@@ -92,6 +96,14 @@ impl Shell {
     /// The shell of a remote session (remote.rs): it shows what is typed.
     pub fn remote(storage: Storage) -> Self {
         let mut shell = Shell { echo: true, ..Shell::new(storage) };
+        shell.go_home();
+        shell
+    }
+
+    /// The shell remote control runs its commands in (hivectl.rs): nothing
+    /// typed is shown back, the output is all the host wants.
+    pub fn control(storage: Storage) -> Self {
+        let mut shell = Shell::new(storage);
         shell.go_home();
         shell
     }
@@ -432,6 +444,12 @@ impl Shell {
             ("ai", [s @ ("on" | "off")]) => self.ai_switch(s),
             ("ai", ["connect", target, name, key]) => self.ai_connect(target, name, key),
             ("ai", ["disconnect"]) => self.ai_disconnect(),
+            ("ai", ["control"]) => println!("remote control by the AI host: {}", if aibridge::control() { "on" } else { "off ('ai control on' allows it)" }),
+            ("ai", ["control", state @ ("on" | "off")]) => self.switch("ai control", CONTROL_FILE, state),
+            ("update", []) => self.update(),
+            ("update", ["auto"]) => println!("automatic updates: {}", if update::auto() { "on" } else { "off ('update auto on' allows them)" }),
+            ("update", ["auto", state @ ("on" | "off")]) => self.switch("update auto", UPDATE_FILE, state),
+            ("update", _) => error("usage: update [auto [on | off]]"),
             ("ai", ["connect", ..]) => error("usage: ai connect HOST[:PORT] NAME KEY   (as printed by: beehive.py pair NAME)"),
             ("threads" | "ps", []) => {
                 println!("{:>3}  {:<10} {:<8} {:>9}  STACK USED", "ID", "NAME", "STATE", "RUNS");
@@ -1226,6 +1244,75 @@ impl Shell {
         }
     }
 
+    /// At boot: what the host may do on its own, as saved: remote control
+    /// and automatic updates. Both are off unless switched on at the console.
+    pub fn load_remote_work(&mut self) {
+        let is = |fs: &mut storage::FsGuard, file: &str, word: &[u8]| fs.read_file(file).is_ok_and(|d| d.trim_ascii() == word);
+        let mut fs = self.storage.fs();
+        let (control, auto) = (is(&mut fs, CONTROL_FILE, b"on"), is(&mut fs, UPDATE_FILE, b"auto"));
+        drop(fs);
+        aibridge::set_control(control);
+        if control {
+            hivectl::start();
+        }
+        update::set_auto(auto);
+    }
+
+    /// `ai control on|off` and `update auto on|off`: switches that let the
+    /// host act on this machine. Only from the machine's own console.
+    fn switch(&mut self, what: &str, file: &str, state: &str) {
+        if session::current().is_some() {
+            return error(&format!("{what}: only from the machine's own console"));
+        }
+        let on = state == "on";
+        let word = match (file, on) {
+            (UPDATE_FILE, true) => "auto",
+            (_, true) => "on",
+            _ => "off",
+        };
+        let mut fs = self.storage.fs();
+        let saved = fs.mkdir_all("/system").and_then(|_| fs.write_file(file, format!("{word}\n").as_bytes()));
+        drop(fs);
+        let note = match (saved, self.storage.persistent) {
+            (Ok(()), true) => "saved",
+            (Ok(()), false) => "RAM disk: not kept after reboot",
+            (Err(_), _) => "could not save",
+        };
+        if file == UPDATE_FILE {
+            update::set_auto(on);
+            println!("automatic updates {state} ({note})");
+            if on {
+                println!("this machine now fetches kernels the AI host offers and restarts by itself to try them");
+            }
+        } else {
+            aibridge::set_control(on);
+            if on {
+                hivectl::start();
+            }
+            println!("remote control by the AI host {state} ({note})");
+            if on {
+                println!("the AI host can now run commands on this machine and look at its screen");
+            }
+        }
+    }
+
+    /// `update`: fetch the kernel the host offers, if it is new, and put it on trial.
+    fn update(&mut self) {
+        if !self.ai_ready() {
+            return;
+        }
+        match update::fetch(|step| println!("  {step}")) {
+            Ok(update::Found::Nothing) => println!("no newer kernel on offer (this is b{})", crate::OS_BUILD),
+            Ok(update::Found::Known(build, why)) => println!("kernel b{build} is on offer, but {why}"),
+            Ok(update::Found::Ready(build, slot)) => {
+                println!("kernel b{build} is in slot {}, on trial at the next start: reboot", slot as char);
+                let ev = eventlog::event("update").num("build", build as i64).finish();
+                eventlog::write(&mut self.storage.fs(), ev);
+            }
+            Err(why) => error(&format!("update: {why}")),
+        }
+    }
+
     /// At boot: the saved network link to beehive, and the kill switch.
     pub fn load_hive(&mut self) {
         aibridge::set_enabled(self.ai_enabled());
@@ -1271,7 +1358,13 @@ impl Shell {
     fn wait_for_link(ms: u64) {
         let until = time::uptime_ms() + ms;
         thread::wait_until(|| {
-            time::uptime_ms() >= until || matches!(aibridge::link_status(), None | Some((_, true, _, _)) | Some((_, _, Some(_), _)))
+            time::uptime_ms() >= until
+                || match aibridge::link_status() {
+                    None | Some((_, true, _, _)) => true,
+                    // "No address yet" is over as soon as the network has one: the link then connects.
+                    Some((_, _, Some(why), _)) => why != aibridge::NO_ADDRESS || net::address().is_none(),
+                    _ => false,
+                }
         });
     }
 
@@ -1649,6 +1742,8 @@ const COMMANDS: &[(&str, &str)] = &[
     ("feedback TEXT", "tell the OS what could be better"),
     ("ask QUESTION", "ask the AI (needs beehive on the host)"),
     ("explain", "ask the AI about the last error or crash"),
+    ("update [auto on|off]", "fetch a new kernel from the AI host and put it on trial"),
+    ("ai control [on|off]", "let the AI host run commands here and see the screen"),
     ("ai connect HOST NAME KEY", "reach beehive over the network (ai disconnect: stop)"),
     ("ai [on|off]", "AI bridge status; switch AI features on/off"),
     ("selftest", "run the kernel self-tests"),

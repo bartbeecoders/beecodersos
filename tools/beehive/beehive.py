@@ -23,6 +23,15 @@ Docs/beehive-network-plan.html):
     beehive.py machines                paired machines and when each was last seen
     beehive.py --listen 192.168.1.10:4560 ...    also serve paired machines on that address
 
+New kernels and remote control (for machines that allow it, see `update` and
+`ai control` in the OS):
+
+    beehive.py offer [KERNEL]          put a kernel ready (default: build/beecoders.elf); a machine
+                                       fetches it with `update`, or by itself with `update auto on`
+    beehive.py offer none              take the offer away
+    tools/beectl.py run hp "ls /"      run a command on a machine and print what it shows
+    tools/beectl.py screenshot hp out.ppm
+
 The network link is not encrypted: people on the same network can read the
 questions and answers, but cannot use beehive, pretend to be it, or change
 what is sent.
@@ -46,11 +55,15 @@ State (default ~/.local/state/beehive/):
     signals.jsonl     wishes, feedback, missed commands and crashes from the OS
     exchanges.jsonl   every AI request with its answer and timing
     usage.json        requests per day (for --max-requests-per-day), also per machine
+    offer.json, offer.elf   the kernel on offer to machines that ask for an update
+    control/in, control/out   requests of tools/beectl.py to a machine, and the answers
     machines.json     the keys of paired machines (readable by you only)
 """
 
 import argparse
+import base64
 import datetime as dt
+import hashlib
 import hmac
 import json
 import os
@@ -453,6 +466,23 @@ class State:
             out.write(json.dumps(machines, indent=1))
         os.replace(tmp, f)
 
+    # The kernel on offer: {"build": N, "size": bytes, "sha256": hex}; the file is offer.elf.
+
+    def offer(self) -> dict | None:
+        try:
+            offer = json.loads((self.path / "offer.json").read_text())
+        except (OSError, ValueError):
+            return None
+        return offer if isinstance(offer, dict) and isinstance(offer.get("build"), int) else None
+
+    def offer_chunk(self, offset: int, size: int) -> bytes:
+        try:
+            with open(self.path / "offer.elf", "rb") as f:
+                f.seek(offset)
+                return f.read(size)
+        except OSError:
+            return b""
+
     def machine_seen(self, name: str):
         with self.lock:
             machines = self.machines()
@@ -547,6 +577,7 @@ class Link(threading.Thread):
                 continue
             self.sock.settimeout(None)
             log(f"connected to {self.target}")
+            self.hive.links[self.target] = self
             announced = False
             self.send({"type": "welcome", "backend": self.hive.backend.name, "model": self.hive.backend.model})
             try:
@@ -554,6 +585,7 @@ class Link(threading.Thread):
             except OSError:
                 pass
             log(f"disconnected from {self.target}")
+            self.hive.links.pop(self.target, None)
             for ev in self.cancels.values():
                 ev.set()
             time.sleep(self.hive.retry)
@@ -586,6 +618,22 @@ class Link(threading.Thread):
             self.send({"type": "welcome", "backend": self.hive.backend.name, "model": self.hive.backend.model})
         elif kind == "ping":  # "still there?" from a machine on the network
             self.send({"type": "pong"})
+        elif kind == "update-check" and isinstance(msg.get("id"), int):
+            # A machine asks whether there is a newer kernel for it.
+            offer = self.hive.state.offer()
+            answer = {"type": "update", "id": msg["id"]}
+            if offer and str(offer["build"]) != str(msg.get("build")):
+                answer.update(build=offer["build"], size=offer["size"], sha256=offer["sha256"])
+                log(f"{self.target}: asks for an update, has b{msg.get('build')}: offering b{offer['build']}")
+            else:
+                answer["none"] = True
+            self.send(answer)
+        elif kind == "update-chunk" and isinstance(msg.get("id"), int) and isinstance(msg.get("offset"), int):
+            data = self.hive.state.offer_chunk(max(0, msg["offset"]), UPDATE_CHUNK)
+            self.send({"type": "update-data", "id": msg["id"], "offset": msg["offset"],
+                       "data": base64.b64encode(data).decode()})
+        elif kind in ("ran", "shot") and isinstance(msg.get("rid"), str):
+            self.hive.control_answer(msg)  # the answer to a request of tools/beectl.py
         elif kind == "signal":
             record = {"received": now_iso(), "target": self.target,
                       **{k: msg.get(k) for k in ("kind", "text", "build", "t")}}
@@ -657,6 +705,7 @@ class Peer(Link):
 
     def run(self):
         log(f"{self.target}: connected over the network")
+        self.hive.links[self.target] = self
         try:
             buf = b""
             while chunk := self.sock.recv(4096):
@@ -679,6 +728,8 @@ class Peer(Link):
         for ev in self.cancels.values():
             ev.set()
         log(f"{self.target}: disconnected")
+        if self.hive.links.get(self.target) is self:
+            del self.hive.links[self.target]
         self.on_close(self)
 
     def close(self):
@@ -838,10 +889,90 @@ def manage_machines(state: State, action: list[str]) -> int:
     return 2
 
 
+UPDATE_CHUNK = 4608   # bytes of kernel per line: 6 KiB as text, within the OS's line limit and serial buffer
+CONTROL_KINDS = ("run", "screenshot")
+
+
+def offer_kernel(state: State, action: list[str], build: int | None) -> int:
+    """`offer [KERNEL]` / `offer none`: the kernel machines get when they ask for an update."""
+    if action == ["offer", "none"]:
+        for name in ("offer.json", "offer.elf"):
+            (state.path / name).unlink(missing_ok=True)
+        print("no kernel is on offer now")
+        return 0
+    kernel = Path(action[1]) if len(action) == 2 else ROOT / "build" / "beecoders.elf"
+    if len(action) > 2 or not kernel.is_file():
+        print(f"usage: beehive.py offer [KERNEL | none]   ({kernel} not found)" if len(action) <= 2 else
+              "usage: beehive.py offer [KERNEL | none]", file=sys.stderr)
+        return 2
+    data = kernel.read_bytes()
+    if data[:4] != b"\x7fELF":
+        print(f"{kernel} is not a kernel (ELF) file", file=sys.stderr)
+        return 2
+    if build is None:
+        try:
+            build = int((ROOT / "BUILD_NUMBER").read_text())
+        except (OSError, ValueError):
+            print("give the build number with --build", file=sys.stderr)
+            return 2
+    (state.path / "offer.json").unlink(missing_ok=True)  # never a description of another file
+    (state.path / "offer.elf").write_bytes(data)
+    (state.path / "offer.json").write_text(json.dumps(
+        {"build": build, "size": len(data), "sha256": hashlib.sha256(data).hexdigest(), "t": now_iso()}))
+    print(f"kernel b{build} is on offer ({len(data) // 1024} KiB): machines get it with `update`, "
+          "or by themselves with `update auto on`")
+    return 0
+
+
+class Control(threading.Thread):
+    """Requests of tools/beectl.py: files in control/in, sent to the machine they name.
+    The machine's answers are collected in control/out (see Hive.control_answer)."""
+
+    def __init__(self, hive: "Hive"):
+        super().__init__(daemon=True)
+        self.hive = hive
+        self.inbox = hive.state.path / "control" / "in"
+        self.inbox.mkdir(parents=True, exist_ok=True)
+        (hive.state.path / "control" / "out").mkdir(parents=True, exist_ok=True)
+
+    def run(self):
+        while True:
+            for f in sorted(self.inbox.glob("*.json")):
+                try:
+                    request = json.loads(f.read_text())
+                except (OSError, ValueError):
+                    continue  # still being written, or not ours
+                f.unlink(missing_ok=True)
+                rid, machine = request.get("rid"), request.get("machine")
+                if not isinstance(rid, str) or not re.fullmatch(r"[A-Za-z0-9-]{1,40}", rid) or request.get("type") not in CONTROL_KINDS:
+                    continue
+                link = self.hive.links.get(machine)
+                if link is None:
+                    names = ", ".join(sorted(self.hive.links)) or "none"
+                    self.hive.control_answer({"rid": rid, "done": True, "error": f"{machine} is not connected (connected: {names})"})
+                    continue
+                log(f"{machine}: control request {request['type']}")
+                link.send({k: v for k, v in request.items() if k != "machine"})
+            time.sleep(0.2)
+
+
 class Hive:
     def __init__(self, backend, state: State, readme: str, retry: float):
         self.backend, self.state, self.retry = backend, state, retry
         self.system = SYSTEM_PROMPT.format(readme=readme)
+        self.links: dict[str, Link] = {}  # connected machines by name (a serial port: its address)
+
+    def control_answer(self, msg: dict):
+        """One piece of a machine's answer to a control request; "done" ends it."""
+        rid = msg["rid"]
+        if not re.fullmatch(r"[A-Za-z0-9-]{1,40}", rid):
+            return
+        out = self.state.path / "control" / "out"
+        out.mkdir(parents=True, exist_ok=True)
+        with self.state.lock, open(out / f"{rid}.jsonl", "a") as f:
+            f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+        if msg.get("done"):
+            (out / f"{rid}.done").write_text("")
 
     def prompt(self, msg: dict) -> str:
         get = lambda k, d="": str(msg.get(k) or d)
@@ -857,8 +988,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", type=Path, default=Path.home() / ".config/beehive/config.toml")
     ap.add_argument("--no-config", action="store_true", help="ignore the config file")
-    ap.add_argument("action", nargs="*", metavar="pair|unpair|machines",
-                    help="pair NAME / unpair NAME / machines: manage machines on the network, then exit")
+    ap.add_argument("action", nargs="*", metavar="pair|unpair|machines|offer",
+                    help="pair NAME / unpair NAME / machines: manage machines on the network; "
+                         "offer [KERNEL|none]: the kernel machines get with `update`. Then exit")
+    ap.add_argument("--build", type=int, help="offer: the kernel's build number (default: BUILD_NUMBER)")
     ap.add_argument("--listen", metavar="ADDRESS[:PORT]",
                     help=f"also serve paired machines over the network on this address (port {DEFAULT_PORT} "
                          "unless given). Not encrypted. Off unless given")
@@ -888,6 +1021,8 @@ def main():
 
     backend_name = opt("backend", "anthropic")
     state_dir = Path(opt("state_dir", Path.home() / ".local/state/beehive")).expanduser()
+    if args.action and args.action[0] == "offer":
+        sys.exit(offer_kernel(State(state_dir, 0), args.action, args.build))
     if args.action:
         sys.exit(manage_machines(State(state_dir, 0), args.action))
     if backend_name == "fake":
@@ -919,6 +1054,7 @@ def main():
     links = [Link(t, hive) for t in targets]
     for link in links:
         link.start()
+    Control(hive).start()
     if opt("listen"):
         listener = Listener(opt("listen"), hive)
         listener.start()

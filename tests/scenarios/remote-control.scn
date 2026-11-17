@@ -1,0 +1,58 @@
+# Remote control through beehive (tools/beectl.py on the host): run commands
+# on the machine and look at its screen. Off unless switched on at the
+# machine's own console, and `ai off` stops it.
+@ai
+@ctl run {machine} "echo hello"
+~ remote control is switched off on this machine
+$ ai control
+remote control by the AI host: off ('ai control on' allows it)
+$ ai control on
+~ ^remote control by the AI host on
+the AI host can now run commands on this machine and look at its screen
+$ echo typed at the machine itself
+typed at the machine itself
+
+@ctl run {machine} "echo hello from afar"
+hello from afar
+!~ bee:
+@ctl run {machine} "mkdir /afar\ncd /afar\necho made here > note.txt\npwd\ncat note.txt"
+/afar
+made here
+@ctl run {machine} "pwd"
+/afar
+@ctl run {machine} "nosuchcommand"
+~ command not found
+@ctl run {machine} "help"
+~ ^  reboot, shutdown
+$ cat /afar/note.txt
+made here
+
+# What only the machine's own console may do stays refused.
+@ctl run {machine} "ai control off"
+ai control: only from the machine's own console
+@ctl run {machine} "install"
+~ Nothing was changed|No disk found
+@ctl run {machine} "ai connect 10.0.0.1 x abcde-fghij-kmnpq-rstuv"
+ai connect: only from the machine's own console
+
+# A command that does not end is stopped.
+@ctl run {machine} "ask slow please" --timeout 2
+~ did not finish within 2 s
+@ctl run {machine} "echo still here"
+still here
+
+# The screen: as text, and as a picture.
+@ctl text {machine}
+~ typed at the machine itself
+@ctl screenshot {machine} {tmp}/screen.ppm --scale 4
+~ screen.ppm: 480x270 \(every 4th pixel of the screen\)$
+@ctl run nobody "echo x"
+~ nobody is not connected
+
+# The kill switch.
+$ ai off
+@ctl run {machine} "echo hello"
+~ remote control is switched off
+$ ai on
+@ctl run {machine} "echo back"
+back

@@ -133,6 +133,30 @@ pub fn set_hw_cursor(index: usize) {
     }
 }
 
+/// The character a code page 437 byte stands for, as far as `cp437` knows
+/// it; a space for the rest. (For reading the screen back as text.)
+pub fn from_cp437(byte: u8) -> char {
+    if (0x20..0x7F).contains(&byte) {
+        return byte as char;
+    }
+    const HIGH: &str = "ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒáíóúñÑªº¿⌐¬½¼¡«»";
+    if let Some(c) = HIGH.chars().nth(byte.wrapping_sub(0x80) as usize).filter(|_| byte >= 0x80) {
+        return c;
+    }
+    match byte {
+        0x15 => '§',
+        0x14 => '¶',
+        0xE1 => 'ß',
+        0xE6 => 'µ',
+        0xF1 => '±',
+        0xF8 => '°',
+        0xFA => '·',
+        0xFD => '²',
+        0xFE => '■',
+        _ => ' ',
+    }
+}
+
 /// Translate a Unicode character to its code page 437 glyph (■ if missing).
 pub fn cp437(c: char) -> u8 {
     if (' '..='~').contains(&c) {

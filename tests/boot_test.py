@@ -26,6 +26,15 @@ Scenario files (tests/scenarios/*.scn):
                                command {hive} is its address (10.0.2.2:PORT), {hive-name}
                                the machine's name and {hive-key} its pairing key
     @hive stop|start           (with @ai-net) stop beehive, or start it again
+    @offer [newer|none]        (with @ai or @ai-net) put the kernel on offer at beehive, as
+                               `beehive.py offer` does; `newer`: with a build number one
+                               higher, so that the OS takes it as an update; `none`: no offer
+    @ctl ARGS                  (with @ai or @ai-net) run tools/beectl.py with these arguments
+                               (remote control through beehive); {machine} is this machine's
+                               name there, {tmp} a folder for files. What it prints is
+                               checked like a command's output
+    @restart                   the machine must restart by itself now (within 30 s); it is
+                               booted again and the boot messages are checked as output
     @wire                      (first lines) connect the e1000 network card to the test: it
                                sees every frame the OS sends and can inject frames (the OS
                                boots with `nodhcp`, so it stays silent until told otherwise)
@@ -129,6 +138,7 @@ import codecs
 import json
 import os
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -443,7 +453,9 @@ def parse_scenario(path: Path):
             steps.append(("screenshot", line[12:].strip(), []))
         elif line.startswith("@usb"):
             opts.add("usb:" + line[4:].strip())
-        elif line.startswith(("@keys ", "@mouse ", "@button ", "@hive ")):
+        elif line == "@restart" or line == "@offer":
+            steps.append((line[1:], "", []))
+        elif line.startswith(("@keys ", "@mouse ", "@button ", "@hive ", "@offer ", "@ctl ")):
             kind, _, arg = line[1:].partition(" ")
             steps.append((kind, arg.strip(), []))
         elif line.startswith(("@frame ", "@frame-soon ", "@send ")):
@@ -1055,6 +1067,30 @@ def test_scenario(path: Path):
                     continue
                 if kind == "screenshot":
                     check_screenshot(vm, Path(tmp), cmd, path.name)
+                    continue
+                if kind in ("offer", "ctl"):
+                    state_dir = Path(tmp) / "beehive"
+                    if not hive and not start_hive:
+                        raise TestFailure(f"{path.name}: @{kind} needs @ai or @ai-net")
+                    if kind == "offer":
+                        build = int((ROOT / "BUILD_NUMBER").read_text()) + (1 if cmd == "newer" else 0)
+                        what = ["none"] if cmd == "none" else [str(KERNEL), "--build", str(build)]
+                        run_tool([sys.executable, str(BEEHIVE), "--no-config", "--state-dir", str(state_dir), "offer", *what])
+                        continue
+                    machine = "test" if start_hive else f"127.0.0.1:{ai_port}"
+                    words = [w.replace("{machine}", machine).replace("{tmp}", tmp) for w in shlex.split(cmd)]
+                    done = subprocess.run([sys.executable, str(ROOT / "tools" / "beectl.py"), "--state-dir", str(state_dir), *words],
+                                          capture_output=True, text=True, timeout=120)
+                    out = (done.stdout + done.stderr).splitlines()
+                    check_output(path, f"@ctl {cmd}", out, expectations)
+                    continue
+                if kind == "restart":
+                    status = vm.wait_exit(30)
+                    if status != 0:
+                        raise TestFailure(f"{path.name}: the machine should restart by itself, QEMU exit status {status}\n{tail(vm.text())}")
+                    vm = boot()
+                    out = boot_to_prompt(vm)
+                    check_output(path, "(restart)", out, expectations)
                     continue
                 if kind == "hive":
                     if not start_hive:
