@@ -423,6 +423,11 @@ found and fixed (by a person or, later, an AI):
   `history.jsonl` and offers `explain`. Safety rule: the report is only written
   when no filesystem operation and no disk command was in progress, so a crash
   can't corrupt files. It goes to the disk the system runs from (IDE or SATA).
+  After a panic the machine halts with the message on the screen, except in
+  two cases where it restarts by itself 10 seconds later: a kernel on trial
+  (the good slot then boots: a rollback without anyone at the machine), and a
+  machine driven from the host (`ai control on` or `update auto on`) that had
+  been running for at least a minute. CPU exceptions still halt.
   `crash` crashes the kernel on purpose (to test this).
 - **Host report:** `make report` reads the VM's disk (`build/beecoders.img` if
   it exists, else `build/disk.img`; the VM should be off) and beehive's

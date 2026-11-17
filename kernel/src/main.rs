@@ -209,5 +209,5 @@ fn panic(info: &PanicInfo) -> ! {
         crash::record("panic", format_args!("[thread {}] {}", thread, info));
     }
     testmode::on_fatal_error();
-    halt_forever()
+    crash::finish()
 }

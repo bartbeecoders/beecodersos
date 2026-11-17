@@ -47,6 +47,7 @@ macro_rules! check_eq {
 }
 
 const TESTS: &[(&str, fn() -> TestResult)] = &[
+    ("crash: restart or halt afterwards", crash_then),
     ("heap: alloc and free", heap_alloc_free),
     ("heap: 1 MiB buffer", heap_large_buffer),
     ("ring: order and overflow", ring_buffer),
@@ -1996,5 +1997,19 @@ fn remote_work() -> TestResult {
         check_eq!(crate::vga::from_cp437(crate::vga::cp437(c)), c);
     }
     check_eq!((crate::vga::from_cp437(0), crate::vga::from_cp437(0x7F), crate::vga::from_cp437(0xB0)), (' ', ' ', ' '));
+    Ok(())
+}
+
+fn crash_then() -> TestResult {
+    use crate::crash::{then, Then};
+    // Someone is at the machine: the message stays on the screen.
+    check_eq!(then(false, false, 0), Then::Halt);
+    check_eq!(then(false, false, 3_600_000), Then::Halt);
+    // A kernel on trial restarts whenever it crashes: that is the rollback.
+    check_eq!(then(true, false, 0), Then::Restart);
+    check_eq!(then(true, true, 5_000), Then::Restart);
+    // Driven from the host: restart, but not in a loop right after starting.
+    check_eq!(then(false, true, 59_999), Then::Halt);
+    check_eq!(then(false, true, 60_000), Then::Restart);
     Ok(())
 }

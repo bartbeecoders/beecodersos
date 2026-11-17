@@ -11,7 +11,7 @@ use crate::disks::{self, DiskRef};
 use crate::json::{self, Obj};
 use crate::ring::Global;
 use crate::storage::Fs;
-use crate::{eventlog, storage, time};
+use crate::{aibridge, bootslots, eventlog, port, power, storage, time, update};
 use alloc::string::String;
 use beefs::FileSystem;
 use core::fmt::{self, Write};
@@ -76,6 +76,69 @@ pub fn record(kind: &str, msg: fmt::Arguments) {
     match saved {
         Ok(()) => println!("[crash] report saved to {PENDING}"),
         Err(e) => println!("[crash] report not saved: {e}"),
+    }
+}
+
+/// What the machine does once a crash was reported.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Then {
+    /// Stop, with the message on the screen, until a person restarts it.
+    Halt,
+    Restart,
+}
+
+/// How long the message stays on the screen before a restart.
+const RESTART_SECS: u32 = 10;
+/// A machine that crashes sooner after starting than this is not restarted:
+/// it would crash again and again.
+const MIN_UP_MS: u64 = 60_000;
+
+/// Restart or halt after a crash?
+/// - A kernel on trial restarts: the boot loader then starts the good slot
+///   (the rollback), with nobody at the machine.
+/// - A machine that is driven from the host (`ai control on` or
+///   `update auto on`) restarts, so the host can reach it again, unless it
+///   had only just started.
+/// - Otherwise it halts, as before: someone is there to read the screen.
+pub fn then(on_trial: bool, unattended: bool, up_ms: u64) -> Then {
+    if on_trial || unattended && up_ms >= MIN_UP_MS {
+        Then::Restart
+    } else {
+        Then::Halt
+    }
+}
+
+/// The last step of the panic handler.
+pub fn finish() -> ! {
+    static FINISHING: AtomicBool = AtomicBool::new(false);
+    if !FINISHING.swap(true, Ordering::SeqCst) {
+        let unattended = aibridge::control() || update::auto();
+        if then(bootslots::on_trial(), unattended, time::uptime_ms()) == Then::Restart {
+            println!("[crash] restarting in {RESTART_SECS} seconds");
+            wait_seconds(RESTART_SECS);
+            power::reboot();
+        }
+    }
+    crate::halt_forever()
+}
+
+/// Wait by watching the seconds of the battery clock: it needs no interrupts
+/// and no heap, which may both be gone. Bounded, in case the clock stands still.
+fn wait_seconds(seconds: u32) {
+    let read = || unsafe {
+        port::outb(0x70, 0x00);
+        port::inb(0x71)
+    };
+    let (mut last, mut changes) = (read(), 0);
+    for _ in 0..50_000_000u32 {
+        let now = read();
+        if now != last {
+            last = now;
+            changes += 1;
+            if changes > seconds {
+                return;
+            }
+        }
     }
 }
 
