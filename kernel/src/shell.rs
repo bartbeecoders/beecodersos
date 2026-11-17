@@ -604,6 +604,9 @@ impl Shell {
                 None => println!("not booted from a boot disk with A/B slots (see tools/bootdisk.py)"),
             },
             ("crash", []) => panic!("'crash' command: deliberate kernel panic (tests crash reports)"),
+            // An instruction the CPU refuses: the other way a kernel dies.
+            ("crash", ["exception"]) => unsafe { core::arch::asm!("ud2", options(nomem, nostack)) },
+            ("crash", _) => error("usage: crash [exception]"),
             ("reboot", []) => {
                 self.log_power("reboot");
                 power::reboot()
@@ -1772,7 +1775,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("display [mode WxH]", "screen: driver, resolution; 'display font 1|2|auto'; 'display test'; 'display speed'"),
     ("desktop [on|off]", "graphical desktop: the terminal in a window (on by default; saved)"),
     ("slots", "A/B kernel slots: which one runs, last trial"),
-    ("crash", "deliberately crash the kernel (tests crash reports)"),
+    ("crash [exception]", "deliberately crash the kernel: a panic, or a CPU exception (tests crash reports)"),
     ("reboot, shutdown", "restart / power off"),
 ];
 

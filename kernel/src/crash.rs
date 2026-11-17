@@ -108,7 +108,7 @@ pub fn then(on_trial: bool, unattended: bool, up_ms: u64) -> Then {
     }
 }
 
-/// The last step of the panic handler.
+/// The last step of the panic and exception handlers.
 pub fn finish() -> ! {
     static FINISHING: AtomicBool = AtomicBool::new(false);
     if !FINISHING.swap(true, Ordering::SeqCst) {

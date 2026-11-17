@@ -33,3 +33,10 @@ $ cat /system/crash/history.jsonl
 $ log 30
 ~ "ev":"crash","kind":"panic"
 ~ "ev":"boot",.*"boot":2
+# A CPU exception is reported the same way.
+$ crash now
+usage: crash [exception]
+$! crash exception
+~ \[crash\] the previous boot crashed \(b\d+, exception\): CPU exception 6: Invalid opcode at rip=0x[0-9a-f]+
+$ cat /system/crash/history.jsonl
+~ "kind":"exception","build":"\d+","cmd":"crash","msg":"CPU exception 6

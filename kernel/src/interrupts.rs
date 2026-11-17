@@ -270,5 +270,5 @@ fn exception(f: &InterruptFrame) -> ! {
     let name = EXCEPTIONS[f.vector as usize];
     crash::record("exception", format_args!("CPU exception {}: {} at rip={:#x}", f.vector, name, f.rip));
     crate::testmode::on_fatal_error();
-    crate::halt_forever()
+    crash::finish()
 }
