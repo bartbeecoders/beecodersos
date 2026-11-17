@@ -350,6 +350,25 @@ pub fn pane_write(window: usize, text: &str) {
     show(true);
 }
 
+/// Columns and lines of a terminal window.
+pub fn pane_size(window: usize) -> Option<(usize, usize)> {
+    PANES.get().iter().find(|p| p.window == window).map(|p| (p.con.width(), p.con.height()))
+}
+
+/// Fill a window with ready-made lines of cells (VGA format), from the top
+/// left, and put the cursor in the cell (row, column): for programs that
+/// draw their whole window themselves, like the editor.
+pub fn pane_show(window: usize, lines: &[Vec<u16>], cursor: (usize, usize)) {
+    let Some(pane) = PANES.get().iter_mut().find(|p| p.window == window) else { return };
+    for (row, line) in lines.iter().enumerate() {
+        for (col, cell) in line.iter().enumerate() {
+            pane.con.put_cell(row, col, *cell);
+        }
+    }
+    pane.con.set_cursor(cursor.0 * pane.con.width() + cursor.1);
+    show(true);
+}
+
 pub fn pane_exists(window: usize) -> bool {
     PANES.get().iter().any(|p| p.window == window)
 }
@@ -504,9 +523,9 @@ pub fn screen_text() -> String {
         }
         Screen::Graphics(screen) => text += &cells_text(screen.cells(), cols),
     }
-    // The other terminal windows follow, each under a line with its number.
+    // The other windows follow, each under a line with its number.
     for pane in PANES.get().iter() {
-        text += &format!("--- terminal window {} ---\n", pane.window);
+        text += &format!("--- window {} ---\n", pane.window);
         text += cells_text(pane.con.cells(), pane.con.width()).trim_end();
         text.push('\n');
     }

@@ -9,13 +9,18 @@
 use crate::input::Key;
 use crate::ring::Global;
 use crate::shell::Shell;
-use crate::{console, keyboard, session, storage, thread};
+use crate::{console, keyboard, session, storage, textedit, thread};
+use alloc::format;
+use alloc::string::String;
 use alloc::vec::Vec;
 
 struct Terminal {
     window: usize,
     session: u32,
     thread: thread::ThreadId,
+    /// A shell prints, and that text goes to its window. A program that
+    /// draws its window itself (the editor) has nothing to bring over.
+    prints: bool,
 }
 
 static TERMINALS: Global<Vec<Terminal>> = Global::new(Vec::new());
@@ -24,20 +29,34 @@ static STARTED: Global<bool> = Global::new(false);
 /// Open a terminal window with a new shell in it; returns the window's number.
 pub fn open_terminal() -> Result<usize, &'static str> {
     let storage = storage::handle().ok_or("no file system is mounted")?;
+    open("Terminal", "terminal", true, move |_| Shell::remote(storage).run_session())
+}
+
+/// Open a window with the text editor on a file (`path` is absolute).
+pub fn open_editor(path: &str) -> Result<usize, &'static str> {
+    let mut storage = storage::handle().ok_or("no file system is mounted")?;
+    let text = textedit::load(&mut storage, path)?;
+    let path = String::from(path);
+    let name = path.rsplit('/').next().unwrap_or(&path);
+    open(&format!("Edit: {name}"), "editor", false, move |window| textedit::run(window, path, text, storage))
+}
+
+/// A window, a session for its keys, and a thread that runs `program` in it.
+fn open(title: &str, thread_name: &str, prints: bool, program: impl FnOnce(usize) + 'static) -> Result<usize, &'static str> {
     let session = session::open().ok_or("too many sessions")?;
-    let window = match console::open_pane("Terminal") {
+    let window = match console::open_pane(title) {
         Ok(window) => window,
         Err(why) => {
             session::remove(session);
             return Err(why);
         }
     };
-    let Some(thread) = thread::spawn("terminal", Some(session), move || Shell::remote(storage).run_session()) else {
+    let Some(thread) = thread::spawn(thread_name, Some(session), move || program(window)) else {
         console::close_pane(window);
         session::remove(session);
         return Err("could not start a thread");
     };
-    TERMINALS.get().push(Terminal { window, session, thread });
+    TERMINALS.get().push(Terminal { window, session, thread, prints });
     if !*STARTED.get() {
         *STARTED.get() = thread::spawn("desktop", None, serve).is_some();
     }
@@ -95,12 +114,12 @@ fn step() {
     }
     let mut i = 0;
     while i < TERMINALS.get().len() {
-        let (window, session, thread) = {
+        let (window, session, thread, prints) = {
             let t = &TERMINALS.get()[i];
-            (t.window, t.session, t.thread)
+            (t.window, t.session, t.thread, t.prints)
         };
         let text = session::take_output(session);
-        if !text.is_empty() {
+        if !text.is_empty() && prints {
             console::pane_write(window, &text);
         }
         if !thread::is_alive(thread) {

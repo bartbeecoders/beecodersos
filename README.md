@@ -222,7 +222,8 @@ kernel/
   src/paging.rs        page table changes after boot: write-combining for the framebuffer
   src/gfx.rs           drawing on a framebuffer: rectangles and characters, always clipped
   src/wm.rs            window system: desktop background, window frames, order and focus
-  src/desk.rs          the extra terminal windows: their shells, keys for the focused window
+  src/desk.rs          the extra windows: their shells and programs, keys for the focused window
+  src/textedit.rs      the text editor (`edit`)
   src/keyboard.rs      PS/2 keyboard driver + scancode decoder (modifiers, dead keys)
   src/layouts.rs       keyboard layouts (US, Belgian Period)
   src/uart.rs          16550 serial port: detection, sending and receiving with limits
@@ -316,7 +317,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `ai`,
-`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `sleep`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `sleep`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Under the hood:** interrupts are enabled (IDT + remapped PIC; IRQ0 timer,
 IRQ1 keyboard, IRQ3 COM2 AI bridge, IRQ4 COM1 serial). Handlers queue raw bytes; the shell decodes them and sleeps with
@@ -1176,6 +1177,16 @@ desktop.
   console's own window cannot be closed. Changing the resolution or font, or
   `desktop off`, closes the extra windows. What the serial port types always
   goes to the console.
+- **Text editor:** `edit FILE` opens a file (or a new one) in a window of
+  its own (`kernel/src/textedit.rs`). Type to insert; arrows, Home, End,
+  Page Up and Page Down move; Enter keeps the indent of the line; Tab goes to
+  the next multiple of four; Ctrl+K cuts the rest of the line. **Ctrl+S**
+  saves, **Ctrl+Q** leaves (asked twice when changes are not saved). The
+  status line at the top shows the name, the place of the cursor and what
+  just happened. Long lines scroll sideways. Text files up to 1 MiB; a file
+  is written back with a line end after every line. Closing the window
+  with its close box leaves without saving. An editor counts as one of the
+  four extra windows.
 - `sleep SECONDS` waits (used by the tests while another window works).
 - The boot flags `desktop=off` and `desktop=on` decide for one boot, whatever
   was saved. The screen is set up before the disk is read, so a machine with
@@ -1187,8 +1198,8 @@ desktop.
   a framebuffer in RAM; scenarios `desktop*.scn` check real pixels of the
   screen (`@screenshot WxH pixels X,Y=RRGGBB ...`); `desktop-windows.scn`
   types in a second window, changes focus with Alt+Tab and the mouse, and
-  closes windows. Through `beectl.py text` the host sees the text of every
-  terminal window.
+  closes windows; `desktop-edit.scn` edits and saves files. Through
+  `beectl.py text` the host sees the text of every window.
 
 ## USB: keyboard and mouse (xHCI) ✅ in QEMU, not yet tried on the HP
 

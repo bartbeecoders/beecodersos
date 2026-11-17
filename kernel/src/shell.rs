@@ -603,6 +603,14 @@ impl Shell {
                 _ => error("usage: sleep SECONDS   (0 to 3600)"),
             },
             ("sleep", _) => error("usage: sleep SECONDS   (0 to 3600)"),
+            ("edit", [file]) => {
+                let path = self.abs(file);
+                match crate::desk::open_editor(&path) {
+                    Ok(_) => println!("editing {path} in a new window: Ctrl+S saves, Ctrl+Q leaves"),
+                    Err(why) => error(&format!("edit {file}: {why}")),
+                }
+            }
+            ("edit", _) => error("usage: edit FILE"),
             ("terminal", []) => match crate::desk::open_terminal() {
                 Ok(_) => println!("a new terminal window ({} open): Alt+Tab or a click changes window, 'exit' or its close box ends it", crate::desk::count()),
                 Err(why) => error(&format!("terminal: {why}")),
@@ -1789,6 +1797,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("lsusb", "USB controller and devices"),
     ("threads", "what runs side by side inside the kernel"),
     ("display [mode WxH]", "screen: driver, resolution; 'display font 1|2|auto'; 'display test'; 'display speed'"),
+    ("edit FILE", "text editor in a window on the desktop (Ctrl+S saves, Ctrl+Q leaves)"),
     ("sleep SECONDS", "wait (Ctrl+C ends it)"),
     ("terminal", "one more terminal window on the desktop, with a shell of its own"),
     ("desktop [on|off]", "graphical desktop: the terminal in a window (on by default; saved)"),

@@ -89,6 +89,11 @@ pub fn close(id: u32) {
     }
 }
 
+/// Was the session told that no more input will come?
+pub fn is_closed(id: u32) -> bool {
+    find(id).is_none_or(|s| s.closed)
+}
+
 /// Has the session printed something that was not taken yet?
 pub fn has_output(id: u32) -> bool {
     find(id).is_some_and(|s| !s.output.is_empty())

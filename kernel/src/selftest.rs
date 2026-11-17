@@ -51,6 +51,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("gfx: the fast drawing paths give the same picture", gfx_fast_paths),
     ("screen in memory: changed parts are copied, in batches", screen_in_memory),
     ("windows: order, focus by click, close box, contents", wm_windows),
+    ("text editor: typing, moving, lines, what the window shows", text_editor),
     ("heap: alloc and free", heap_alloc_free),
     ("heap: 1 MiB buffer", heap_large_buffer),
     ("ring: order and overflow", ring_buffer),
@@ -2182,5 +2183,110 @@ fn wm_windows() -> TestResult {
     check_eq!(t.rgb(0, 0), wm::BACKGROUND);
     check!(Surface::new(0, 10, Xrgb8888).is_none() && Surface::new(10, 0, Xrgb8888).is_none());
     check!(Surface::new(usize::MAX, 2, Xrgb8888).is_none());
+    Ok(())
+}
+
+fn text_editor() -> TestResult {
+    use crate::input::Key;
+    use crate::textedit::{Action, Editor};
+    let keys = |e: &mut Editor, keys: &[Key]| keys.iter().for_each(|k| check_none(e.key(*k, 10)));
+    fn check_none(action: Action) {
+        assert!(action == Action::None);
+    }
+    let typed = |e: &mut Editor, text: &str| text.chars().for_each(|c| check_none(e.key(Key::Char(c), 10)));
+    let row_text = |cells: &[u16]| cells.iter().map(|c| crate::vga::from_cp437(*c as u8)).collect::<String>();
+
+    // A file is shown as it is and written back as it was.
+    let mut e = Editor::new("one\ntwo\n");
+    check_eq!((e.text().as_str(), e.modified(), e.position()), ("one\ntwo\n", false, (1, 1)));
+    check_eq!(Editor::new("").text(), "\n"); // a new file: one empty line
+    check_eq!(Editor::new("a\r\nb").text(), "a\nb\n"); // DOS line ends go, a missing last one comes
+
+    // Typing, Enter in the middle of a line, Backspace and Delete across lines.
+    keys(&mut e, &[Key::End]);
+    typed(&mut e, "!!");
+    check_eq!((e.text().as_str(), e.modified(), e.position()), ("one!!\ntwo\n", true, (1, 6)));
+    keys(&mut e, &[Key::Left, Key::Left, Key::Enter]);
+    check_eq!((e.text().as_str(), e.position()), ("one\n!!\ntwo\n", (2, 1)));
+    keys(&mut e, &[Key::Backspace]);
+    check_eq!((e.text().as_str(), e.position()), ("one!!\ntwo\n", (1, 4)));
+    keys(&mut e, &[Key::Delete, Key::Delete, Key::Delete]);
+    check_eq!((e.text().as_str(), e.position()), ("onetwo\n", (1, 4)));
+    keys(&mut e, &[Key::Delete, Key::Delete, Key::Delete, Key::Delete, Key::Backspace, Key::Backspace, Key::Backspace, Key::Backspace]);
+    check_eq!((e.text().as_str(), e.position()), ("\n", (1, 1))); // nothing left to remove: no harm
+
+    // Moving: line ends wrap, a shorter line pulls the cursor in, pages.
+    let mut e = Editor::new("long line\nab\n\nlast");
+    keys(&mut e, &[Key::End, Key::Down]);
+    check_eq!(e.position(), (2, 3));
+    keys(&mut e, &[Key::Right]);
+    check_eq!(e.position(), (3, 1));
+    keys(&mut e, &[Key::Left, Key::Home, Key::Left]);
+    check_eq!(e.position(), (1, 10));
+    keys(&mut e, &[Key::Up, Key::Up, Key::PageDown]);
+    check_eq!(e.position(), (4, 5));
+    keys(&mut e, &[Key::Down, Key::Right, Key::PageUp]);
+    check_eq!((e.position(), e.modified()), ((1, 5), false));
+
+    // Tab goes to the next multiple of four; Enter keeps the indent; Ctrl+K cuts.
+    let mut e = Editor::new("");
+    typed(&mut e, "a");
+    keys(&mut e, &[Key::Tab]);
+    typed(&mut e, "b");
+    check_eq!(e.text(), "a   b\n");
+    let mut e = Editor::new("    if x {");
+    keys(&mut e, &[Key::End, Key::Enter]);
+    typed(&mut e, "y");
+    check_eq!((e.text().as_str(), e.position()), ("    if x {\n    y\n", (2, 6)));
+    keys(&mut e, &[Key::Up, Key::Home, Key::Right, Key::Right, Key::Ctrl('k')]);
+    check_eq!(e.text(), "  \n    y\n");
+    keys(&mut e, &[Key::Ctrl('k')]);
+    check_eq!(e.text(), "      y\n");
+
+    // Saving and leaving: Ctrl+Q with changes asks first; any other key takes the question back.
+    let mut e = Editor::new("x");
+    check_eq!(e.key(Key::Ctrl('q'), 10), Action::Quit);
+    typed(&mut e, "y");
+    check_eq!(e.key(Key::Ctrl('q'), 10), Action::None);
+    let (lines, _) = e.render("f.txt", 80, 5);
+    check!(row_text(&lines[0]).starts_with(" changes not saved: Ctrl+Q again"));
+    check_eq!(lines[0][0] >> 8, 0x4F);
+    keys(&mut e, &[Key::Right]);
+    check_eq!(e.key(Key::Ctrl('q'), 10), Action::None);
+    check_eq!(e.key(Key::Ctrl('q'), 10), Action::Quit);
+    check_eq!(e.key(Key::Ctrl('s'), 10), Action::Save);
+    e.saved(Err("the file could not be written"));
+    check!(e.modified() && row_text(&e.render("f.txt", 80, 5).0[0]).starts_with(" NOT saved: the file could not be written"));
+    e.saved(Ok(3));
+    check!(!e.modified() && row_text(&e.render("f.txt", 80, 5).0[0]).starts_with(" saved, 3 bytes"));
+    check_eq!(e.key(Key::Ctrl('q'), 10), Action::Quit);
+
+    // What the window shows: the status line, then the text, scrolled so
+    // that the cursor is in view, every line exactly as wide as the window.
+    let text: String = (1..=30).map(|n| alloc::format!("line {n} is here\n")).collect();
+    let mut e = Editor::new(&text);
+    let (lines, cursor) = e.render("notes.txt", 20, 6);
+    check_eq!((lines.len(), cursor), (6, (1, 0)));
+    check!(lines.iter().all(|l| l.len() == 20));
+    check_eq!((row_text(&lines[0]).as_str(), lines[0][19] >> 8), (" notes.txt  line 1 o", 0x70));
+    check_eq!((row_text(&lines[1]).as_str(), row_text(&lines[5]).as_str(), lines[1][0] >> 8), ("line 1 is here      ", "line 5 is here      ", 0x07));
+    keys(&mut e, &[Key::PageDown, Key::PageDown]);
+    let (lines, cursor) = e.render("notes.txt", 20, 6);
+    check_eq!((e.position(), cursor, row_text(&lines[5]).trim_end()), ((21, 1), (5, 0), "line 21 is here"));
+    keys(&mut e, &[Key::Up, Key::Up, Key::Up, Key::Up, Key::Up]);
+    let (lines, cursor) = e.render("notes.txt", 20, 6);
+    check_eq!((cursor, row_text(&lines[1]).trim_end()), ((1, 0), "line 16 is here"));
+    // A long line scrolls sideways.
+    let mut e = Editor::new("0123456789abcdefghijklmnopqrstuvwxyz");
+    keys(&mut e, &[Key::End]);
+    let (lines, cursor) = e.render("f", 10, 3);
+    check_eq!((row_text(&lines[1]).as_str(), cursor), ("rstuvwxyz ", (1, 9)));
+    keys(&mut e, &[Key::Home]);
+    check_eq!(row_text(&e.render("f", 10, 3).0[1]), "0123456789");
+    // Past the end of the text the window is empty; a window of nothing does not break it.
+    let mut e = Editor::new("only");
+    let (lines, _) = e.render("f", 8, 4);
+    check_eq!((row_text(&lines[1]).as_str(), row_text(&lines[2]).as_str(), row_text(&lines[3]).as_str()), ("only    ", "        ", "        "));
+    check_eq!(e.render("f", 0, 0).0.len(), 2);
     Ok(())
 }

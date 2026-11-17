@@ -21,6 +21,7 @@ mod bootmods;
 #[macro_use]
 mod console;
 mod desk;
+mod textedit;
 // After `console`: uses println!.
 mod bootslots;
 mod crash;

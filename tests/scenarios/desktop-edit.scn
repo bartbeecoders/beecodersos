@@ -1,0 +1,55 @@
+# The text editor: `edit FILE` opens the file in a window of its own.
+# Ctrl+S saves, Ctrl+Q leaves; the keyboard types in the editor's window.
+@usb kbd
+$ layout us
+$ echo first line > /note.txt
+$ edit /note.txt
+editing /note.txt in a new window: Ctrl+S saves, Ctrl+Q leaves
+# The window is on top (a blue title bar), with a status line (light gray)
+# above the text (black).
+@screenshot 1920x1080 pixels 300,36=3a6ea5 660,64=aaaaaa 660,200=000000
+$ threads
+~ editor     waiting
+
+# Type at the end of the first line and on a new one, then save and leave.
+@keys end spc p l u s ret s e c o n d ctrl+s
+$ sleep 1
+$ cat /note.txt
+first line plus
+second
+@keys ctrl+q
+@screenshot 1920x1080 pixels 300,36=a8d0f0 1500,78=3a6ea5
+$ threads
+!~ editor
+
+# Leaving with changes that were not saved takes Ctrl+Q twice; the file stays as it was.
+$ edit note.txt
+editing /note.txt in a new window: Ctrl+S saves, Ctrl+Q leaves
+@keys x x x ctrl+q
+$ sleep 1
+$ threads
+~ editor     waiting
+@keys ctrl+q
+@screenshot 1920x1080 pixels 300,36=a8d0f0
+$ cat /note.txt
+first line plus
+second
+
+# A new file, in a folder; the close box leaves too (nothing is saved by it).
+$ mkdir /docs
+$ cd /docs
+$ edit new.txt
+editing /docs/new.txt in a new window: Ctrl+S saves, Ctrl+Q leaves
+@keys h i ctrl+s ctrl+q
+$ sleep 1
+$ cat /docs/new.txt
+hi
+
+# What cannot be edited.
+$ edit /docs
+edit /docs: is a directory
+$ edit
+usage: edit FILE
+$ desktop off
+$ edit /note.txt
+edit /note.txt: windows need the desktop (see desktop)
