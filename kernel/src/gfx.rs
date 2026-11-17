@@ -74,10 +74,26 @@ impl Canvas {
     pub fn fill_rect(&self, rect: Rect, rgb: u32) {
         let r = rect.clip(&self.clip);
         let value = self.mode.format.encode(rgb);
+        if self.mode.format.bytes() == 4 {
+            // The usual format, a line at a time: far faster than pixel by pixel.
+            for y in r.y..r.y + r.height {
+                unsafe { self.fill_line(r.x, y, r.width, value) };
+            }
+            return;
+        }
         for y in r.y..r.y + r.height {
             for x in r.x..r.x + r.width {
                 self.put(x, y, value);
             }
+        }
+    }
+
+    /// `count` pixels of 4 bytes from (x, y) to the right, all `value`.
+    /// Callers have checked that they lie on the canvas.
+    unsafe fn fill_line(&self, x: usize, y: usize, count: usize, value: u32) {
+        let line = self.framebuffer.add(y * self.mode.pitch as usize + x * 4) as *mut u32;
+        for i in 0..count {
+            line.add(i).write_unaligned(value);
         }
     }
 
@@ -96,10 +112,27 @@ impl Canvas {
             return;
         }
         let whole = visible == cell;
+        let (fg, bg) = (self.mode.format.encode(fg), self.mode.format.encode(bg));
+        if whole && self.mode.format.bytes() == 4 {
+            // The usual case: a line of the character is put together in
+            // memory and copied to the screen in one go, once per row it covers.
+            let width = GLYPH_WIDTH * scale;
+            let mut line = [0u32; GLYPH_WIDTH * 4];
+            for (gy, bits) in FONT[code as usize].iter().enumerate() {
+                for gx in 0..GLYPH_WIDTH {
+                    let value = if bits & (0x80 >> gx) != 0 { fg } else { bg };
+                    line[gx * scale..(gx + 1) * scale].fill(value);
+                }
+                for sy in 0..scale {
+                    let at = (y + gy * scale + sy) * self.mode.pitch as usize + x * 4;
+                    unsafe { core::ptr::copy_nonoverlapping(line.as_ptr() as *const u8, self.framebuffer.add(at), width * 4) };
+                }
+            }
+            return;
+        }
         let inside = |px: usize, py: usize| {
             whole || (px >= visible.x && px < visible.x + visible.width && py >= visible.y && py < visible.y + visible.height)
         };
-        let (fg, bg) = (self.mode.format.encode(fg), self.mode.format.encode(bg));
         for (gy, bits) in FONT[code as usize].iter().enumerate() {
             for gx in 0..GLYPH_WIDTH {
                 let value = if bits & (0x80 >> gx) != 0 { fg } else { bg };

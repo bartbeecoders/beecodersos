@@ -48,6 +48,7 @@ macro_rules! check_eq {
 
 const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("crash: restart or halt afterwards", crash_then),
+    ("gfx: the fast drawing paths give the same picture", gfx_fast_paths),
     ("heap: alloc and free", heap_alloc_free),
     ("heap: 1 MiB buffer", heap_large_buffer),
     ("ring: order and overflow", ring_buffer),
@@ -2011,5 +2012,44 @@ fn crash_then() -> TestResult {
     // Driven from the host: restart, but not in a loop right after starting.
     check_eq!(then(false, true, 59_999), Then::Halt);
     check_eq!(then(false, true, 60_000), Then::Restart);
+    Ok(())
+}
+
+fn gfx_fast_paths() -> TestResult {
+    use crate::display::PixelFormat::{Rgb888, Xbgr8888, Xrgb8888};
+    use crate::gfx::{Canvas, Rect};
+    // 4-byte pixels are drawn a line at a time, 3-byte pixels one by one:
+    // the same drawing must give the same picture on both, guard bytes
+    // between the lines included.
+    let draw = |canvas: &Canvas| {
+        canvas.fill_rect(Rect::new(3, 2, 50, 30), 0x123456);
+        canvas.fill_rect(Rect::new(60, 40, 100, 100), 0xA8D0F0); // partly outside
+        canvas.fill_rect(Rect::new(0, 0, 0, 10), 0xFFFFFF); // empty
+        for scale in 1..=4 {
+            canvas.glyph(1 + scale * 9, 3 * scale, b'A' + scale as u8, 0xFFFF55, 0x0000AA, scale);
+        }
+        canvas.glyph(64 - 8, 48 - 16, b'Z', 0xFFFFFF, 0x000000, 1); // last place that fits
+        canvas.glyph(64 - 7, 0, b'!', 0xFFFFFF, 0x000000, 1); // does not fit: not drawn
+        canvas.clipped(Rect::new(10, 10, 5, 5)).glyph(8, 8, b'#', 0xFF0000, 0x00FF00, 1); // cut: slow path
+        canvas.clipped(Rect::new(20, 20, 9, 9)).fill_rect(Rect::new(0, 0, 64, 48), 0x555555);
+    };
+    let mut reference = TestScreen::new(64, 48, 1, Rgb888);
+    let slow = Canvas::new(reference.pixels.as_mut_ptr(), reference.mode);
+    draw(&slow);
+    for format in [Xrgb8888, Xbgr8888] {
+        let mut t = TestScreen::new(64, 48, 5, format);
+        let fast = Canvas::new(t.pixels.as_mut_ptr(), t.mode);
+        draw(&fast);
+        for y in 0..48 {
+            for x in 0..64 {
+                check_eq!(fast.pixel(x, y), slow.pixel(x, y));
+            }
+            // The 5 spare bytes after each line are untouched.
+            let end = y * t.mode.pitch as usize + 64 * 4;
+            check!(t.pixels[end..end + 5].iter().all(|b| *b == 0xEE));
+        }
+        let size = t.mode.bytes() as usize;
+        check!(t.pixels[size..].iter().all(|b| *b == 0xEE));
+    }
     Ok(())
 }
