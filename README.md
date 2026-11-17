@@ -1057,7 +1057,8 @@ framebuffer, at any resolution.
   **`display mode WIDTHxHEIGHT`** changes the resolution (the text on screen
   stays);
   **`display test`** shows color bars until Enter, then tells how long drawing
-  the whole screen took.
+  the whole screen took; **`display speed`** measures the same without
+  showing bars or waiting for a key (so it can be asked through `beectl.py`).
 - **Boot flags:** `display=text` keeps the text screen (the way back if graphics
   go wrong), `display=bochs` insists on a driver, `mode=1280x720` picks the
   resolution.
@@ -1126,7 +1127,7 @@ video memory: write-combining
   of one by one. On real hardware that makes drawing many times faster; in a
   VM it changes nothing. `display` shows `video memory: write-combining`, or
   `plain` and why. The boot flag `wc=off` switches it off.
-- **Measuring:** `display test` prints how long drawing the whole screen takes.
+- **Measuring:** `display test` and `display speed` print how long drawing the whole screen takes.
 
 Not done: scrolling in jumps when output comes faster than the screen draws
 (only if the HP shows it is needed).

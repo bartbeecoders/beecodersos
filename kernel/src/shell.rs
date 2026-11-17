@@ -566,6 +566,14 @@ impl Shell {
                 let micros = console::redraw();
                 println!("drawing the whole screen again took {}.{} ms", micros / 1000, micros % 1000 / 100);
             }
+            ("display", ["speed"]) if display::current().is_none() => {
+                error("display speed: needs a graphics mode, and this is the text screen")
+            }
+            ("display", ["speed"]) => {
+                // Unlike `display test` this waits for no key: it can be asked from afar.
+                let best = (0..5).map(|_| console::redraw()).min().unwrap_or(0);
+                println!("drawing the whole screen again takes {}.{} ms (best of 5)", best / 1000, best % 1000 / 100);
+            }
             ("display", ["font", size]) => match display::parse_font(size) {
                 Some(_) if display::current().is_none() => error("display font: needs a graphics mode, and this is the text screen"),
                 Some(font) => {
@@ -575,7 +583,7 @@ impl Shell {
                 }
                 None => error("usage: display font 1|2|auto   (1: 8x16 pixels per character, 2: 16x32)"),
             },
-            ("display", _) => error("usage: display [mode WIDTHxHEIGHT | font 1|2|auto | test]"),
+            ("display", _) => error("usage: display [mode WIDTHxHEIGHT | font 1|2|auto | test | speed]"),
             ("desktop", []) if console::desktop_on() => {
                 let (cols, rows) = console::size();
                 println!("desktop: on, the terminal window has {cols}x{rows} characters ('desktop off' ends it)");
@@ -1761,7 +1769,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("install [DISK]", "put the OS on a disk, or upgrade it (alone: list the disks)"),
     ("lsusb", "USB controller and devices"),
     ("threads", "what runs side by side inside the kernel"),
-    ("display [mode WxH]", "screen: driver, resolution; 'display font 1|2|auto'; 'display test'"),
+    ("display [mode WxH]", "screen: driver, resolution; 'display font 1|2|auto'; 'display test'; 'display speed'"),
     ("desktop [on|off]", "graphical desktop: the terminal in a window (on by default; saved)"),
     ("slots", "A/B kernel slots: which one runs, last trial"),
     ("crash", "deliberately crash the kernel (tests crash reports)"),

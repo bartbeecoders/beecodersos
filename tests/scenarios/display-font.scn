@@ -22,7 +22,7 @@ mode 1280x720
 $ display font 3
 usage: display font 1|2|auto   (1: 8x16 pixels per character, 2: 16x32)
 $ display font
-usage: display [mode WIDTHxHEIGHT | font 1|2|auto | test]
+usage: display [mode WIDTHxHEIGHT | font 1|2|auto | test | speed]
 
 # After a restart both are back.
 @reboot

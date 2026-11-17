@@ -7,6 +7,8 @@ text: 80x25 characters
 @screenshot 720x400 text
 $ display test
 display test: needs a graphics mode, and this is the text screen
+$ display speed
+display speed: needs a graphics mode, and this is the text screen
 $ display mode 1280x720
 display mode 1280x720: no graphics driver is in use (this is the text screen)
 $ help

@@ -38,8 +38,10 @@ $ display mode 100x100
 display mode 100x100: not a usable size (320x200 to 4096x2160, e.g. 1920x1080)
 $ display mode 1280x720x32
 ~ not a usable size
+$ display speed
+~ ^drawing the whole screen again takes \d+\.\d ms \(best of 5\)$
 $ display mode
-usage: display [mode WIDTHxHEIGHT | font 1|2|auto | test]
+usage: display [mode WIDTHxHEIGHT | font 1|2|auto | test | speed]
 $ display
 mode: 1280x720, 32 bits per pixel
 @screenshot 1280x720 text
