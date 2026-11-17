@@ -1,0 +1,8 @@
+# `cpu`: what the processor is. The test VM has one.
+$ cpu
+~ ^processor: \S
+count: 1 (this OS runs on one of them so far)
+~ ^clock: \d+ MHz$
+~ ^can do: .*sse2
+$ cpu now
+cpu: wrong arguments (see 'help')

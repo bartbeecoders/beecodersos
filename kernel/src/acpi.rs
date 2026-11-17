@@ -228,6 +228,18 @@ fn find_table(rsdp: u64, sig: &[u8; 4]) -> Option<u64> {
         .find(|&t| unsafe { core::slice::from_raw_parts(t as *const u8, 4) } == sig)
 }
 
+/// A whole ACPI table by its signature ("APIC", ...), for code outside this
+/// file that reads one. `None`: no such table, a wrong checksum, or a
+/// length that cannot be (tables here are at most 1 MiB).
+pub fn table(sig: &[u8; 4]) -> Option<&'static [u8]> {
+    let addr = find_table(find_rsdp()?, sig)?;
+    let len = read32(addr + 4) as u64;
+    if !(36..=1 << 20).contains(&len) || addr + len > MAPPED_LIMIT || !checksum_ok(addr, len) {
+        return None;
+    }
+    Some(unsafe { core::slice::from_raw_parts(addr as *const u8, len as usize) })
+}
+
 /// Extract SLP_TYPa/b from the `_S5_` package in the DSDT's AML.
 fn find_s5(dsdt: u64) -> Option<(u16, u16)> {
     let len = read32(dsdt + 4) as usize;

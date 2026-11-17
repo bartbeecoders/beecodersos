@@ -413,6 +413,13 @@ impl Shell {
                 allocator::used() / 1024,
                 allocator::heap_size() / 1024
             ),
+            ("cpu", []) => {
+                let processors = crate::cpu::processors();
+                println!("processor: {}", crate::cpu::name());
+                println!("count: {} (this OS runs on one of them so far)", processors.len());
+                println!("clock: {} MHz", time::tsc_mhz());
+                println!("can do: {}", crate::cpu::features(crate::cpu::raw()).join(" "));
+            }
             ("about" | "version", []) => {
                 println!("BeeCodersOs {} b{} - x86_64 kernel in Rust", crate::OS_VERSION, crate::OS_BUILD);
                 println!("filesystem: BeeFS on {}", if self.storage.persistent { "ATA disk" } else { "RAM disk" });
@@ -1807,6 +1814,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("display [mode WxH]", "screen: driver, resolution; 'display font 1|2|auto'; 'display test'; 'display speed'"),
     ("edit FILE", "text editor in a window on the desktop (Ctrl+S saves, Ctrl+Q leaves)"),
     ("files [FOLDER]", "file manager in a window: browse, open in the editor, new folder, rename, delete"),
+    ("cpu", "the processor: name, how many, clock speed, what it can do"),
     ("sleep SECONDS", "wait (Ctrl+C ends it)"),
     ("terminal", "one more terminal window on the desktop, with a shell of its own"),
     ("desktop [on|off]", "graphical desktop: the terminal in a window (on by default; saved)"),

@@ -20,6 +20,7 @@ mod bootfb;
 mod bootmods;
 #[macro_use]
 mod console;
+mod cpu;
 mod desk;
 mod filemgr;
 mod textedit;

@@ -55,6 +55,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("remote control: the keys a text stands for", remote_keys),
     ("file manager: order, choosing, questions, what the window shows", file_manager),
     ("mouse: clicks inside windows, desktop buttons", mouse_clicks),
+    ("cpu: name, features, the list of processors", cpu_facts),
     ("heap: alloc and free", heap_alloc_free),
     ("heap: 1 MiB buffer", heap_large_buffer),
     ("ring: order and overflow", ring_buffer),
@@ -2507,5 +2508,50 @@ fn mouse_clicks() -> TestResult {
     check_eq!(edit.position(), (3, 3)); // below the text: on the last line
     edit.key(Key::Click(0, 0), 9);
     check_eq!((edit.position(), edit.modified()), ((3, 3), false)); // the status line is not text
+    Ok(())
+}
+
+fn cpu_facts() -> TestResult {
+    use crate::cpu::{clean_name, features, madt_processors, Raw, MAX_PROCESSORS};
+    check_eq!(clean_name(b"  Intel(R) Core(TM)   i5-4590 CPU @ 3.30GHz\0\0junk"), "Intel(R) Core(TM) i5-4590 CPU @ 3.30GHz");
+    check_eq!((clean_name(b"").as_str(), clean_name(&[0xFF, b'A', 7, b'B']).as_str()), ("", "AB"));
+    // This very processor: it has a name, and sse2 (every 64-bit one does).
+    check!(!crate::cpu::name().is_empty());
+    check!(features(crate::cpu::raw()).contains(&"sse2"));
+    check_eq!(features(Raw { one: (0, 0), seven_ebx: 0 }), Vec::<&str>::new());
+    check_eq!(features(Raw { one: (1 << 28 | 1 << 31, 1 << 26), seven_ebx: 1 << 5 }), ["sse2", "avx", "avx2", "vm"]);
+
+    // A table of processors: header (44 bytes), then entries.
+    let mut table = vec![0u8; 44];
+    let mut entry = |kind: u8, body: &[u8]| {
+        table.push(kind);
+        table.push(body.len() as u8 + 2);
+        table.extend_from_slice(body);
+    };
+    entry(0, &[0, 0, 1, 0, 0, 0]); // processor 0, APIC 0, enabled
+    entry(1, &[0; 10]); // an I/O APIC: not a processor
+    entry(0, &[1, 2, 1, 0, 0, 0]); // APIC 2, enabled
+    entry(0, &[2, 4, 0, 0, 0, 0]); // APIC 4: not usable
+    entry(0, &[3, 6, 2, 0, 0, 0]); // APIC 6: can be switched on
+    entry(9, &[0, 0, 0x00, 0x01, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0]); // x2APIC 256, enabled
+    entry(9, &[0, 0, 0x01, 0x01, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0]); // x2APIC 257: not usable
+    check_eq!(madt_processors(&table), [0, 2, 6, 256]);
+    // Cut off anywhere, it gives the entries that are whole and reads nothing beyond.
+    for len in 0..table.len() {
+        let found = madt_processors(&table[..len]);
+        check!(found.len() <= 4 && [0u32, 2, 6, 256].starts_with(&found));
+    }
+    // An entry with a length that cannot be ends the list; a huge table is cut off.
+    let mut bad = table.clone();
+    bad[45] = 0;
+    check_eq!(madt_processors(&bad), Vec::<u32>::new());
+    bad[45] = 1;
+    check_eq!(madt_processors(&bad), Vec::<u32>::new());
+    let mut many = vec![0u8; 44];
+    for i in 0..1000u32 {
+        many.extend_from_slice(&[0, 8, i as u8, i as u8, 1, 0, 0, 0]);
+    }
+    check_eq!(madt_processors(&many).len(), MAX_PROCESSORS);
+    check!(!crate::cpu::processors().is_empty());
     Ok(())
 }

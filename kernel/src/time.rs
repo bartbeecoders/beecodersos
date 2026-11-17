@@ -186,6 +186,11 @@ fn tsc_per_ms() -> u64 {
     per_ms
 }
 
+/// The speed of the processor's clock (its timestamp counter) in MHz.
+pub fn tsc_mhz() -> u64 {
+    tsc_per_ms() / 1000
+}
+
 /// Microseconds since an arbitrary start; for measuring short intervals.
 pub fn micros() -> u64 {
     let per_ms = tsc_per_ms();

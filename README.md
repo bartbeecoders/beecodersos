@@ -223,6 +223,7 @@ kernel/
   src/gfx.rs           drawing on a framebuffer: rectangles and characters, always clipped
   src/wm.rs            window system: desktop background, window frames, order and focus
   src/desk.rs          the extra windows: their shells and programs, keys for the focused window
+  src/cpu.rs           the processor: name, features, how many there are (`cpu`)
   src/textedit.rs      the text editor (`edit`)
   src/filemgr.rs       the file manager (`files`)
   src/keyboard.rs      PS/2 keyboard driver + scancode decoder (modifiers, dead keys)
@@ -318,7 +319,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `ai`,
-`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `sleep`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `sleep`, `cpu`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Under the hood:** interrupts are enabled (IDT + remapped PIC; IRQ0 timer,
 IRQ1 keyboard, IRQ3 COM2 AI bridge, IRQ4 COM1 serial). Handlers queue raw bytes; the shell decodes them and sleeps with
@@ -1224,6 +1225,23 @@ desktop.
   `desktop-files.scn` drives the file manager from the host,
   `desktop-launch.scn` uses the buttons and clicks in windows. Through
   `beectl.py text` the host sees the text of every window.
+
+## Processors: `cpu` (one in use so far)
+
+```
+bee:/$ cpu
+processor: Intel(R) Core(TM) i5-4590 CPU @ 3.30GHz
+count: 4 (this OS runs on one of them so far)
+clock: 3292 MHz
+can do: sse2 sse3 ssse3 sse4.1 sse4.2 avx avx2 aes rdrand
+```
+
+`kernel/src/cpu.rs` asks the processor what it is (CPUID) and counts the
+machine's processors (cores and hardware threads) in the ACPI table "APIC".
+The table is firmware data: every length is checked, a table that is cut off
+gives the entries that are whole. The OS still runs on one processor; starting
+the others is the next step. Tests: a self-test (names, features, tables cut
+off anywhere) and `cpu.scn`.
 
 ## USB: keyboard and mouse (xHCI) ✅ in QEMU, not yet tried on the HP
 
