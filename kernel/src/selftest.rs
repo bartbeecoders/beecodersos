@@ -52,6 +52,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("screen in memory: changed parts are copied, in batches", screen_in_memory),
     ("windows: order, focus by click, close box, contents", wm_windows),
     ("text editor: typing, moving, lines, what the window shows", text_editor),
+    ("remote control: the keys a text stands for", remote_keys),
     ("heap: alloc and free", heap_alloc_free),
     ("heap: 1 MiB buffer", heap_large_buffer),
     ("ring: order and overflow", ring_buffer),
@@ -2288,5 +2289,25 @@ fn text_editor() -> TestResult {
     let (lines, _) = e.render("f", 8, 4);
     check_eq!((row_text(&lines[1]).as_str(), row_text(&lines[2]).as_str(), row_text(&lines[3]).as_str()), ("only    ", "        ", "        "));
     check_eq!(e.render("f", 0, 0).0.len(), 2);
+    Ok(())
+}
+
+fn remote_keys() -> TestResult {
+    use crate::hivectl::{parse_keys, MAX_KEYS};
+    use crate::input::Key::*;
+    check_eq!(parse_keys(""), Some(vec![]));
+    check_eq!(parse_keys("ls é\n"), Some(vec![Char('l'), Char('s'), Char(' '), Char('é'), Enter]));
+    check_eq!(
+        parse_keys("a{enter}{ctrl+s}{alt+tab}{up}{pagedown}{lbrace}}{esc}"),
+        Some(vec![Char('a'), Enter, Ctrl('s'), NextWindow, Up, PageDown, Char('{'), Char('}'), Escape])
+    );
+    check_eq!(parse_keys("{tab}{backspace}{delete}{down}{left}{right}{home}{end}{pageup}"), Some(vec![Tab, Backspace, Delete, Down, Left, Right, Home, End, PageUp]));
+    // Not keys: unknown names, Ctrl with anything but one small letter, a brace left open.
+    for bad in ["{nosuchkey}", "{}", "{ctrl+}", "{ctrl+S}", "{ctrl+ab}", "{ctrl+1}", "abc{enter", "{", "{Enter}"] {
+        check_eq!((bad, parse_keys(bad)), (bad, None));
+    }
+    // Bounded.
+    check_eq!(parse_keys(&"x".repeat(MAX_KEYS)).map(|k| k.len()), Some(MAX_KEYS));
+    check_eq!(parse_keys(&"x".repeat(MAX_KEYS + 1)), None);
     Ok(())
 }

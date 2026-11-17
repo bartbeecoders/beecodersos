@@ -49,6 +49,40 @@ still here
 @ctl run nobody "echo x"
 ~ nobody is not connected
 
+# Typing from afar: only into the other windows, never into the console's own.
+@ctl keys {machine} "echo no"
+~ the console's own window has the focus: keys from the host only go to the other windows
+@ctl run {machine} "terminal"
+~ a new terminal window \(1 open\)
+@ctl keys {machine} "echo typed from afar > /afar/keys.txt{enter}"
+38 keys typed
+@ctl run {machine} "sleep 1"
+@ctl run {machine} "cat /afar/keys.txt"
+typed from afar
+@ctl text {machine}
+~ ^--- window 1 ---$
+~ echo typed from afar > /afar/keys.txt$
+# An editor, driven from afar: type, save, leave.
+@ctl run {machine} "edit /afar/keys.txt"
+~ editing /afar/keys.txt in a new window
+@ctl keys {machine} "{end} and edited{ctrl+s}"
+~ keys typed
+@ctl text {machine}
+~ ^--- window 2 ---$
+~ ^ saved, 27 bytes$
+~ ^typed from afar and edited$
+@ctl keys {machine} "{ctrl+q}"
+@ctl run {machine} "sleep 1"
+@ctl run {machine} "cat /afar/keys.txt"
+typed from afar and edited
+@ctl run {machine} "threads"
+!~ editor
+@ctl keys {machine} "{nosuchkey}"
+~ a key name in \{\} that is not known
+# Alt+Tab from afar changes window; back at the console's window nothing can be typed.
+@ctl keys {machine} "{alt+tab}echo x{enter}"
+~ the console's own window has the focus
+
 # The kill switch.
 $ ai off
 @ctl run {machine} "echo hello"

@@ -9,7 +9,13 @@ through a running beehive (tools/beehive/beehive.py).
                                              \\n in the argument) are typed one after the other
     beectl.py screenshot MACHINE OUT.ppm [--scale 4]
                                              the machine's screen, every SCALE-th pixel
-    beectl.py text MACHINE                   the text on the machine's screen
+    beectl.py text MACHINE                   the text on the machine's screen, window by window
+    beectl.py keys MACHINE "TEXT"            type TEXT in the window that has the focus, as on its
+                                             keyboard. Keys by name: {enter} {tab} {esc} {backspace}
+                                             {delete} {up} {down} {left} {right} {home} {end}
+                                             {pageup} {pagedown} {ctrl+s} {alt+tab} ({lbrace}: a {).
+                                             The console's own window takes no keys from afar:
+                                             open another one first (run MACHINE "terminal")
     beectl.py deploy MACHINE [--kernel K] [--timeout 300]
                                              put the kernel on offer, have the machine fetch it
                                              and restart (`update`, `reboot`), and wait for its
@@ -119,9 +125,9 @@ def deploy(state: Path, args) -> int:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("action", choices=["machines", "run", "screenshot", "text", "deploy"])
+    ap.add_argument("action", choices=["machines", "run", "screenshot", "text", "keys", "deploy"])
     ap.add_argument("machine", nargs="?")
-    ap.add_argument("argument", nargs="?", help="run: the command; screenshot: the file to write")
+    ap.add_argument("argument", nargs="?", help="run: the command; keys: the text to type; screenshot: the file to write")
     ap.add_argument("--timeout", type=float, default=None, help="run: seconds the command may take (30); "
                     "deploy: seconds to wait for the machine's report (300)")
     ap.add_argument("--kernel", type=Path, default=ROOT / "build" / "beecoders.elf", help="deploy: the kernel to offer")
@@ -153,6 +159,11 @@ def main():
         sys.stdout.write("".join(p.get("text", "") for p in pieces))
         if any(p.get("timeout") for p in pieces):
             raise SystemExit(f"(the command did not finish within {args.timeout:.0f} s)")
+    elif args.action == "keys":
+        if args.argument is None:
+            ap.error("which keys?")
+        pieces = request(state, args.machine, "keys", 30, keys=args.argument)
+        sys.stdout.write("".join(p.get("text", "") for p in pieces))
     elif args.action == "text":
         pieces = request(state, args.machine, "screenshot", 30, scale=0)
         sys.stdout.write("".join(p.get("text", "") for p in pieces))

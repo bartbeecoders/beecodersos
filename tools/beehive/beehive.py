@@ -31,6 +31,7 @@ New kernels and remote control (for machines that allow it, see `update` and
     beehive.py offer none              take the offer away
     tools/beectl.py run hp "ls /"      run a command on a machine and print what it shows
     tools/beectl.py screenshot hp out.ppm
+    tools/beectl.py keys hp "ls{enter}"   type in the window that has the focus (not the console's)
 
 The network link is not encrypted: people on the same network can read the
 questions and answers, but cannot use beehive, pretend to be it, or change
@@ -890,7 +891,7 @@ def manage_machines(state: State, action: list[str]) -> int:
 
 
 UPDATE_CHUNK = 4608   # bytes of kernel per line: 6 KiB as text, within the OS's line limit and serial buffer
-CONTROL_KINDS = ("run", "screenshot")
+CONTROL_KINDS = ("run", "screenshot", "keys")
 
 
 def offer_kernel(state: State, action: list[str], build: int | None) -> int:

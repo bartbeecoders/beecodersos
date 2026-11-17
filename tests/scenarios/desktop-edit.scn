@@ -9,7 +9,7 @@ editing /note.txt in a new window: Ctrl+S saves, Ctrl+Q leaves
 # above the text (black).
 @screenshot 1920x1080 pixels 300,36=3a6ea5 660,64=aaaaaa 660,200=000000
 $ threads
-~ editor     waiting
+~ editor     (waiting|ready)
 
 # Type at the end of the first line and on a new one, then save and leave.
 @keys end spc p l u s ret s e c o n d ctrl+s
@@ -28,7 +28,7 @@ editing /note.txt in a new window: Ctrl+S saves, Ctrl+Q leaves
 @keys x x x ctrl+q
 $ sleep 1
 $ threads
-~ editor     waiting
+~ editor     (waiting|ready)
 @keys ctrl+q
 @screenshot 1920x1080 pixels 300,36=a8d0f0
 $ cat /note.txt

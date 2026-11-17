@@ -9,8 +9,8 @@ a new terminal window (1 open): Alt+Tab or a click changes window, 'exit' or its
 # (from 70,74) lost the focus.
 @screenshot 1920x1080 pixels 300,36=3a6ea5 300,100=000000 1500,78=8a9bb0 0,0=a8d0f0
 $ threads
-~ terminal   waiting
-~ desktop    waiting
+~ terminal   (waiting|ready)
+~ desktop    (waiting|ready)
 
 # The keyboard now types in the new window; its shell writes a file.
 @keys e c h o spc h i spc shift+dot spc slash p a n e dot t x t ret

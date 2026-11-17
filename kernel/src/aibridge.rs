@@ -120,7 +120,7 @@ fn sort(msg: Object) {
                 send(&s);
             }
         }
-        Some("run" | "screenshot") => {
+        Some("run" | "screenshot" | "keys") => {
             let rid = msg.str("rid").unwrap_or("");
             // The kill switch (`ai off`) stops the host from acting here too.
             if !CONTROL.load(Ordering::Relaxed) || !LINK.get().enabled {

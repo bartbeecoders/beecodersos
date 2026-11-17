@@ -13,6 +13,13 @@
 //!   {"type":"screenshot","rid":R,"scale":N}           {"type":"shot","rid":R,"w":..,"h":..,"scale":N}
 //!       (scale 0: the text on the screen)             {"type":"shot","rid":R,"data":base64}  (pieces)
 //!                                                     {"type":"shot","rid":R,"text":..} / {"done":true}
+//!   {"type":"keys","rid":R,"keys":TEXT}               {"type":"ran","rid":R,"text":..,"done":true}
+//!
+//! Keys are typed into the window that has the focus, as if on the
+//! keyboard, but never into the console's own window: what only the
+//! machine's own console may do cannot be done from afar this way either.
+//! In TEXT, `{enter}`, `{ctrl+s}`, `{alt+tab}`, `{up}` ... are keys
+//! (`parse_keys`); everything else is typed as it stands.
 
 use crate::aibridge;
 use crate::input::Key;
@@ -47,6 +54,54 @@ pub fn before_prompt(output: &str) -> Option<&str> {
     (last.starts_with("bee:/") && last.ends_with("$ ") && !last[..last.len() - 2].contains(' ')).then(|| &output[..start])
 }
 
+/// Most keys in one request.
+pub const MAX_KEYS: usize = 2000;
+
+/// The keys a text stands for: every character is typed as it is (a line
+/// end is Enter), and names in braces are keys: `{enter}` `{tab}` `{esc}`
+/// `{backspace}` `{delete}` `{up}` `{down}` `{left}` `{right}` `{home}`
+/// `{end}` `{pageup}` `{pagedown}` `{alt+tab}` `{ctrl+LETTER}`, and
+/// `{lbrace}` for a `{` itself. `None`: an unknown name, a brace that is
+/// not closed, or too many keys.
+pub fn parse_keys(text: &str) -> Option<alloc::vec::Vec<Key>> {
+    let mut keys = alloc::vec::Vec::new();
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        if c == '{' {
+            let end = rest.find('}')?;
+            keys.push(match &rest[1..end] {
+                "enter" => Key::Enter,
+                "tab" => Key::Tab,
+                "esc" => Key::Escape,
+                "backspace" => Key::Backspace,
+                "delete" => Key::Delete,
+                "up" => Key::Up,
+                "down" => Key::Down,
+                "left" => Key::Left,
+                "right" => Key::Right,
+                "home" => Key::Home,
+                "end" => Key::End,
+                "pageup" => Key::PageUp,
+                "pagedown" => Key::PageDown,
+                "alt+tab" => Key::NextWindow,
+                "lbrace" => Key::Char('{'),
+                name => match name.strip_prefix("ctrl+").map(str::as_bytes) {
+                    Some([letter @ b'a'..=b'z']) => Key::Ctrl(*letter as char),
+                    _ => return None,
+                },
+            });
+            rest = &rest[end + 1..];
+        } else {
+            keys.push(if c == '\n' { Key::Enter } else { Key::Char(c) });
+            rest = &rest[c.len_utf8()..];
+        }
+        if keys.len() > MAX_KEYS {
+            return None;
+        }
+    }
+    Some(keys)
+}
+
 fn serve() {
     // The shell the commands run in, made when the first one arrives.
     let mut shell: Option<(u32, thread::ThreadId)> = None;
@@ -60,6 +115,14 @@ fn serve() {
         match request.str("type") {
             Some("run") => run(&mut shell, &rid, &request),
             Some("screenshot") => screenshot(&rid, request.num("scale").unwrap_or(4)),
+            Some("keys") => {
+                let result = parse_keys(request.str("keys").unwrap_or("")).ok_or("a key name in {} that is not known").and_then(|keys| crate::desk::type_keys(&keys));
+                let answer = match result {
+                    Ok(count) => reply("ran", &rid).str("text", &alloc::format!("{count} keys typed\n")),
+                    Err(why) => reply("ran", &rid).str("error", why),
+                };
+                aibridge::send(&answer.bool("done", true).finish());
+            }
             _ => {}
         }
     }

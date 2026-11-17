@@ -434,6 +434,11 @@ class Network(unittest.TestCase):
         c.send({"type": "ran", "rid": "r2", "text": "hi\n"})
         c.send({"type": "ran", "rid": "r2", "done": True})
         self.assertEqual([p.get("text") for p in answer("r2")], ["hi\n", None])
+        # Keys for the window that has the focus go the same way.
+        ask("r4", "hp", type="keys", keys="ls{enter}")
+        self.assertEqual(c.recv(), {"rid": "r4", "type": "keys", "keys": "ls{enter}"})
+        c.send({"type": "ran", "rid": "r4", "text": "3 keys typed\n", "done": True})
+        self.assertEqual([p.get("text") for p in answer("r4")], ["3 keys typed\n"])
         # Requests that are not ours to send, and answers with a name that is no file name.
         ask("r3", "hp", type="shutdown-the-host")
         (inbox / "bad.json").write_text("{not json")

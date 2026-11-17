@@ -1018,6 +1018,13 @@ machine's own console.
   `text`, `screenshot`). The commands run in a shell of their own, like a
   remote session: what only the console may do (`install`, `ai connect`,
   these switches) stays refused.
+- **Typing from the host:** `tools/beectl.py keys MACHINE "TEXT"` types in
+  the window that has the focus, as on the keyboard: into another terminal
+  window or the editor. Keys by name go in braces: `{enter}`, `{ctrl+s}`,
+  `{alt+tab}`, `{up}` ... The console's own window takes no keys from afar,
+  so what only the console may do stays out of reach this way too. With
+  `beectl.py text`, which shows the text of every window, a program in a
+  window can be driven and checked from the host.
 - **`tools/beectl.py deploy MACHINE`** does a whole deploy: offer, tell the
   machine to update and restart, wait for its report.
 - **`ai off`** stops all of it.

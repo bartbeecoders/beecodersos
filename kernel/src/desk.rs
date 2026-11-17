@@ -83,6 +83,28 @@ pub fn route(key: Key) -> Option<Key> {
     None
 }
 
+/// Keys from the host (remote control, hivectl.rs), typed into the window
+/// that has the focus. Alt+Tab changes window as on the keyboard. The
+/// console's own window takes none: it is the machine's own console.
+/// Returns how many keys were typed.
+pub fn type_keys(keys: &[Key]) -> Result<usize, &'static str> {
+    if !console::desktop_on() {
+        return Err("no desktop on this machine: there is no window to type in");
+    }
+    for key in keys {
+        if *key == Key::NextWindow {
+            console::next_window();
+            continue;
+        }
+        let terminal = console::focused_pane().and_then(|window| TERMINALS.get().iter().find(|t| t.window == window));
+        let Some(terminal) = terminal else {
+            return Err("the console's own window has the focus: keys from the host only go to the other windows ({alt+tab} changes window)");
+        };
+        session::push_key(terminal.session, *key);
+    }
+    Ok(keys.len())
+}
+
 fn work_waiting() -> bool {
     console::closing()
         || (console::focused_pane().is_some() && keyboard::pending())
