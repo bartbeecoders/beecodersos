@@ -1,0 +1,335 @@
+//! The file manager (`files [FOLDER]`): a window on the desktop that lists
+//! a folder. Arrows choose, Enter opens (a folder here, a file in the text
+//! editor), Backspace goes up; folders can be made and things renamed or
+//! deleted.
+//!
+//! `Browser` is the list, the choice and the questions it asks, and knows
+//! nothing about windows or disks: keys go in, what to do comes out, and
+//! `render` gives the characters to show. That part is covered by the
+//! self-tests. `run` is the thread of the window: it does what was asked on
+//! the file system and shows the folder again.
+
+use crate::input::{self, Key};
+use crate::storage::Storage;
+use crate::{console, desk, session};
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use beefs::FileKind;
+
+const TEXT_ATTR: u8 = 0x07;
+const FOLDER_ATTR: u8 = 0x09;
+const CHOSEN_ATTR: u8 = 0x1F;
+const STATUS_ATTR: u8 = 0x70;
+const WARNING_ATTR: u8 = 0x4F;
+const HELP_ATTR: u8 = 0x08;
+
+/// Longest name that can be typed for a new folder or a rename.
+const MAX_NAME: usize = 60;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    pub name: String,
+    pub folder: bool,
+    pub size: u64,
+}
+
+/// What a key asks the browser's owner to do. Paths are absolute.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum Action {
+    /// Nothing but drawing again.
+    None,
+    Quit,
+    /// Show this folder.
+    Go(String),
+    /// Open this file in the text editor.
+    Edit(String),
+    Delete(String),
+    MakeFolder(String),
+    Rename(String, String),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum Mode {
+    List,
+    /// "Delete NAME? y/n"
+    ConfirmDelete,
+    /// Typing a name: for a new folder, or (`rename`) for the chosen entry.
+    Name { rename: bool, text: String },
+}
+
+pub struct Browser {
+    folder: String,
+    entries: Vec<Entry>,
+    chosen: usize,
+    top: usize,
+    mode: Mode,
+    /// Shown in the status line until the next key.
+    message: String,
+    warning: bool,
+}
+
+/// `folder` + "/" + `name`, also right for the root folder.
+pub fn join(folder: &str, name: &str) -> String {
+    if folder.ends_with('/') {
+        format!("{folder}{name}")
+    } else {
+        format!("{folder}/{name}")
+    }
+}
+
+/// The folder a path lies in ("/" for the root and for what lies in it).
+pub fn parent(path: &str) -> String {
+    match path.trim_end_matches('/').rfind('/') {
+        Some(0) | None => String::from("/"),
+        Some(at) => String::from(&path[..at]),
+    }
+}
+
+/// May a new folder or a renamed entry be called this?
+pub fn valid_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains('/') && name.chars().count() <= MAX_NAME
+}
+
+impl Browser {
+    pub fn new() -> Browser {
+        Browser { folder: String::from("/"), entries: Vec::new(), chosen: 0, top: 0, mode: Mode::List, message: String::new(), warning: false }
+    }
+
+    pub fn folder(&self) -> &str {
+        &self.folder
+    }
+
+    /// The name the bar is on, if the folder is not empty.
+    pub fn chosen(&self) -> Option<&Entry> {
+        self.entries.get(self.chosen)
+    }
+
+    /// Show a folder: its entries, folders first, each group by name. The
+    /// bar goes to `choose` if that name is there (the folder one came out
+    /// of, the thing just made), else stays where it was as far as it can.
+    pub fn show(&mut self, folder: &str, mut entries: Vec<Entry>, choose: Option<&str>) {
+        entries.sort_by(|a, b| b.folder.cmp(&a.folder).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())).then_with(|| a.name.cmp(&b.name)));
+        if self.folder != folder {
+            self.chosen = 0;
+            self.top = 0;
+        }
+        self.folder = String::from(folder);
+        self.entries = entries;
+        if let Some(at) = choose.and_then(|name| self.entries.iter().position(|e| e.name == name)) {
+            self.chosen = at;
+        }
+        self.chosen = self.chosen.min(self.entries.len().saturating_sub(1));
+    }
+
+    /// Say something in the status line (`warning`: in red).
+    pub fn say(&mut self, message: &str, warning: bool) {
+        self.message = String::from(message);
+        self.warning = warning;
+    }
+
+    /// Handle one key. `page`: the number of entries the window shows.
+    pub fn key(&mut self, key: Key, page: usize) -> Action {
+        self.message.clear();
+        self.warning = false;
+        let last = self.entries.len().saturating_sub(1);
+        match core::mem::replace(&mut self.mode, Mode::List) {
+            Mode::ConfirmDelete => {
+                return match (key, self.chosen()) {
+                    (Key::Char('y' | 'Y'), Some(entry)) => Action::Delete(join(&self.folder, &entry.name)),
+                    _ => {
+                        self.say("nothing was deleted", false);
+                        Action::None
+                    }
+                };
+            }
+            Mode::Name { rename, mut text } => {
+                match key {
+                    Key::Enter if text.is_empty() => {}
+                    Key::Enter if !valid_name(&text) => self.say("not a usable name (no '/', not '.' or '..')", true),
+                    Key::Enter => {
+                        let to = join(&self.folder, &text);
+                        return match (rename, self.chosen()) {
+                            (true, Some(entry)) => Action::Rename(join(&self.folder, &entry.name), to),
+                            (true, None) => Action::None,
+                            (false, _) => Action::MakeFolder(to),
+                        };
+                    }
+                    Key::Escape | Key::Ctrl('c') => {}
+                    Key::Backspace => {
+                        text.pop();
+                        self.mode = Mode::Name { rename, text };
+                    }
+                    Key::Char(c) if c != '/' && text.chars().count() < MAX_NAME => {
+                        text.push(c);
+                        self.mode = Mode::Name { rename, text };
+                    }
+                    _ => self.mode = Mode::Name { rename, text },
+                }
+                return Action::None;
+            }
+            Mode::List => {}
+        }
+        match key {
+            Key::Up => self.chosen = self.chosen.saturating_sub(1),
+            Key::Down => self.chosen = (self.chosen + 1).min(last),
+            Key::PageUp => self.chosen = self.chosen.saturating_sub(page.max(1)),
+            Key::PageDown => self.chosen = (self.chosen + page.max(1)).min(last),
+            Key::Home => self.chosen = 0,
+            Key::End => self.chosen = last,
+            Key::Enter | Key::Right => {
+                if let Some(entry) = self.chosen() {
+                    let path = join(&self.folder, &entry.name);
+                    return if entry.folder { Action::Go(path) } else { Action::Edit(path) };
+                }
+            }
+            Key::Backspace | Key::Left if self.folder != "/" => return Action::Go(parent(&self.folder)),
+            Key::Char('n') => self.mode = Mode::Name { rename: false, text: String::new() },
+            Key::Char('r') if self.chosen().is_some() => {
+                let text = self.chosen().map(|e| e.name.clone()).unwrap_or_default();
+                self.mode = Mode::Name { rename: true, text };
+            }
+            Key::Char('d') | Key::Delete if self.chosen().is_some() => self.mode = Mode::ConfirmDelete,
+            Key::Char('u') => return Action::Go(self.folder.clone()),
+            Key::Char('q') | Key::Ctrl('q') | Key::Escape => return Action::Quit,
+            _ => {}
+        }
+        Action::None
+    }
+
+    /// What a window of `cols` by `rows` characters shows: `rows` lines of
+    /// `cols` cells (VGA format), and the cell for the cursor. First the
+    /// status line (the folder, or a question), then the entries with the
+    /// chosen one marked, and the keys on the last line.
+    pub fn render(&mut self, cols: usize, rows: usize) -> (Vec<Vec<u16>>, (usize, usize)) {
+        let (cols, rows) = (cols.max(1), rows.max(3));
+        let page = rows - 2;
+        if self.chosen < self.top {
+            self.top = self.chosen;
+        } else if self.chosen >= self.top + page {
+            self.top = self.chosen + 1 - page;
+        }
+        let line = |text: &str, attr: u8| {
+            let mut cells: Vec<u16> = text.chars().take(cols).map(|c| (attr as u16) << 8 | crate::vga::cp437(c) as u16).collect();
+            cells.resize(cols, (attr as u16) << 8 | b' ' as u16);
+            cells
+        };
+        let mut out = Vec::with_capacity(rows);
+        let mut cursor = (0, cols - 1);
+        let chosen_name = self.chosen().map(|e| e.name.as_str()).unwrap_or("");
+        let (status, attr) = match &self.mode {
+            Mode::ConfirmDelete => (format!(" Delete {chosen_name}? y: yes, any other key: no"), WARNING_ATTR),
+            Mode::Name { rename, text } => {
+                let ask = if *rename { format!(" New name for {chosen_name}: ") } else { String::from(" Name of the new folder: ") };
+                cursor = (0, (ask.chars().count() + text.chars().count()).min(cols - 1));
+                (format!("{ask}{text}"), STATUS_ATTR)
+            }
+            Mode::List if !self.message.is_empty() => (format!(" {}", self.message), if self.warning { WARNING_ATTR } else { STATUS_ATTR }),
+            Mode::List => {
+                let count = match self.entries.len() {
+                    0 => String::from("empty"),
+                    n => format!("{} of {n}", self.chosen + 1),
+                };
+                (format!(" {}  ({count})", self.folder), STATUS_ATTR)
+            }
+        };
+        out.push(line(&status, attr));
+        for at in self.top..self.top + page {
+            out.push(match self.entries.get(at) {
+                Some(entry) => {
+                    let size = if entry.folder { String::from("<folder>") } else { entry.size.to_string() };
+                    let slash = if entry.folder { "/" } else { "" };
+                    let attr = if at == self.chosen { CHOSEN_ATTR } else if entry.folder { FOLDER_ATTR } else { TEXT_ATTR };
+                    line(&format!(" {size:>10}  {}{slash}", entry.name), attr)
+                }
+                None => line("", TEXT_ATTR),
+            });
+        }
+        out.push(line(" Enter open  Backspace up  n new folder  r rename  d delete  u again  q leave", HELP_ATTR));
+        (out, cursor)
+    }
+}
+
+fn listing(storage: &mut Storage, folder: &str) -> Result<Vec<Entry>, beefs::FsError> {
+    let entries = storage.fs().read_dir(folder)?;
+    Ok(entries.into_iter().map(|e| Entry { name: e.name, folder: e.kind == FileKind::Directory, size: e.size }).collect())
+}
+
+/// The thread of a file manager window: runs in the window's session until
+/// `q`, or until the window is closed.
+pub fn run(window: usize, start: String, mut storage: Storage) {
+    let mut browser = Browser::new();
+    match listing(&mut storage, &start) {
+        Ok(entries) => browser.show(&start, entries, None),
+        Err(_) => return,
+    }
+    loop {
+        let Some((cols, rows)) = console::pane_size(window) else { return };
+        let (lines, cursor) = browser.render(cols, rows);
+        console::pane_show(window, &lines, cursor);
+        let key = input::read_key();
+        if key == Key::Ctrl('d') && session::current().is_none_or(session::is_closed) {
+            return; // the window was closed
+        }
+        let folder = String::from(browser.folder());
+        // What to show afterwards: (folder, the name to put the bar on).
+        let (mut next, mut choose) = (folder.clone(), None);
+        let mut said: Option<(String, bool)> = None;
+        match browser.key(key, rows.saturating_sub(2)) {
+            Action::None => continue,
+            Action::Quit => return,
+            Action::Go(to) => {
+                // Coming out of a folder, the bar is on that folder.
+                if parent(&folder) == to && folder != to {
+                    choose = folder.rsplit('/').next().map(String::from);
+                }
+                next = to;
+            }
+            Action::Edit(path) => {
+                if let Err(why) = desk::open_editor(&path) {
+                    said = Some((format!("{}: {why}", path.rsplit('/').next().unwrap_or("")), true));
+                }
+            }
+            Action::Delete(path) => {
+                let result = storage.fs().remove(&path);
+                said = Some(match result {
+                    Ok(()) => (String::from("deleted"), false),
+                    Err(e) => (format!("not deleted: {e}"), true),
+                });
+            }
+            Action::MakeFolder(path) => {
+                let result = {
+                    let mut fs = storage.fs();
+                    if fs.exists(&path) { Err(beefs::FsError::AlreadyExists) } else { fs.mkdir_all(&path) }
+                };
+                match result {
+                    Ok(()) => choose = path.rsplit('/').next().map(String::from),
+                    Err(e) => said = Some((format!("no folder made: {e}"), true)),
+                }
+            }
+            Action::Rename(from, to) => {
+                let result = {
+                    let mut fs = storage.fs();
+                    if fs.exists(&to) { Err(beefs::FsError::AlreadyExists) } else { fs.rename(&from, &to) }
+                };
+                match result {
+                    Ok(()) => choose = to.rsplit('/').next().map(String::from),
+                    Err(e) => said = Some((format!("not renamed: {e}"), true)),
+                }
+            }
+        }
+        match listing(&mut storage, &next) {
+            Ok(entries) => browser.show(&next, entries, choose.as_deref()),
+            Err(e) => {
+                // The folder cannot be shown (it is gone, or is a file): stay.
+                said = Some((format!("{next}: {e}"), true));
+                if let Ok(entries) = listing(&mut storage, &folder) {
+                    browser.show(&folder, entries, None);
+                }
+            }
+        }
+        if let Some((text, warning)) = said {
+            browser.say(&text, warning);
+        }
+    }
+}

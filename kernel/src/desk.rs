@@ -9,7 +9,7 @@
 use crate::input::Key;
 use crate::ring::Global;
 use crate::shell::Shell;
-use crate::{console, keyboard, session, storage, textedit, thread};
+use crate::{console, filemgr, keyboard, session, storage, textedit, thread};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -39,6 +39,16 @@ pub fn open_editor(path: &str) -> Result<usize, &'static str> {
     let path = String::from(path);
     let name = path.rsplit('/').next().unwrap_or(&path);
     open(&format!("Edit: {name}"), "editor", false, move |window| textedit::run(window, path, text, storage))
+}
+
+/// Open a file manager window on a folder (`folder` is absolute).
+pub fn open_files(folder: &str) -> Result<usize, &'static str> {
+    let mut storage = storage::handle().ok_or("no file system is mounted")?;
+    if !storage.fs().is_dir(folder) {
+        return Err("no such folder");
+    }
+    let folder = String::from(folder);
+    open("Files", "files", false, move |window| filemgr::run(window, folder, storage))
 }
 
 /// A window, a session for its keys, and a thread that runs `program` in it.

@@ -224,6 +224,7 @@ kernel/
   src/wm.rs            window system: desktop background, window frames, order and focus
   src/desk.rs          the extra windows: their shells and programs, keys for the focused window
   src/textedit.rs      the text editor (`edit`)
+  src/filemgr.rs       the file manager (`files`)
   src/keyboard.rs      PS/2 keyboard driver + scancode decoder (modifiers, dead keys)
   src/layouts.rs       keyboard layouts (US, Belgian Period)
   src/uart.rs          16550 serial port: detection, sending and receiving with limits
@@ -317,7 +318,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `ai`,
-`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `sleep`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `sleep`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Under the hood:** interrupts are enabled (IDT + remapped PIC; IRQ0 timer,
 IRQ1 keyboard, IRQ3 COM2 AI bridge, IRQ4 COM1 serial). Handlers queue raw bytes; the shell decodes them and sleeps with
@@ -1194,6 +1195,15 @@ desktop.
   is written back with a line end after every line. Closing the window
   with its close box leaves without saving. An editor counts as one of the
   four extra windows.
+- **File manager:** `files [FOLDER]` lists a folder in a window of its own
+  (`kernel/src/filemgr.rs`): folders first, then files with their size.
+  Arrows, Page Up/Down, Home and End move the bar; **Enter** opens a folder,
+  or a file in the text editor (a new window); **Backspace** goes up, with
+  the bar on the folder just left. **n** makes a folder and **r** renames
+  (the name is typed in the status line; Escape drops it), **d** or Delete
+  deletes after a `y` (a folder only when it is empty), **u** reads the
+  folder again, **q** leaves. It is a list of text for now: no icons, no
+  mouse inside the window yet.
 - `sleep SECONDS` waits (used by the tests while another window works).
 - The boot flags `desktop=off` and `desktop=on` decide for one boot, whatever
   was saved. The screen is set up before the disk is read, so a machine with
@@ -1205,7 +1215,8 @@ desktop.
   a framebuffer in RAM; scenarios `desktop*.scn` check real pixels of the
   screen (`@screenshot WxH pixels X,Y=RRGGBB ...`); `desktop-windows.scn`
   types in a second window, changes focus with Alt+Tab and the mouse, and
-  closes windows; `desktop-edit.scn` edits and saves files. Through
+  closes windows; `desktop-edit.scn` edits and saves files;
+  `desktop-files.scn` drives the file manager from the host. Through
   `beectl.py text` the host sees the text of every window.
 
 ## USB: keyboard and mouse (xHCI) ✅ in QEMU, not yet tried on the HP

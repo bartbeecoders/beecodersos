@@ -1,0 +1,88 @@
+# The file manager: `files` lists a folder in a window. It is driven here
+# from the host (keys typed into its window, the text of the windows read
+# back), as remote control does.
+@ai
+$ ai control on
+$ mkdir /docs
+$ echo hello > /docs/note.txt
+$ echo x > /top.txt
+$ files /
+/ in a new window: arrows choose, Enter opens, q leaves
+@screenshot 1920x1080 pixels 300,36=3a6ea5 660,64=aaaaaa
+$ threads
+~ files      (waiting|ready)
+@ctl text {machine}
+~ ^--- window 1 ---$
+~ ^ /  \(1 of \d+\)$
+~ ^   <folder>  docs/$
+~ ^   <folder>  system/$
+~ ^          2  top.txt$
+
+# Into a folder, make a folder there, rename the file, look again.
+@ctl keys {machine} "{enter}"
+@ctl text {machine}
+~ ^ /docs  \(1 of 1\)$
+~ ^          6  note.txt$
+@ctl keys {machine} "npictures{enter}"
+@ctl keys {machine} "{down}r{backspace}{backspace}{backspace}md{enter}"
+@ctl text {machine}
+~ ^ /docs  \(2 of 2\)$
+~ ^   <folder>  pictures/$
+~ ^          6  note.md$
+$ ls /docs
+~ note\.md$
+~ pictures/$
+!~ note\.txt
+
+# Enter on a file opens it in the editor, in a window of its own.
+@ctl keys {machine} "{enter}"
+@ctl text {machine}
+~ ^--- window 2 ---$
+~ ^ note\.md  line 1 of 1, column 1
+~ ^hello$
+@ctl keys {machine} " there{ctrl+s}{ctrl+q}"
+$ sleep 1
+$ cat /docs/note.md
+ therehello
+
+# Back in the file manager: delete asks first.
+@ctl keys {machine} "u"
+@ctl text {machine}
+~ ^         12  note\.md$
+@ctl keys {machine} "d"
+@ctl text {machine}
+~ ^ Delete note\.md\? y: yes, any other key: no$
+@ctl keys {machine} "n"
+@ctl text {machine}
+~ ^ nothing was deleted$
+@ctl keys {machine} "dy"
+@ctl text {machine}
+~ ^ deleted$
+~ ^ +<folder>  pictures/$
+$ ls /docs
+!~ note
+# A folder with something in it is not deleted; up, and the bar is on the folder we left.
+@ctl keys {machine} "npictures{enter}"
+@ctl text {machine}
+~ ^ no folder made: 
+@ctl keys {machine} "{backspace}"
+@ctl text {machine}
+~ ^ /  \(1 of \d+\)$
+@ctl keys {machine} "dy"
+@ctl text {machine}
+~ ^ not deleted: 
+@ctl keys {machine} "q"
+$ sleep 1
+$ threads
+!~ files
+
+# What cannot be shown.
+$ files /top.txt
+files /top.txt: no such folder
+$ files /nowhere
+files /nowhere: no such folder
+$ files a b
+usage: files [FOLDER]
+$ cd /docs
+$ files
+/docs in a new window: arrows choose, Enter opens, q leaves

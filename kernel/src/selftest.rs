@@ -53,6 +53,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("windows: order, focus by click, close box, contents", wm_windows),
     ("text editor: typing, moving, lines, what the window shows", text_editor),
     ("remote control: the keys a text stands for", remote_keys),
+    ("file manager: order, choosing, questions, what the window shows", file_manager),
     ("heap: alloc and free", heap_alloc_free),
     ("heap: 1 MiB buffer", heap_large_buffer),
     ("ring: order and overflow", ring_buffer),
@@ -2309,5 +2310,112 @@ fn remote_keys() -> TestResult {
     // Bounded.
     check_eq!(parse_keys(&"x".repeat(MAX_KEYS)).map(|k| k.len()), Some(MAX_KEYS));
     check_eq!(parse_keys(&"x".repeat(MAX_KEYS + 1)), None);
+    Ok(())
+}
+
+fn file_manager() -> TestResult {
+    use crate::filemgr::{join, parent, valid_name, Action, Browser, Entry};
+    use crate::input::Key;
+    let entry = |name: &str, folder: bool, size: u64| Entry { name: String::from(name), folder, size };
+    let row_text = |cells: &[u16]| cells.iter().map(|c| crate::vga::from_cp437(*c as u8)).collect::<String>();
+    let typed = |b: &mut Browser, text: &str| text.chars().for_each(|c| assert!(b.key(Key::Char(c), 5) == Action::None));
+
+    // Paths.
+    check_eq!((join("/", "a").as_str(), join("/data", "a").as_str(), join("/data/", "a").as_str()), ("/a", "/data/a", "/data/a"));
+    check_eq!((parent("/").as_str(), parent("/a").as_str(), parent("/a/b").as_str(), parent("/a/b/").as_str()), ("/", "/", "/a", "/a"));
+    check!(valid_name("notes.txt") && valid_name("a b") && valid_name("..."));
+    check!(!valid_name("") && !valid_name(".") && !valid_name("..") && !valid_name("a/b") && !valid_name(&"x".repeat(61)));
+
+    // Folders first, then by name whatever the case.
+    let mut b = Browser::new();
+    let files = || vec![entry("zeta.txt", false, 10), entry("Beta", true, 0), entry("alpha.txt", false, 1234), entry("apps", true, 0)];
+    b.show("/data", files(), None);
+    let (lines, cursor) = b.render(40, 8);
+    check_eq!((lines.len(), cursor), (8, (0, 39)));
+    check!(lines.iter().all(|l| l.len() == 40));
+    check_eq!(row_text(&lines[0]).trim_end(), " /data  (1 of 4)");
+    check_eq!(row_text(&lines[1]).trim_end(), "   <folder>  apps/");
+    check_eq!(row_text(&lines[2]).trim_end(), "   <folder>  Beta/");
+    check_eq!(row_text(&lines[3]).trim_end(), "       1234  alpha.txt");
+    check_eq!(row_text(&lines[4]).trim_end(), "         10  zeta.txt");
+    check_eq!((row_text(&lines[5]).trim_end(), row_text(&lines[7]).trim_end()), ("", " Enter open  Backspace up  n new folder"));
+    // The chosen line stands out; folders have their own color.
+    check_eq!((lines[1][0] >> 8, lines[2][0] >> 8, lines[3][0] >> 8, lines[0][0] >> 8), (0x1F, 0x09, 0x07, 0x70));
+
+    // Choosing and opening.
+    check_eq!(b.key(Key::Enter, 5), Action::Go(String::from("/data/apps")));
+    check_eq!(b.key(Key::Down, 5), Action::None);
+    check_eq!(b.key(Key::Down, 5), Action::None);
+    check_eq!(b.chosen().map(|e| e.name.as_str()), Some("alpha.txt"));
+    check_eq!(b.key(Key::Enter, 5), Action::Edit(String::from("/data/alpha.txt")));
+    b.key(Key::PageDown, 5);
+    b.key(Key::Down, 5);
+    check_eq!(b.chosen().map(|e| e.name.as_str()), Some("zeta.txt"));
+    b.key(Key::Home, 5);
+    b.key(Key::Up, 5);
+    check_eq!(b.chosen().map(|e| e.name.as_str()), Some("apps"));
+    check_eq!(b.key(Key::Backspace, 5), Action::Go(String::from("/")));
+    // Coming out of a folder the bar is on it; in the root there is no way up.
+    b.show("/", vec![entry("system", true, 0), entry("data", true, 0), entry("a.txt", false, 1)], Some("data"));
+    check_eq!((b.folder(), b.chosen().map(|e| e.name.as_str())), ("/", Some("data")));
+    check_eq!(b.key(Key::Backspace, 5), Action::None);
+    check_eq!(b.key(Key::Enter, 5), Action::Go(String::from("/data")));
+    check_eq!((b.key(Key::Char('u'), 5), b.key(Key::Char('q'), 5)), (Action::Go(String::from("/")), Action::Quit));
+
+    // Deleting asks first; anything but y leaves it.
+    b.show("/data", files(), Some("zeta.txt"));
+    check_eq!(b.key(Key::Char('d'), 5), Action::None);
+    let (lines, _) = b.render(60, 8);
+    check_eq!((row_text(&lines[0]).trim_end(), lines[0][0] >> 8), (" Delete zeta.txt? y: yes, any other key: no", 0x4F));
+    check_eq!(b.key(Key::Enter, 5), Action::None);
+    check_eq!(row_text(&b.render(60, 8).0[0]).trim_end(), " nothing was deleted");
+    check_eq!(b.key(Key::Delete, 5), Action::None);
+    check_eq!(b.key(Key::Char('y'), 5), Action::Delete(String::from("/data/zeta.txt")));
+    // The list is one shorter: the bar stays on the last line.
+    b.show("/data", files().into_iter().filter(|e| e.name != "zeta.txt").collect(), None);
+    check_eq!(b.chosen().map(|e| e.name.as_str()), Some("alpha.txt"));
+
+    // A new folder: the name is typed in the status line, with the cursor after it.
+    check_eq!(b.key(Key::Char('n'), 5), Action::None);
+    typed(&mut b, "pix/");
+    check_eq!(b.key(Key::Backspace, 5), Action::None);
+    typed(&mut b, "cs");
+    let (lines, cursor) = b.render(60, 8);
+    check_eq!((row_text(&lines[0]).trim_end(), cursor), (" Name of the new folder: pics", (0, 29)));
+    check_eq!(b.key(Key::Enter, 5), Action::MakeFolder(String::from("/data/pics")));
+    // Escape drops the question; an empty name too; a bad one is refused.
+    b.key(Key::Char('n'), 5);
+    typed(&mut b, "x");
+    check_eq!((b.key(Key::Escape, 5), b.key(Key::Char('q'), 5)), (Action::None, Action::Quit));
+    b.key(Key::Char('n'), 5);
+    check_eq!((b.key(Key::Enter, 5), b.key(Key::Char('q'), 5)), (Action::None, Action::Quit));
+    b.key(Key::Char('n'), 5);
+    typed(&mut b, "..");
+    check_eq!(b.key(Key::Enter, 5), Action::None);
+    check_eq!(row_text(&b.render(60, 8).0[0]).trim_end(), " not a usable name (no '/', not '.' or '..')");
+    // Renaming starts from the old name.
+    check_eq!(b.key(Key::Char('r'), 5), Action::None);
+    check_eq!(row_text(&b.render(60, 8).0[0]).trim_end(), " New name for alpha.txt: alpha.txt");
+    for _ in 0..9 {
+        b.key(Key::Backspace, 5);
+    }
+    typed(&mut b, "beta.md");
+    check_eq!(b.key(Key::Enter, 5), Action::Rename(String::from("/data/alpha.txt"), String::from("/data/beta.md")));
+
+    // An empty folder: nothing to open, rename or delete; a long list scrolls with the bar.
+    b.show("/empty", Vec::new(), None);
+    check_eq!(row_text(&b.render(40, 6).0[0]).trim_end(), " /empty  (empty)");
+    for key in [Key::Enter, Key::Char('r'), Key::Char('d'), Key::Down, Key::End, Key::PageDown] {
+        check_eq!(b.key(key, 5), Action::None);
+    }
+    check_eq!(b.key(Key::Char('q'), 5), Action::Quit);
+    b.show("/many", (0..50).map(|n| entry(&alloc::format!("f{n:02}"), false, n)).collect(), None);
+    b.key(Key::PageDown, 4);
+    b.key(Key::PageDown, 4);
+    let (lines, _) = b.render(30, 6); // 4 entries fit
+    check_eq!((row_text(&lines[1]).trim_end(), row_text(&lines[4]).trim_end(), lines[4][0] >> 8), ("          5  f05", "          8  f08", 0x1F));
+    b.key(Key::End, 4);
+    check_eq!(row_text(&b.render(30, 6).0[4]).trim_end(), "         49  f49");
+    check_eq!(b.render(0, 0).0.len(), 3);
     Ok(())
 }
