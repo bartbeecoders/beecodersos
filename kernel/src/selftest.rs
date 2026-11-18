@@ -66,6 +66,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("pictures: BMP and PPM in and out, damaged files, fitting", pictures),
     ("wallpaper: covering the screen, behind the windows", wallpaper),
     ("remote desktop: a viewer's keys, the tiles that changed", vnc_parts),
+    ("accounts: the file, passwords, what needs an admin", accounts),
     ("heap: alloc and free", heap_alloc_free),
     ("heap: 1 MiB buffer", heap_large_buffer),
     ("ring: order and overflow", ring_buffer),
@@ -2929,5 +2930,31 @@ fn vnc_parts() -> TestResult {
     check_eq!(changed_tiles(&old, &new, w, h), alloc::vec![(2 * TILE, TILE, w - 2 * TILE, h - TILE)]);
     new[0] = 1;
     check_eq!(changed_tiles(&old, &new, w, h).len(), 2);
+    Ok(())
+}
+
+fn accounts() -> TestResult {
+    use crate::users::{format_all, hash_password, needs_admin, parse, valid_name, User};
+    let alice = User::new("alice", &["admin"], "0123456789abcdef", "s3cret-bee");
+    let bob = User::new("bob", &[], "fedcba9876543210", "hunter22");
+    check!(alice.password_ok("s3cret-bee") && !alice.password_ok("s3cret-bef") && !alice.password_ok(""));
+    check!(alice.is_admin() && !bob.is_admin());
+    // The same password with another salt gives another hash; the password itself is never in the file.
+    check!(hash_password("0123456789abcdef", "x") != hash_password("0123456789abcdee", "x"));
+    let text = format_all(&[alice.clone(), bob.clone()]);
+    check!(!text.contains("s3cret") && !text.contains("hunter"));
+    check_eq!(parse(&text), alloc::vec![alice.clone(), bob.clone()]);
+    // Damaged or doubled lines give nobody anything.
+    let damaged = alloc::format!("{text}eve:admin:nothex!!nothex!!:00\nalice:admin:0123456789abcdef:{}\nBad:admin:0123456789abcdef:{}\njunk\n", "0".repeat(64), "0".repeat(64));
+    check_eq!(parse(&damaged).len(), 2);
+    check!(valid_name("bart") && valid_name("a-b_9") && !valid_name("Bart") && !valid_name("9lives") && !valid_name("") && !valid_name("a:b"));
+    check!(!valid_name("seventeen-letters"));
+    // What needs an admin: changing the system; looking does not.
+    for (cmd, args) in [("reboot", &[][..]), ("install", &[]), ("useradd", &["x"]), ("vnc", &["on"]), ("net", &["off"]), ("passwd", &["bob"]), ("timezone", &["CET"]), ("cpu", &["auto", "off"])] {
+        check!(needs_admin(cmd, args));
+    }
+    for (cmd, args) in [("vnc", &[][..]), ("net", &[]), ("ls", &["/"]), ("passwd", &[]), ("cpu", &["test"]), ("display", &["speed"]), ("whoami", &[]), ("timezone", &[])] {
+        check!(!needs_admin(cmd, args));
+    }
     Ok(())
 }

@@ -32,6 +32,7 @@ mod clock;
 mod image;
 mod view;
 mod vnc;
+mod users;
 mod web;
 // After `console`: uses println!.
 mod bootslots;

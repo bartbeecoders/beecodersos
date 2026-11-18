@@ -29,7 +29,7 @@ static STARTED: Global<bool> = Global::new(false);
 /// Open a terminal window with a new shell in it; returns the window's number.
 pub fn open_terminal() -> Result<usize, &'static str> {
     let storage = storage::handle().ok_or("no file system is mounted")?;
-    open("Terminal", "terminal", true, move |_| Shell::remote(storage).run_session())
+    open("Terminal", "terminal", true, move |_| Shell::terminal(storage).run_session())
 }
 
 /// Open a window with the text editor on a file (`path` is absolute).
