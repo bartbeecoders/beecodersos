@@ -8,7 +8,7 @@ use crate::vga::Color;
 use crate::aibridge::{self, Outcome};
 use crate::json::Obj;
 use crate::ring::Global;
-use crate::{allocator, bootslots, display, hivectl, httpd, install, update, remote, session, console, crash, eventlog, keyboard, net, pci, power, selftest, textops, doplan, thread, time};
+use crate::{allocator, bootslots, display, hivectl, httpd, install, update, remote, session, console, crash, eventlog, keyboard, net, pci, power, selftest, textops, doplan, thread, time, users};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -85,6 +85,10 @@ pub struct Shell {
     echo: bool,
     /// In a console session: `exit` was typed.
     leave: bool,
+    /// Who runs the commands, once the machine has accounts (users.rs).
+    user: Option<users::User>,
+    /// The AI host's control shell: admin rights (`ai control on` at the console allowed it).
+    host: bool,
 }
 
 impl Shell {
@@ -99,6 +103,8 @@ impl Shell {
             logging: true,
             echo: false,
             leave: false,
+            user: None,
+            host: false,
         }
     }
 
@@ -112,7 +118,15 @@ impl Shell {
     /// The shell remote control runs its commands in (hivectl.rs): nothing
     /// typed is shown back, the output is all the host wants.
     pub fn control(storage: Storage) -> Self {
-        let mut shell = Shell::new(storage);
+        let mut shell = Shell { host: true, ..Shell::new(storage) };
+        shell.go_home();
+        shell
+    }
+
+    /// The shell of a terminal window on the desktop: it runs as whoever is
+    /// logged in at the console.
+    pub fn terminal(storage: Storage) -> Self {
+        let mut shell = Shell { echo: true, user: users::console_user(), ..Shell::new(storage) };
         shell.go_home();
         shell
     }
@@ -287,6 +301,177 @@ impl Shell {
         }
     }
 
+    // ----- accounts (users.rs) ---------------------------------------------------
+
+    /// May this shell change the system? Without accounts everyone may.
+    fn is_admin(&mut self) -> bool {
+        self.host || self.user.as_ref().is_some_and(users::User::is_admin) || users::load(&mut self.storage).is_empty()
+    }
+
+    fn whoami(&mut self) {
+        match &self.user {
+            Some(user) => println!("{} ({})", user.name, if user.groups.is_empty() { String::from("no groups") } else { user.groups.join(", ") }),
+            None if self.host => println!("the AI host's control shell (admin rights)"),
+            None if users::load(&mut self.storage).is_empty() => {
+                println!("nobody: this machine has no accounts, so everyone may do everything ('useradd NAME' makes the first, an admin)")
+            }
+            None => println!("nobody: not logged in (a remote session has no admin rights)"),
+        }
+    }
+
+    /// A password typed without showing it; `None` after Ctrl+C or Escape.
+    fn read_secret(&mut self, prompt: &str) -> Option<String> {
+        use crate::input::Key;
+        print!("{prompt}");
+        console::flush();
+        let mut text = String::new();
+        loop {
+            match crate::input::read_key() {
+                Key::Enter => break,
+                Key::Char(c) if text.len() < users::MAX_PASSWORD => text.push(c),
+                Key::Backspace => {
+                    text.pop();
+                }
+                Key::Ctrl('c' | 'd') | Key::Escape => {
+                    println!();
+                    return None;
+                }
+                _ => {}
+            }
+        }
+        println!();
+        Some(text)
+    }
+
+    /// A new password, typed twice; `None` if they differ or it is too short.
+    fn new_password(&mut self, prompt: &str) -> Option<String> {
+        let first = self.read_secret(prompt)?;
+        if first.chars().count() < users::MIN_PASSWORD {
+            error(&format!("a password needs at least {} characters", users::MIN_PASSWORD));
+            return None;
+        }
+        let again = self.read_secret("the same again: ")?;
+        if again != first {
+            error("the two passwords differ");
+            return None;
+        }
+        Some(first)
+    }
+
+    /// Ask for a name and password until they match an account (the console
+    /// at boot, and after `logout`). A pause after every wrong try.
+    fn login_at_console(&mut self) {
+        loop {
+            let accounts = users::load(&mut self.storage);
+            if accounts.is_empty() {
+                return;
+            }
+            print!("login: ");
+            console::flush();
+            let name = match self.editor.read_line() {
+                Line::Text(line) => String::from(line.trim()),
+                _ => continue,
+            };
+            let Some(password) = self.read_secret("password: ") else { continue };
+            match accounts.into_iter().find(|u| u.name == name).filter(|u| u.password_ok(&password)) {
+                Some(user) => {
+                    println!("welcome, {}", user.name);
+                    let home = format!("/home/{}", user.name);
+                    if self.storage.fs().is_dir(&home) {
+                        self.cwd = home;
+                    }
+                    users::set_console_user(Some(user.clone()));
+                    self.user = Some(user);
+                    let ev = eventlog::event("login").str("result", "ok").finish();
+                    eventlog::write(&mut self.storage.fs(), ev);
+                    return;
+                }
+                None => {
+                    // Names are never logged, only that a try failed.
+                    let ev = eventlog::event("login").str("result", "wrong").finish();
+                    eventlog::write(&mut self.storage.fs(), ev);
+                    thread::sleep_ms(2_000);
+                    println!("wrong name or password");
+                }
+            }
+        }
+    }
+
+    /// `useradd NAME [admin]`. The first account is always an admin, and the
+    /// console is logged in as it (so nobody is locked out).
+    fn useradd(&mut self, name: &str, admin: bool) {
+        let mut accounts = users::load(&mut self.storage);
+        if !users::valid_name(name) {
+            return error("useradd: a name is a lowercase letter, then up to 15 letters, digits, - or _");
+        }
+        if accounts.iter().any(|u| u.name == name) {
+            return error(&format!("useradd: {name} exists already"));
+        }
+        if accounts.len() >= users::MAX_USERS {
+            return error("useradd: too many accounts");
+        }
+        let first = accounts.is_empty();
+        let Some(password) = self.new_password(&format!("password for {name}: ")) else { return println!("no account made") };
+        let groups: &[&str] = if admin || first { &[users::ADMIN] } else { &[] };
+        let user = users::User::new(name, groups, &users::new_salt(), &password);
+        accounts.push(user.clone());
+        if let Err(e) = users::save(&mut self.storage, &accounts) {
+            return error(&format!("useradd: {e}"));
+        }
+        let _ = self.storage.fs().mkdir_all(&format!("/home/{name}"));
+        println!("account {name} made{}, home folder /home/{name}", if groups.is_empty() { "" } else { " (admin)" });
+        if first {
+            println!("the first account: from now on the console asks for a name and password at boot");
+            if session::current().is_none() && !self.host {
+                users::set_console_user(Some(user.clone()));
+                self.user = Some(user);
+                println!("logged in as {name}");
+            }
+        }
+    }
+
+    fn userdel(&mut self, name: &str) {
+        let mut accounts = users::load(&mut self.storage);
+        let Some(at) = accounts.iter().position(|u| u.name == name) else { return error(&format!("userdel: no account {name}")) };
+        let removed = accounts.remove(at);
+        if removed.is_admin() && !accounts.is_empty() && !accounts.iter().any(users::User::is_admin) {
+            return error("userdel: that is the last admin; make another admin first");
+        }
+        if let Err(e) = users::save(&mut self.storage, &accounts) {
+            return error(&format!("userdel: {e}"));
+        }
+        if self.user.as_ref().is_some_and(|u| u.name == name) {
+            self.user = None;
+            users::set_console_user(None);
+        }
+        println!("account {name} removed (its home folder stays){}", if accounts.is_empty() { "; no accounts are left: no login any more" } else { "" });
+    }
+
+    /// `passwd`: a new password for yourself (after the old one), or, for an
+    /// admin, for someone else.
+    fn passwd(&mut self, other: Option<&str>) {
+        let mut accounts = users::load(&mut self.storage);
+        let name = match (other, &self.user) {
+            (Some(name), _) => String::from(name),
+            (None, Some(me)) => me.name.clone(),
+            (None, None) => return error("passwd: nobody is logged in here (passwd NAME, as an admin)"),
+        };
+        let Some(at) = accounts.iter().position(|u| u.name == name) else { return error(&format!("passwd: no account {name}")) };
+        if other.is_none() {
+            let Some(old) = self.read_secret("current password: ") else { return };
+            if !accounts[at].password_ok(&old) {
+                thread::sleep_ms(2_000);
+                return error("passwd: that is not the current password");
+            }
+        }
+        let Some(password) = self.new_password(&format!("new password for {name}: ")) else { return println!("password not changed") };
+        accounts[at].set_password(&users::new_salt(), &password);
+        match users::save(&mut self.storage, &accounts) {
+            Ok(()) => println!("password of {name} changed"),
+            Err(e) => error(&format!("passwd: {e}")),
+        }
+    }
+
     /// At boot: the saved wallpaper, if its picture is still there.
     pub fn load_wallpaper(&mut self) {
         let data = self.storage.fs().read_file(WALLPAPER_FILE).ok();
@@ -357,6 +542,9 @@ impl Shell {
     }
 
     pub fn run(&mut self) -> ! {
+        if !users::load(&mut self.storage).is_empty() {
+            self.login_at_console();
+        }
         loop {
             self.show_notices();
             self.prompt();
@@ -480,8 +668,38 @@ impl Shell {
             return report(r);
         }
 
+        if users::needs_admin(&cmd, &a) && !self.is_admin() {
+            let who = self.user.as_ref().map_or(String::from("a remote session"), |u| u.name.clone());
+            return error(&format!("{cmd}: only for admins ({who} is not one; see whoami)"));
+        }
+
         match (cmd.as_str(), a.as_slice()) {
             ("help", _) => help(),
+            ("whoami", []) => self.whoami(),
+            ("users", []) => {
+                for user in users::load(&mut self.storage) {
+                    println!("{:<16} {}", user.name, user.groups.join(","));
+                }
+            }
+            ("useradd", [name]) => self.useradd(name, false),
+            ("useradd", [name, "admin"]) => self.useradd(name, true),
+            ("useradd", _) => error("usage: useradd NAME [admin]"),
+            ("userdel", [name]) => self.userdel(name),
+            ("userdel", _) => error("usage: userdel NAME"),
+            ("passwd", []) => self.passwd(None),
+            ("passwd", [name]) => self.passwd(Some(name)),
+            ("passwd", _) => error("usage: passwd [NAME]"),
+            ("login", []) if session::current().is_none() => self.login_at_console(),
+            ("logout", []) if session::current().is_none() => {
+                if users::load(&mut self.storage).is_empty() {
+                    return error("logout: this machine has no accounts (see useradd)");
+                }
+                println!("logged out");
+                self.user = None;
+                users::set_console_user(None);
+                self.login_at_console();
+            }
+            ("login" | "logout", []) => error("login and logout are for the machine's own console; here: exit"),
             ("clear" | "cls", _) => console::clear(),
             ("echo", rest) => println!("{}", rest.join(" ")),
             ("pwd", []) => println!("{}", self.cwd),
@@ -2200,6 +2418,9 @@ fn show_layouts() {
 
 const COMMANDS: &[(&str, &str)] = &[
     ("help", "show this help"),
+    ("whoami, users", "who is logged in; the accounts (none: no login, everyone may do everything)"),
+    ("useradd NAME [admin]", "make an account (the first is an admin); userdel NAME; passwd [NAME]"),
+    ("login, logout", "log in at the console / log out (with accounts, the console asks at boot)"),
     ("clear", "clear the screen (or Ctrl+L)"),
     ("echo TEXT [> FILE]", "print text, or write (>) / append (>>) to a file"),
     ("ls [DIR]", "list a directory"),

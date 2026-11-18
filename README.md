@@ -328,7 +328,7 @@ Serial input bypasses the layout: the host terminal has already translated keys.
 **Line editing:** ←/→, Home/End, Backspace/Delete, ↑/↓ history, Esc clears the
 line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 
-**Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
+**Commands:** `help`, `whoami`, `users`, `useradd`, `userdel`, `passwd`, `login`, `logout`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `head`, `tail`, `wc`, `grep`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `timezone`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `do`, `ai`,
 `slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `cpu`, `monitor`, `view`, `screenshot`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `vnc`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
@@ -1025,6 +1025,30 @@ do over the serial port. Plan: `Docs/beehive-network-plan.html`.
 - **Not done:** the link's state on the status page (that page is protected);
   a new kernel over the link (H4). On the HP the key is lost at every restart
   until BeeFS lives on a disk there (it runs from a RAM disk).
+
+## Accounts: `useradd`, `login`, `whoami` ✅ in QEMU
+
+A machine without accounts works as it always did: no login, everyone may
+do everything. `useradd NAME [admin]` makes an account (the password is
+typed twice and never shown); the first one is always an admin, and the
+console is logged in as it so nobody is locked out. From then on the
+console asks for a name and password at boot and after `logout`, and
+commands that change the system itself need the group `admin`
+(`users::needs_admin`: `install`, `update`, `reboot`, `shutdown`,
+`useradd`, `userdel`, switching `vnc`, `remote`, `httpd`, `net`, `ai`,
+`desktop`, `display`, `cpu`, `layout`, `timezone`, someone else's
+`passwd`); showing their state is for everyone. `whoami`, `users`,
+`passwd [NAME]`, `userdel NAME` (never the last admin). Accounts are lines
+in `/system/users` (`name:groups:salt:hash`): no password is stored, only
+SHA-256 run 20,000 times over a fresh salt and the password; damaged lines
+give nobody anything. Logins are logged as "ok" or "wrong", never with a
+name. Terminal windows run as whoever is logged in at the console; the AI
+host's control shell keeps admin rights (`ai control on` at the console
+allowed it); the remote shell keeps its own password and has no admin
+rights once there are accounts. Files have no owners yet: that is the next
+step. Tests: a self-test (the file, passwords, what needs an admin) and
+`users.scn` (first account, an ordinary one, refusals, logging out and in,
+a wrong password).
 
 ## Remote desktop: `vnc` ✅ in QEMU
 

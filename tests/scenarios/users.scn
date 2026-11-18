@@ -1,0 +1,71 @@
+# Accounts: none at first (no login, everyone may do everything); the first
+# account is an admin and the console is logged in as it; commands that
+# change the system need an admin; passwords are never shown or stored.
+# (At boot the console asks like after `logout`: the same code.)
+@disk
+$ whoami
+nobody: this machine has no accounts, so everyone may do everything ('useradd NAME' makes the first, an admin)
+$& useradd bart
+> beekeeper1
+> beekeeper1
+$wait
+account bart made (admin), home folder /home/bart
+the first account: from now on the console asks for a name and password at boot
+logged in as bart
+!~ beekeeper1
+$ whoami
+bart (admin)
+$& useradd ann
+> annpass1
+> annpass1
+$wait
+account ann made, home folder /home/ann
+$& useradd tim
+> short
+$wait
+a password needs at least 6 characters
+no account made
+$ users
+~ ^bart +admin$
+~ ^ann *$
+$ cat /system/users
+!~ beekeeper1|annpass1
+~ ^bart:admin:[0-9a-f]{16}:[0-9a-f]{64}$
+# Ann logs in: she may look, not change the system.
+$& logout
+> ann
+> annpass1
+$wait
+logged out
+welcome, ann
+!~ annpass1
+$ whoami
+ann (no groups)
+$ pwd
+/home/ann
+$ reboot
+reboot: only for admins (ann is not one; see whoami)
+$ vnc on
+vnc: only for admins (ann is not one; see whoami)
+$ vnc
+remote desktop (VNC): off (vnc on [PORT] starts it)
+$ useradd eve
+useradd: only for admins (ann is not one; see whoami)
+# A wrong password: a pause, and the question again.
+$& logout
+> bart
+> wrong-one
+> bart
+> beekeeper1
+$wait
+wrong name or password
+welcome, bart
+$ userdel ann
+account ann removed (its home folder stays)
+$ userdel bart
+account bart removed (its home folder stays); no accounts are left: no login any more
+$ whoami
+nobody: this machine has no accounts, so everyone may do everything ('useradd NAME' makes the first, an admin)
+$ log 30
+~ "ev":"login","result":"wrong"
+!~ ann|bart|beekeeper
