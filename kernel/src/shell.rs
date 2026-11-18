@@ -8,7 +8,7 @@ use crate::vga::Color;
 use crate::aibridge::{self, Outcome};
 use crate::json::Obj;
 use crate::ring::Global;
-use crate::{allocator, bootslots, display, hivectl, httpd, install, update, remote, session, console, crash, eventlog, keyboard, net, pci, power, selftest, thread, time};
+use crate::{allocator, bootslots, display, hivectl, httpd, install, update, remote, session, console, crash, eventlog, keyboard, net, pci, power, selftest, textops, thread, time};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -20,6 +20,9 @@ const LAYOUT_FILE: &str = "/system/keyboard";
 const DISPLAY_FILE: &str = "/system/display";
 /// "on" or "off": the desktop (`desktop on` / `desktop off`). No file: on.
 const DESKTOP_FILE: &str = "/system/desktop";
+/// Shown at boot when it exists (at most `BANNER_LINES` lines).
+const BANNER_FILE: &str = "/system/banner";
+const BANNER_LINES: usize = 20;
 /// "auto off": the other processors are not started at boot.
 const CPU_FILE: &str = "/system/cpu";
 /// Contains "off" when the AI features are switched off (`ai off`).
@@ -267,6 +270,19 @@ impl Shell {
         console::apply_desktop_setting(data.as_deref().and_then(|d| core::str::from_utf8(d).ok()));
     }
 
+    /// At boot: the text of `/system/banner`, if there is one (the first
+    /// lines; control characters left out).
+    pub fn show_banner(&mut self) {
+        let data = self.storage.fs().read_file(BANNER_FILE).ok();
+        let Some(data) = data else { return };
+        let text = String::from_utf8_lossy(&data);
+        println!();
+        for line in text.lines().take(BANNER_LINES) {
+            let line: String = line.chars().filter(|c| !c.is_control() || *c == '\t').take(200).collect();
+            println!("{line}");
+        }
+    }
+
     /// At boot: start the other processors, unless that was switched off.
     pub fn load_cpus(&mut self) {
         let data = self.storage.fs().read_file(CPU_FILE).ok();
@@ -453,6 +469,19 @@ impl Shell {
             ("tree", []) => self.tree(&self.cwd.clone()),
             ("tree", [dir]) => self.tree(&self.abs(dir)),
             ("cat" | "type", [file]) => self.cat(file),
+            ("head" | "tail", args) => match textops::parse_count(args) {
+                Some((n, file)) => self.head_tail(file, n, cmd == "tail"),
+                None => error(&format!("usage: {cmd} [-n N] FILE   (the {} 10 lines unless N is given)", if cmd == "tail" { "last" } else { "first" })),
+            },
+            ("wc", [file]) => {
+                let Some(text) = self.read_text(file) else { return };
+                let (lines, words, bytes) = textops::count(&text);
+                println!("{lines} lines, {words} words, {bytes} bytes  {file}");
+            }
+            ("wc", _) => error("usage: wc FILE"),
+            ("grep", [pattern, path]) => self.grep(pattern, path, false),
+            ("grep", ["-i", pattern, path]) => self.grep(pattern, path, true),
+            ("grep", _) => error("usage: grep [-i] TEXT FILE|FOLDER   (-i: upper and lower case alike)"),
             ("touch", [file]) => self.touch(file),
             ("mkdir", [dir]) => {
                 let dir = self.abs(dir);
@@ -1797,6 +1826,84 @@ impl Shell {
         }
     }
 
+    /// A file's content as text; prints why not and gives `None` otherwise.
+    fn read_text(&mut self, file: &str) -> Option<String> {
+        let path = self.abs(file);
+        let data = self.storage.fs().read_file(&path);
+        match data {
+            Ok(data) => Some(String::from_utf8_lossy(&data).into_owned()),
+            Err(e) => {
+                error(&format!("{file}: {e}"));
+                None
+            }
+        }
+    }
+
+    /// `head` / `tail`: the first or last `n` lines of a file.
+    fn head_tail(&mut self, file: &str, n: usize, last: bool) {
+        let Some(text) = self.read_text(file) else { return };
+        let part = if last { textops::tail(&text, n) } else { textops::head(&text, n) };
+        print!("{part}");
+        if !part.is_empty() && !part.ends_with('\n') {
+            println!();
+        }
+    }
+
+    /// `grep [-i] TEXT FILE|FOLDER`: the lines that contain TEXT, with their
+    /// numbers; in a folder, every file in it and below (with its path).
+    fn grep(&mut self, pattern: &str, path: &str, ignore_case: bool) {
+        const MAX_MATCHES: usize = 1000;
+        let start = self.abs(path);
+        let folder = self.storage.fs().is_dir(&start);
+        let mut files = Vec::new();
+        if folder {
+            let mut todo = alloc::vec![start.clone()];
+            while let Some(dir) = todo.pop() {
+                let Ok(entries) = self.storage.fs().read_dir(&dir) else { continue };
+                for e in entries.iter().rev() {
+                    let full = format!("{}/{}", dir.trim_end_matches('/'), e.name);
+                    match e.kind {
+                        FileKind::Directory => todo.push(full),
+                        FileKind::File => files.push(full),
+                    }
+                }
+            }
+            files.sort();
+        } else {
+            files.push(start);
+        }
+        let mut found = 0;
+        for file in &files {
+            let data = match self.storage.fs().read_file(file) {
+                Ok(data) => data,
+                Err(e) if !folder => return error(&format!("{path}: {e}")),
+                Err(_) => continue,
+            };
+            if textops::is_binary(&data) {
+                if String::from_utf8_lossy(&data).contains(pattern) {
+                    println!("{file}: a binary file, it matches");
+                }
+                continue;
+            }
+            let text = String::from_utf8_lossy(&data);
+            for (number, line) in textops::grep(&text, pattern, ignore_case) {
+                if found == MAX_MATCHES {
+                    println!("... (stopped after {MAX_MATCHES} lines)");
+                    return;
+                }
+                found += 1;
+                if folder {
+                    println!("{file}:{number}: {line}");
+                } else {
+                    println!("{number}: {line}");
+                }
+            }
+        }
+        if found == 0 {
+            println!("no line contains {pattern:?}");
+        }
+    }
+
     fn touch(&mut self, file: &str) {
         let path = self.abs(file);
         let exists = self.storage.fs().exists(&path);
@@ -1869,6 +1976,9 @@ const COMMANDS: &[(&str, &str)] = &[
     ("ls [DIR]", "list a directory"),
     ("cd [DIR], pwd", "change / show the current directory"),
     ("cat FILE", "show a file"),
+    ("head|tail [-n N] FILE", "the first / last N lines of a file (10 unless N is given)"),
+    ("wc FILE", "count the lines, words and bytes of a file"),
+    ("grep [-i] TEXT PATH", "lines that contain TEXT, in a file or every file of a folder"),
     ("touch FILE", "create an empty file"),
     ("mkdir DIR", "create a directory (with parents)"),
     ("rm PATH", "remove a file or empty directory"),

@@ -25,6 +25,7 @@ mod smp;
 mod desk;
 mod filemgr;
 mod textedit;
+mod textops;
 mod web;
 // After `console`: uses println!.
 mod bootslots;
@@ -170,6 +171,7 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info: u32) -> ! {
         Some(bootslots::Report::Trial) => trial_health_check(&mut shell),
         None => {}
     }
+    shell.show_banner();
     println!();
     println!("Type 'help' for a list of commands.");
     console::settle();

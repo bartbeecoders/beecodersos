@@ -59,6 +59,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("processors: every piece of a job runs exactly once, also nested", smp_jobs),
     ("processors: started at boot or not", smp_choice),
     ("web viewer: links, scrolling, back, addresses", web_viewer),
+    ("text tools: head, tail, wc, grep", text_tools),
     ("heap: alloc and free", heap_alloc_free),
     ("heap: 1 MiB buffer", heap_large_buffer),
     ("ring: order and overflow", ring_buffer),
@@ -2675,5 +2676,34 @@ fn web_viewer() -> TestResult {
     v.show("/notes.txt", "a <b>  c\nnext", false, false);
     check_eq!(v.lines(40), alloc::vec!["a <b>  c".to_string(), "next".to_string()]);
     check_eq!(v.lines(10).len(), 2);
+    Ok(())
+}
+
+fn text_tools() -> TestResult {
+    use crate::textops::*;
+    let text = "one\ntwo\nthree\nfour\n";
+    check_eq!(head(text, 2), "one\ntwo\n");
+    check_eq!(head(text, 9), text);
+    check_eq!(head(text, 0), "");
+    check_eq!(tail(text, 2), "three\nfour\n");
+    check_eq!(tail(text, 4), text);
+    check_eq!(tail(text, 9), text);
+    check_eq!(tail("a\nb", 1), "b");
+    check_eq!(tail("", 3), "");
+    check_eq!(count(text), (4, 4, 19));
+    check_eq!(count("no end"), (1, 2, 6));
+    check_eq!(count(""), (0, 0, 0));
+    check_eq!(count("\n\n"), (2, 0, 2));
+    let found: Vec<(usize, &str)> = grep("Bee\nbee hive\nwasp\n", "bee", false).collect();
+    check_eq!(found, alloc::vec![(2, "bee hive")]);
+    let found: Vec<(usize, &str)> = grep("Bee\nbee hive\nwasp\n", "BEE", true).collect();
+    check_eq!(found, alloc::vec![(1, "Bee"), (2, "bee hive")]);
+    check!(contains("anything", "", true) && !contains("", "x", true));
+    check!(is_binary(b"ab\0c") && !is_binary(b"text\n"));
+    check_eq!(parse_count(&["f"]), Some((10, "f")));
+    check_eq!(parse_count(&["-n", "3", "f"]), Some((3, "f")));
+    check_eq!(parse_count(&["-5", "f"]), Some((5, "f")));
+    check_eq!(parse_count(&["-n", "x", "f"]), None);
+    check_eq!(parse_count(&[]), None);
     Ok(())
 }

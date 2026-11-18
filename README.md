@@ -318,9 +318,22 @@ Serial input bypasses the layout: the host terminal has already translated keys.
 line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
-`cat`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
+`cat`, `head`, `tail`, `wc`, `grep`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `ai`,
 `slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `cpu`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+
+**Text tools** (`kernel/src/textops.rs`, self-tested; `text-tools.scn`):
+`head` / `tail [-n N | -N] FILE` show the first or last lines (10 unless N
+is given), `wc FILE` counts lines, words and bytes, and `grep [-i] TEXT
+FILE|FOLDER` shows the lines that contain TEXT with their numbers; on a
+folder it searches every file in it and below (`path:line: text`, at most
+1000 lines; a binary file only says that it matches). `-i`: upper and
+lower case alike.
+
+**Banner:** the text of `/system/banner`, if it exists, is shown at boot
+just before "Type 'help'" (the first 20 lines, control characters left
+out): `echo Welcome > /system/banner`, or write it with `edit`. Asked for
+with `wish`; `banner.scn` tests it.
 
 **Under the hood:** interrupts are enabled (IDT + remapped PIC; IRQ0 timer,
 IRQ1 keyboard, IRQ3 COM2 AI bridge, IRQ4 COM1 serial). Handlers queue raw bytes; the shell decodes them and sleeps with

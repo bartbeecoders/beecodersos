@@ -1,0 +1,13 @@
+# A banner of one's own: the text of /system/banner is shown at boot,
+# just before "Type 'help'" (the first 20 lines; control characters left out).
+@disk
+$ mkdir /system
+$ echo "Welcome to the  hive" > /system/banner
+$ echo "   -- keep buzzing --" >> /system/banner
+@reboot
+Welcome to the  hive
+   -- keep buzzing --
+Type 'help' for a list of commands.
+$ rm /system/banner
+@reboot
+!~ buzzing
