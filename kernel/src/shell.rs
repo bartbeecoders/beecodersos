@@ -23,6 +23,8 @@ const DESKTOP_FILE: &str = "/system/desktop";
 /// Shown at boot when it exists (at most `BANNER_LINES` lines).
 const BANNER_FILE: &str = "/system/banner";
 const BANNER_LINES: usize = 20;
+/// The time zone for local time ("UTC", "CET", "+05:30").
+const TIMEZONE_FILE: &str = "/system/timezone";
 /// "auto off": the other processors are not started at boot.
 const CPU_FILE: &str = "/system/cpu";
 /// Contains "off" when the AI features are switched off (`ai off`).
@@ -281,6 +283,13 @@ impl Shell {
             let line: String = line.chars().filter(|c| !c.is_control() || *c == '\t').take(200).collect();
             println!("{line}");
         }
+    }
+
+    /// At boot: the saved time zone (UTC without one).
+    pub fn load_timezone(&mut self) {
+        let data = self.storage.fs().read_file(TIMEZONE_FILE).ok();
+        let zone = data.as_deref().and_then(|d| core::str::from_utf8(d).ok()).and_then(time::parse_zone);
+        time::set_zone(zone.unwrap_or(time::Zone::Utc));
     }
 
     /// At boot: start the other processors, unless that was switched off.
@@ -542,9 +551,31 @@ impl Shell {
                 Err(e) => error(&format!("calc: {e}")),
             },
             ("date", []) => match time::now_unix() {
-                Some(t) => println!("{}", time::iso8601(t)),
+                Some(t) if time::zone() == time::Zone::Utc => println!("{}", time::iso8601(t)),
+                Some(t) => println!("{}   ({})", time::local(time::zone(), t), time::iso8601(t)),
                 None => error("no real-time clock"),
             },
+            ("timezone", []) => {
+                let zone = time::zone();
+                println!("time zone: {} ('timezone UTC|CET|+HH:MM' to change)", time::zone_name(zone));
+            }
+            ("timezone", [name]) => match time::parse_zone(name) {
+                Some(zone) => {
+                    time::set_zone(zone);
+                    let mut fs = self.storage.fs();
+                    let saved = fs.mkdir_all("/system").and_then(|_| fs.write_file(TIMEZONE_FILE, format!("{}\n", time::zone_name(zone)).as_bytes()));
+                    drop(fs);
+                    let note = match (saved, self.storage.persistent) {
+                        (Ok(()), true) => "saved",
+                        (Ok(()), false) => "RAM disk: not kept after reboot",
+                        (Err(_), _) => "could not save",
+                    };
+                    println!("time zone: {} ({note})", time::zone_name(zone));
+                    crate::clock::refresh();
+                }
+                None => error("usage: timezone UTC | CET (Central Europe, with summer time) | +HH:MM | -HH:MM"),
+            },
+            ("timezone", _) => error("usage: timezone UTC | CET (Central Europe, with summer time) | +HH:MM | -HH:MM"),
             ("uptime", []) => println!("up {}", time::format_duration(time::uptime_ms())),
             ("log", []) => self.show_log(10),
             ("log", [n]) => match n.parse() {
@@ -2067,7 +2098,8 @@ const COMMANDS: &[(&str, &str)] = &[
     ("history", "previous commands (Up/Down to recall)"),
     ("mem, about", "memory usage, system info"),
     ("calc EXPR", "integer arithmetic: + - * / % ( )"),
-    ("date, uptime", "current date and time (UTC), time since boot"),
+    ("date, uptime", "current date and time (in the time zone, and UTC), time since boot"),
+    ("timezone [ZONE]", "the time zone for date and the desktop clock: UTC, CET, +HH:MM (saved)"),
     ("log [N]", "last N events from the event log"),
     ("wish TEXT", "tell the OS what you'd like it to do"),
     ("feedback TEXT", "tell the OS what could be better"),

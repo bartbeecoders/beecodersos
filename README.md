@@ -321,7 +321,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `head`, `tail`, `wc`, `grep`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
-`mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `do`, `ai`,
+`mem`, `about`, `calc`, `date`, `timezone`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `do`, `ai`,
 `slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `cpu`, `monitor`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Text tools** (`kernel/src/textops.rs`, self-tested; `text-tools.scn`):
@@ -1257,6 +1257,15 @@ desktop.
   for keys, links, history and addresses, and `browse.scn` (files, links,
   back, a page from the test web server). On the HP it shows
   http://info.cern.ch, the first web site, and follows its links.
+- **Clock and time zone:** the desktop shows the local date and time at
+  the right end of its row of buttons ("Wed 18 Nov 20:13"); a small thread
+  (`kernel/src/clock.rs`) changes it when the minute does. `timezone
+  UTC|CET|+HH:MM|-HH:MM` sets the zone (saved in `/system/timezone`;
+  UTC without one); `CET` follows the EU's summer time (CEST from the last
+  Sunday of March to the last Sunday of October, 01:00 UTC). `date` then
+  shows local time with UTC after it. A self-test covers the rules (the
+  2026 switches to the second) and where the clock fits; `timezone.scn`
+  checks the setting across a reboot and the clock on the screen.
 - **System monitor:** `monitor` opens a window (`kernel/src/monitor.rs`)
   that shows every second the share of time each extra processor spent on
   jobs (processor 0 runs the kernel itself and is not measured yet: that

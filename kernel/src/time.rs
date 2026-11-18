@@ -74,6 +74,98 @@ pub fn iso8601(unix: u64) -> String {
     format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", s / 3600, s / 60 % 60, s % 60)
 }
 
+/// The time zone for local time (`timezone`): UTC, a fixed offset, or
+/// Central European Time with the EU's summer time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Zone {
+    Utc,
+    /// Minutes east of UTC.
+    Fixed(i32),
+    Cet,
+}
+
+static ZONE: crate::ring::Global<Zone> = crate::ring::Global::new(Zone::Utc);
+
+pub fn zone() -> Zone {
+    *ZONE.get()
+}
+
+pub fn set_zone(zone: Zone) {
+    *ZONE.get() = zone;
+}
+
+/// "UTC", "CET", "+05:30", "-03:00" (any case, around spaces ignored).
+pub fn parse_zone(text: &str) -> Option<Zone> {
+    let text = text.trim();
+    if text.eq_ignore_ascii_case("utc") || text.eq_ignore_ascii_case("gmt") {
+        return Some(Zone::Utc);
+    }
+    if text.eq_ignore_ascii_case("cet") || text.eq_ignore_ascii_case("cest") {
+        return Some(Zone::Cet);
+    }
+    // "UTC+05:30" (as `zone_name` writes it) is "+05:30".
+    let text = match text.get(..3) {
+        Some(head) if head.eq_ignore_ascii_case("utc") => &text[3..],
+        _ => text,
+    };
+    let sign = match text.as_bytes().first()? {
+        b'+' => 1,
+        b'-' => -1,
+        _ => return None,
+    };
+    let (h, m) = text[1..].split_once(':').unwrap_or((&text[1..], "0"));
+    let all_digits = |s: &str| !s.is_empty() && s.len() <= 2 && s.bytes().all(|b| b.is_ascii_digit());
+    if !all_digits(h) || !all_digits(m) {
+        return None;
+    }
+    let (h, m): (i32, i32) = (h.parse().ok()?, m.parse().ok()?);
+    if h > 14 || m > 59 || (h == 14 && m > 0) {
+        return None;
+    }
+    Some(if h == 0 && m == 0 { Zone::Utc } else { Zone::Fixed(sign * (h * 60 + m)) })
+}
+
+/// The last Sunday of a month, at 01:00 UTC, as Unix time (EU summer time
+/// starts and ends then).
+fn last_sunday_1am(year: i64, month: u32) -> u64 {
+    let last = days_from_civil(year, month, 31); // March and October have 31 days
+    let weekday = (last + 4).rem_euclid(7); // 1970-01-01 was a Thursday; 0 = Sunday
+    ((last - weekday) * 86400 + 3600) as u64
+}
+
+/// Minutes east of UTC at `unix`, and the zone's short name then.
+pub fn offset(zone: Zone, unix: u64) -> (i32, String) {
+    match zone {
+        Zone::Utc => (0, String::from("UTC")),
+        Zone::Fixed(minutes) => {
+            let (sign, m) = if minutes < 0 { ('-', -minutes) } else { ('+', minutes) };
+            (minutes, format!("UTC{sign}{:02}:{:02}", m / 60, m % 60))
+        }
+        Zone::Cet => {
+            let (year, _, _) = civil_from_days((unix / 86400) as i64);
+            let summer = unix >= last_sunday_1am(year, 3) && unix < last_sunday_1am(year, 10);
+            if summer { (120, String::from("CEST")) } else { (60, String::from("CET")) }
+        }
+    }
+}
+
+/// The zone as it is written in `/system/timezone` and by `timezone`.
+pub fn zone_name(zone: Zone) -> String {
+    match zone {
+        Zone::Cet => String::from("CET"),
+        other => offset(other, 0).1,
+    }
+}
+
+/// Local time: "2026-11-18 20:05:31 CET".
+pub fn local(zone: Zone, unix: u64) -> String {
+    let (minutes, name) = offset(zone, unix);
+    let t = (unix as i64 + minutes as i64 * 60).max(0) as u64;
+    let (y, m, d) = civil_from_days((t / 86400) as i64);
+    let s = t % 86400;
+    format!("{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02} {name}", s / 3600, s / 60 % 60, s % 60)
+}
+
 /// "3d 4h 05m 06s"-style duration.
 pub fn format_duration(ms: u64) -> String {
     let s = ms / 1000;

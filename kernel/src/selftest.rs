@@ -62,6 +62,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("text tools: head, tail, wc, grep", text_tools),
     ("do: the plan in an answer, commands it may not run", do_plan),
     ("monitor: bars, sizes, what the window shows", monitor_render),
+    ("time zones: UTC, offsets, CET with summer time, the desktop clock", time_zones),
     ("heap: alloc and free", heap_alloc_free),
     ("heap: 1 MiB buffer", heap_large_buffer),
     ("ring: order and overflow", ring_buffer),
@@ -2777,5 +2778,48 @@ fn monitor_render() -> TestResult {
     check!(lines.iter().any(|l| l.starts_with("  net ") && l.ends_with("waiting")));
     // A narrow window: nothing wider than it.
     check!(render(&before, &now, 20).iter().all(|(l, _)| l.chars().count() <= 30));
+    Ok(())
+}
+
+fn time_zones() -> TestResult {
+    use crate::time::{local, offset, parse_zone, zone_name, Zone};
+    check_eq!(parse_zone("utc"), Some(Zone::Utc));
+    check_eq!(parse_zone(" CET\n"), Some(Zone::Cet));
+    check_eq!(parse_zone("+05:30"), Some(Zone::Fixed(330)));
+    check_eq!(parse_zone("-3"), Some(Zone::Fixed(-180)));
+    check_eq!(parse_zone("+00:00"), Some(Zone::Utc));
+    for bad in ["", "+", "+15", "+14:30", "+1:60", "5", "CETT", "+a:00", "+123"] {
+        check_eq!(parse_zone(bad), None);
+    }
+    check_eq!(zone_name(Zone::Fixed(-570)), "UTC-09:30");
+    check_eq!(zone_name(Zone::Cet), "CET");
+    // What is saved comes back.
+    for zone in [Zone::Utc, Zone::Cet, Zone::Fixed(330), Zone::Fixed(-570)] {
+        check_eq!(parse_zone(&zone_name(zone)), Some(zone));
+    }
+    // EU summer time 2026: from 29 March 01:00 UTC to 25 October 01:00 UTC.
+    let spring = crate::time::days_from_civil(2026, 3, 29) as u64 * 86400 + 3600;
+    let autumn = crate::time::days_from_civil(2026, 10, 25) as u64 * 86400 + 3600;
+    check_eq!(offset(Zone::Cet, spring - 1).0, 60);
+    check_eq!(offset(Zone::Cet, spring).0, 120);
+    check_eq!(offset(Zone::Cet, autumn - 1), (120, String::from("CEST")));
+    check_eq!(offset(Zone::Cet, autumn), (60, String::from("CET")));
+    // 2026-11-18 19:05:31 UTC
+    let t = crate::time::days_from_civil(2026, 11, 18) as u64 * 86400 + 19 * 3600 + 5 * 60 + 31;
+    check_eq!(local(Zone::Cet, t), "2026-11-18 20:05:31 CET");
+    check_eq!(local(Zone::Utc, t), "2026-11-18 19:05:31 UTC");
+    check_eq!(local(Zone::Fixed(330), t), "2026-11-19 00:35:31 UTC+05:30");
+    check_eq!(crate::clock::text(Zone::Cet, t), "Wed 18 Nov 20:05");
+    check_eq!(crate::clock::text(Zone::Utc, 0), "Thu 1 Jan 00:00");
+    // On the desktop: right of the buttons, and only where it fits.
+    let mut desk = crate::wm::Desktop::new();
+    desk.set_buttons(&["Terminal"], 640);
+    let first = desk.set_clock("Wed 18 Nov 20:05");
+    check!(first.is_some_and(|r| r.x + r.width <= 640 && r.x > 180));
+    check_eq!(desk.set_clock("Wed 18 Nov 20:05"), None); // nothing changed
+    check!(desk.set_clock("Wed 18 Nov 20:06").is_some());
+    let mut narrow = crate::wm::Desktop::new();
+    narrow.set_buttons(&["Terminal", "Files"], 300);
+    check_eq!(narrow.set_clock("Wed 18 Nov 20:05"), None); // does not fit
     Ok(())
 }

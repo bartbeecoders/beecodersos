@@ -622,6 +622,7 @@ fn lay_out(target: Target, desktop: bool) -> bool {
             let surface = Surface::new(inside.width, inside.height, target.mode.format)?;
             desk.set_pointer(*POINTER.get(), canvas.bounds());
             desk.set_buttons(&BUTTONS, canvas.width());
+            desk.set_clock(CLOCK.get());
             Some((desk, surface))
         });
     let (mut screen, desk, surface) = match windowed {
@@ -722,6 +723,17 @@ pub fn mouse_event(buttons: u8, dx: i32, dy: i32) {
 /// Clicks inside windows since the last call: (window, column, line).
 pub fn take_clicks() -> Vec<(usize, u16, u16)> {
     core::mem::take(CLICKS.get())
+}
+
+/// The clock on the desktop shows this text (the clock thread sets it
+/// when the minute changes; "" hides it). Nothing happens without a desktop.
+static CLOCK: Global<String> = Global::new(String::new());
+
+pub fn set_clock(text: &str) {
+    *CLOCK.get() = String::from(text);
+    let _rebuilding = Rebuilding::start();
+    let Some(rect) = DESKTOP.get().as_mut().and_then(|desk| desk.set_clock(text)) else { return };
+    compose(rect);
 }
 
 /// Desktop buttons clicked since the last call (their place in `BUTTONS`).
