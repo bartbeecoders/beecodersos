@@ -226,6 +226,7 @@ kernel/
   src/cpu.rs           the processor: name, features, how many there are (`cpu`)
   src/textedit.rs      the text editor (`edit`)
   src/filemgr.rs       the file manager (`files`)
+  src/web.rs           the web page viewer (`browse`); beenet/src/html.rs lays pages out
   src/keyboard.rs      PS/2 keyboard driver + scancode decoder (modifiers, dead keys)
   src/layouts.rs       keyboard layouts (US, Belgian Period)
   src/uart.rs          16550 serial port: detection, sending and receiving with limits
@@ -319,7 +320,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `ai`,
-`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `sleep`, `cpu`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `cpu`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Under the hood:** interrupts are enabled (IDT + remapped PIC; IRQ0 timer,
 IRQ1 keyboard, IRQ3 COM2 AI bridge, IRQ4 COM1 serial). Handlers queue raw bytes; the shell decodes them and sleeps with
@@ -1205,6 +1206,22 @@ desktop.
   deletes after a `y` (a folder only when it is empty), **u** reads the
   folder again, **q** leaves. A **click** on an entry puts the bar there, a
   second click opens it. It is a list of text for now: no icons.
+- **Web page viewer:** `browse URL|FILE` shows a page in a window of its
+  own (`kernel/src/web.rs`): an `http://` page from the web (the `http://`
+  may be left out) or an HTML or text file from the disk. The page is shown
+  as text, laid out for the window's width by `beenet/src/html.rs`
+  (headings, paragraphs, lists, preformatted blocks, links; no styles,
+  scripts or pictures, an image shows its `alt` text). Arrows, Page Up/Down,
+  Space, Home and End scroll; **Tab** picks the next link (it is scrolled
+  into view), **Enter** or a **click** follows it, **Backspace** goes back,
+  **g** asks for an address, **r** loads the page again, **q** leaves. Links
+  of a page on the disk lead to files on the disk. `https://` pages cannot
+  be opened yet (no TLS); pages are at most 1 MiB. A page is untrusted data:
+  the layout is bounded (20,000 lines, 2,000 links) and has host tests with
+  input cut off anywhere. Tests: `html` unit tests in `beenet`, a self-test
+  for keys, links, history and addresses, and `browse.scn` (files, links,
+  back, a page from the test web server). On the HP it shows
+  http://info.cern.ch, the first web site, and follows its links.
 - `sleep SECONDS` waits (used by the tests while another window works).
 - The boot flags `desktop=off` and `desktop=on` decide for one boot, whatever
   was saved. The screen is set up before the disk is read, so a machine with

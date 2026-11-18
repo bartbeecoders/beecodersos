@@ -25,6 +25,7 @@ mod smp;
 mod desk;
 mod filemgr;
 mod textedit;
+mod web;
 // After `console`: uses println!.
 mod bootslots;
 mod crash;

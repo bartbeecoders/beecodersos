@@ -9,7 +9,7 @@
 use crate::input::Key;
 use crate::ring::Global;
 use crate::shell::Shell;
-use crate::{console, filemgr, keyboard, session, storage, textedit, thread};
+use crate::{console, filemgr, keyboard, session, storage, textedit, thread, web};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -49,6 +49,13 @@ pub fn open_files(folder: &str) -> Result<usize, &'static str> {
     }
     let folder = String::from(folder);
     open("Files", "files", false, move |window| filemgr::run(window, folder, storage))
+}
+
+/// Open a web page viewer on an address (an http:// URL or an absolute path).
+pub fn open_web(address: &str) -> Result<usize, &'static str> {
+    let storage = storage::handle().ok_or("no file system is mounted")?;
+    let address = String::from(address);
+    open("Web", "browse", false, move |window| web::run(window, address, storage))
 }
 
 /// The folder new windows start in: the data partition if there is one.

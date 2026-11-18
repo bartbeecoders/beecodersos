@@ -58,6 +58,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("cpu: name, features, the list of processors", cpu_facts),
     ("processors: every piece of a job runs exactly once, also nested", smp_jobs),
     ("processors: started at boot or not", smp_choice),
+    ("web viewer: links, scrolling, back, addresses", web_viewer),
     ("heap: alloc and free", heap_alloc_free),
     ("heap: 1 MiB buffer", heap_large_buffer),
     ("ring: order and overflow", ring_buffer),
@@ -2595,5 +2596,84 @@ fn smp_choice() -> TestResult {
     // A boot flag wins over what was saved.
     check!(choice("test smp=on", Some("auto off")) && !choice("smp=off", Some("auto on")) && !choice("smp=off", None));
     check!(choice("nosmp=off smps=off", None));
+    Ok(())
+}
+
+fn web_viewer() -> TestResult {
+    use crate::web::{resolve, Action, Viewer};
+    use alloc::string::ToString;
+    // Where links lead: on the disk, and on the web.
+    check_eq!(resolve("/site/a/index.html", "b.html"), Ok("/site/a/b.html".to_string()));
+    check_eq!(resolve("/site/a/index.html", "../top.html#x"), Ok("/site/top.html".to_string()));
+    check_eq!(resolve("/site/a/index.html", "/../../etc"), Ok("/etc".to_string()));
+    check_eq!(resolve("http://h:8080/a/b/c.html", "../d.html?q=1"), Ok("http://h:8080/a/d.html?q=1".to_string()));
+    check_eq!(resolve("http://h/a/", "/x"), Ok("http://h/x".to_string()));
+    check_eq!(resolve("http://h/a/", "http://other.org"), Ok("http://other.org/".to_string()));
+    check_eq!(resolve("http://h/a/", "//cdn.org/s"), Ok("http://cdn.org/s".to_string()));
+    check!(resolve("http://h/", "https://secure.org/").is_err());
+    check!(resolve("http://h/", "mailto:someone@example.org").is_err());
+    check!(resolve("/a.html", "javascript:void(0)").is_err());
+    check!(crate::web::looks_like_html("http://h/", "<!DOCTYPE html><p>x"));
+    check!(!crate::web::looks_like_html("http://h/", "just text, 1 < 2"));
+    check!(!crate::web::looks_like_html("/notes.txt", "<p>shown as it is</p>"));
+
+    let mut v = Viewer::new();
+    let mut body = String::from("<title>Start</title><h1>Top</h1><p><a href=one.html>One</a> and <a href='https://x/'>Secure</a>");
+    for i in 0..40 {
+        body.push_str(&alloc::format!("<p>line {i}</p>"));
+    }
+    body.push_str("<p><a href=/last.html>Last</a>");
+    v.show("/site/index.html", &body, false, false);
+    let (w, h) = (40, 12);
+    let lines = v.lines(w);
+    check_eq!(v.title(), "Start");
+    check_eq!(v.address(), "/site/index.html");
+    check_eq!(lines[0].as_str(), "Top");
+    check_eq!(lines[2].as_str(), "One and Secure");
+    check_eq!(v.link(0), Some("one.html"));
+    // Enter without a link chosen does nothing; Tab picks the first one.
+    check_eq!(v.key(Key::Enter, w, h), Action::None);
+    check_eq!(v.key(Key::Tab, w, h), Action::None);
+    check_eq!(v.key(Key::Enter, w, h), Action::Open("/site/one.html".to_string()));
+    // The second link cannot be followed: it says why and stays.
+    check_eq!(v.key(Key::Tab, w, h), Action::None);
+    check_eq!(v.key(Key::Enter, w, h), Action::None);
+    let (cells, _) = v.render(w, h);
+    let status: String = cells[0].iter().map(|c| (*c & 0xFF) as u8 as char).collect();
+    check!(status.contains("https:// pages cannot be opened"));
+    // The third link is far down: Tab scrolls to it.
+    check_eq!(v.key(Key::Tab, w, h), Action::None);
+    let (cells, _) = v.render(w, h);
+    let shown: Vec<String> = cells.iter().map(|l| l.iter().map(|c| (*c & 0xFF) as u8 as char).collect::<String>()).collect();
+    check!(shown.iter().any(|l| l.starts_with("Last")));
+    check_eq!(v.key(Key::Enter, w, h), Action::Open("/last.html".to_string()));
+    // Scrolling stays within the page.
+    check_eq!(v.key(Key::Home, w, h), Action::None);
+    check_eq!(v.key(Key::Up, w, h), Action::None);
+    let (cells, _) = v.render(w, h);
+    check_eq!(cells[1][0] & 0xFF, b'T' as u16);
+    // A click on a link follows it (row 3 of the window is line 2 of the page).
+    check_eq!(v.key(Key::Click(1, 3), w, h), Action::Open("/site/one.html".to_string()));
+    check_eq!(v.key(Key::Click(5, 3), w, h), Action::None); // " and " is no link
+    // Going on and coming back.
+    check_eq!(v.key(Key::Backspace, w, h), Action::None); // nothing to go back to
+    v.show("/site/one.html", "<p>Page one <a href=index.html>home</a>", false, false);
+    check_eq!(v.key(Key::Backspace, w, h), Action::Back("/site/index.html".to_string()));
+    v.show("/site/index.html", &body, true, false);
+    check_eq!(v.key(Key::Backspace, w, h), Action::None); // the way back was used up
+    // `g` asks for an address; one without http:// is a web address.
+    check_eq!(v.key(Key::Char('g'), w, h), Action::None);
+    for c in "example.org/x".chars() {
+        check_eq!(v.key(Key::Char(c), w, h), Action::None);
+    }
+    let (_, cursor) = v.render(w, h);
+    check_eq!(cursor, (0, 8 + 13));
+    check_eq!(v.key(Key::Enter, w, h), Action::Open("http://example.org/x".to_string()));
+    check_eq!(v.key(Key::Char('r'), w, h), Action::Reload("/site/index.html".to_string()));
+    check_eq!(v.key(Key::Char('q'), w, h), Action::Quit);
+    // Plain text is shown as it is, and a narrow window gets the page anew.
+    v.show("/notes.txt", "a <b>  c\nnext", false, false);
+    check_eq!(v.lines(40), alloc::vec!["a <b>  c".to_string(), "next".to_string()]);
+    check_eq!(v.lines(10).len(), 2);
     Ok(())
 }
