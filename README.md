@@ -1336,16 +1336,23 @@ desktop.
   back, a page from the test web server). On the HP it shows
   http://info.cern.ch, the first web site, and follows its links.
 - **Pictures:** `screenshot FILE` saves the screen (as drawn in memory)
-  as a 24-bit BMP; `view FILE` shows a BMP (uncompressed, 24 or 32 bits)
-  or binary PPM (P6) picture in a window (`kernel/src/view.rs`), as large
+  as a PNG if FILE ends in `.png` (RGB, stored DEFLATE blocks), otherwise
+  as a 24-bit BMP; `view FILE` shows a PNG, BMP (uncompressed, 24 or 32
+  bits) or binary PPM (P6) picture in a window (`kernel/src/view.rs`), as large
   as fits and at most twice its size, in the middle on a dark background.
   The lines are scaled on every processor in use (`console::pane_picture`);
   a window that shows a picture is not covered again by its text. Files
   are untrusted: `kernel/src/image.rs` checks every size, refuses
   pictures over 4096 x 4096 pixels, and has a self-test with files cut
-  off at every byte. `pictures.scn` saves the screen at 800x600, views it
+  off at every byte. PNG is read by `beenet/src/png.rs` with its own
+  DEFLATE decompressor (`beenet/src/inflate.rs`): every color type, bit
+  depths 1-16, all five filters, Adam7 interlacing, palette transparency
+  (transparent pixels are blended onto black). Host tests compare every
+  color type with ImageMagick's pixels, and feed it files cut off and
+  flipped at every byte; the PNGs it writes are read by ImageMagick. A
+  1280x1024 wallpaper is 22 KB as PNG instead of 3.9 MB as BMP. `pictures.scn` saves the screen at 800x600, views it
   on a 4-processor VM and checks the pixels of the window.
-- **Wallpaper:** `desktop wallpaper FILE` puts a BMP or PPM picture behind
+- **Wallpaper:** `desktop wallpaper FILE` puts a PNG, BMP or PPM picture behind
   the windows, scaled to cover the whole screen (cut off evenly where its
   shape differs; made on every processor in use, and again when the screen
   changes size); `desktop wallpaper none` brings back the plain color. The
