@@ -18,6 +18,21 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use beenet::html::{self, Page, Style};
 
+/// The start page the desktop's Web button opens, written to the home
+/// folder the first time (and left alone after that: it is the user's).
+pub const START_NAME: &str = "start.html";
+pub const START_PAGE: &str = "<title>Start</title>\n\
+<h1>Start</h1>\n\
+<p>This page is <b>start.html</b> in your home folder: change it with <code>edit</code>.\n\
+Tab picks a link, Enter or a click follows it, Backspace goes back, g asks for an address.\n\
+<h2>On the web</h2>\n<ul>\n\
+<li><a href=\"http://info.cern.ch/hypertext/WWW/TheProject.html\">The first web site</a> (CERN, 1991)\n\
+<li><a href=\"http://frogfind.com/\">FrogFind</a>: a search engine for simple browsers\n\
+<li><a href=\"http://68k.news/\">68k.news</a>: the news, for simple browsers\n\
+<li><a href=\"http://neverssl.com/\">NeverSSL</a>\n</ul>\n\
+<h2>On this machine</h2>\n<ul>\n<li><a href=\"notes.txt\">notes.txt</a>\n</ul>\n\
+<p>Pages with https:// cannot be opened yet: the OS has no TLS.\n";
+
 /// Pages larger than this are not shown.
 pub const MAX_PAGE: u64 = 1024 * 1024;
 /// Back steps remembered.

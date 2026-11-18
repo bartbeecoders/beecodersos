@@ -1243,8 +1243,11 @@ desktop.
   first moves, and the window on top can be dragged by its title bar; it
   stays completely on the screen. `desktop` shows where the pointer is.
   **Buttons** at the top of the desktop start programs with a click:
-  Terminal, Files (the file manager on the home folder) and Notes (the
-  editor on `notes.txt` there). A click **inside a window** goes to its
+  Terminal, Files (the file manager on the home folder), Notes (the
+  editor on `notes.txt` there) and Web (the web page viewer on
+  `start.html` there: written the first time with links to the first web
+  site, FrogFind, 68k.news and NeverSSL, sites that still work without
+  https; after that it is the user's page and is left alone). A click **inside a window** goes to its
   program as the character under the pointer: the file manager chooses and
   opens, the editor puts its cursor there.
 - **Tests:** self-tests for the layout at every screen size and for drawing on
@@ -1253,7 +1256,8 @@ desktop.
   types in a second window, changes focus with Alt+Tab and the mouse, and
   closes windows; `desktop-edit.scn` edits and saves files;
   `desktop-files.scn` drives the file manager from the host,
-  `desktop-launch.scn` uses the buttons and clicks in windows. Through
+  `desktop-launch.scn` uses the buttons and clicks in windows,
+  `desktop-web.scn` the Web button and its start page. Through
   `beectl.py text` the host sees the text of every window.
 
 ## Processors: `cpu`, `cpu start`, `cpu test`, `cpu auto`

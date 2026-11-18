@@ -64,13 +64,23 @@ fn home() -> &'static str {
 }
 
 /// What a click on a desktop button starts (`console::BUTTONS`): a
-/// terminal, the file manager on the home folder, or the editor on
-/// `notes.txt` there.
+/// terminal, the file manager on the home folder, the editor on
+/// `notes.txt` there, or the web page viewer on `start.html` there.
 pub fn launch(button: usize) -> Result<usize, &'static str> {
     match button {
         0 => open_terminal(),
         1 => open_files(home()),
         2 => open_editor(&filemgr::join(home(), "notes.txt")),
+        3 => {
+            let start = filemgr::join(home(), web::START_NAME);
+            let mut storage = storage::handle().ok_or("no file system is mounted")?;
+            let missing = !storage.fs().exists(&start);
+            if missing {
+                // A page of its own to start from; a disk that is full simply has none.
+                let _ = storage.fs().write_file(&start, web::START_PAGE.as_bytes());
+            }
+            open_web(&start)
+        }
         _ => Err("no such button"),
     }
 }
