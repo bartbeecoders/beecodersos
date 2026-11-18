@@ -216,7 +216,8 @@ fn damage(rect: Rect) {
 fn compose(rect: Rect) {
     let (Some(desk), Some(shadow)) = (DESKTOP.get().as_ref(), SHADOW.get().as_ref()) else { return };
     let canvas = shadow.back.clipped(rect);
-    desk.draw_with(&canvas, |id, window| {
+    let wallpaper = WALLPAPER.get().as_ref().map(|(_, surface)| surface.canvas());
+    desk.draw_with(&canvas, wallpaper.as_ref(), |id, window| {
         let content = if id == TERMINAL {
             CONSOLE_SURFACE.get().as_ref().map(|s| s.canvas())
         } else {
@@ -402,6 +403,61 @@ pub fn pane_picture(window: usize, image: &crate::image::Image) -> Option<usize>
     window_changed(id, canvas.bounds());
     show(true);
     Some(percent)
+}
+
+/// The desktop's wallpaper: the picture, and the picture scaled to cover
+/// the screen (made again when the screen changes size).
+static WALLPAPER: Global<Option<(crate::image::Image, Surface)>> = Global::new(None);
+
+/// The picture scaled to cover a screen of this size and format; the
+/// lines are made on every processor in use.
+fn cover(picture: &crate::image::Image, width: usize, height: usize, format: crate::display::PixelFormat) -> Option<Surface> {
+    let surface = Surface::new(width, height, format)?;
+    let canvas = crate::smp::Disjoint(surface.canvas());
+    crate::smp::run(height, &|y| {
+        let row: Vec<u32> = (0..width)
+            .map(|x| {
+                let (sx, sy) = crate::image::cover_pixel(picture.width, picture.height, width, height, x, y);
+                picture.pixels[sy * picture.width + sx]
+            })
+            .collect();
+        canvas.get().put_row(0, y, &row);
+    });
+    Some(surface)
+}
+
+/// Put a picture behind the desktop (`None`: the plain color again).
+pub fn set_wallpaper(picture: Option<crate::image::Image>) -> Result<(), &'static str> {
+    let shadow = SHADOW.get().as_ref().ok_or("needs a graphics screen")?;
+    let bounds = shadow.back.bounds();
+    *WALLPAPER.get() = match picture {
+        Some(picture) => {
+            let surface = cover(&picture, bounds.width, bounds.height, shadow.back.format()).ok_or("not enough memory for the wallpaper")?;
+            Some((picture, surface))
+        }
+        None => None,
+    };
+    let _rebuilding = Rebuilding::start();
+    compose(bounds);
+    show(true);
+    Ok(())
+}
+
+/// The screen changed size: scale the wallpaper again (or drop it if
+/// there is no memory for it).
+fn refit_wallpaper() {
+    let Some(shadow) = SHADOW.get().as_ref() else { return };
+    let bounds = shadow.back.bounds();
+    let format = shadow.back.format();
+    if let Some((picture, surface)) = WALLPAPER.get().as_mut() {
+        if surface.canvas().width() == bounds.width && surface.canvas().height() == bounds.height {
+            return;
+        }
+        match cover(picture, bounds.width, bounds.height, format) {
+            Some(new) => *surface = new,
+            None => *WALLPAPER.get() = None,
+        }
+    }
 }
 
 /// The whole screen as it is drawn in memory: width, height and a function
@@ -661,6 +717,7 @@ fn lay_out(target: Target, desktop: bool) -> bool {
             desk.set_pointer(*POINTER.get(), canvas.bounds());
             desk.set_buttons(&BUTTONS, canvas.width());
             desk.set_clock(CLOCK.get());
+            refit_wallpaper();
             Some((desk, surface))
         });
     let (mut screen, desk, surface) = match windowed {

@@ -271,14 +271,18 @@ impl Desktop {
     /// Draw the background and every window frame. The owners then draw
     /// their content again.
     pub fn draw(&self, canvas: &Canvas) {
-        self.draw_with(canvas, |_, _| {});
+        self.draw_with(canvas, None, |_, _| {});
     }
 
     /// The same, for windows that overlap: after each frame, back to front,
     /// `content` is called with the window's number and the window, to
     /// draw what is inside before the next window goes over it.
-    pub fn draw_with(&self, canvas: &Canvas, mut content: impl FnMut(usize, &Window)) {
-        canvas.fill_rect(canvas.bounds(), BACKGROUND);
+    /// `wallpaper`: a picture of the screen's size behind everything, instead of the plain color.
+    pub fn draw_with(&self, canvas: &Canvas, wallpaper: Option<&Canvas>, mut content: impl FnMut(usize, &Window)) {
+        match wallpaper {
+            Some(picture) => canvas.blit(picture, 0, 0),
+            None => canvas.fill_rect(canvas.bounds(), BACKGROUND),
+        }
         for (label, rect) in &self.buttons {
             canvas.fill_rect(*rect, BORDER_COLOR);
             let inside = Rect::new(rect.x + 1, rect.y + 1, rect.width - 2, rect.height - 2);

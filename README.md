@@ -1267,6 +1267,16 @@ desktop.
   pictures over 4096 x 4096 pixels, and has a self-test with files cut
   off at every byte. `pictures.scn` saves the screen at 800x600, views it
   on a 4-processor VM and checks the pixels of the window.
+- **Wallpaper:** `desktop wallpaper FILE` puts a BMP or PPM picture behind
+  the windows, scaled to cover the whole screen (cut off evenly where its
+  shape differs; made on every processor in use, and again when the screen
+  changes size); `desktop wallpaper none` brings back the plain color. The
+  path is saved in `/system/wallpaper` and the picture loaded at boot.
+  Self-tested (covering, drawing behind windows); `wallpaper.scn` uses a
+  screenshot as wallpaper and checks its pixels at two screen sizes.
+  Writing a picture of megabytes to an IDE disk is slow (BeeFS writes its
+  bookkeeping again for each 512-byte block, and the IDE driver sends one
+  block per command): the next thing to speed up.
 - **Clock and time zone:** the desktop shows the local date and time at
   the right end of its row of buttons ("Wed 18 Nov 20:13"); a small thread
   (`kernel/src/clock.rs`) changes it when the minute does. `timezone

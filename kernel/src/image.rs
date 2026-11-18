@@ -168,3 +168,17 @@ pub fn fit(width: usize, height: usize, room_w: usize, room_h: usize) -> (usize,
     };
     (w.clamp(1, room_w), h.clamp(1, room_h), (w * 100 / width).max(1))
 }
+
+/// Which pixel of a `width` x `height` picture goes at (x, y) of a
+/// `room_w` x `room_h` space that it covers completely: scaled to fill it
+/// (keeping its shape) and cut off evenly on the sides that stick out.
+pub fn cover_pixel(width: usize, height: usize, room_w: usize, room_h: usize, x: usize, y: usize) -> (usize, usize) {
+    // Scaled size: the side that needs the larger factor decides.
+    let (sw, sh) = if room_w * height >= room_h * width {
+        (room_w, (height * room_w).div_ceil(width).max(room_h))
+    } else {
+        ((width * room_h).div_ceil(height).max(room_w), room_h)
+    };
+    let (dx, dy) = ((sw - room_w) / 2, (sh - room_h) / 2);
+    (((x + dx) * width / sw).min(width - 1), ((y + dy) * height / sh).min(height - 1))
+}

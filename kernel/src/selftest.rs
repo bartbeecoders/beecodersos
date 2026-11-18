@@ -64,6 +64,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("monitor: bars, sizes, what the window shows", monitor_render),
     ("time zones: UTC, offsets, CET with summer time, the desktop clock", time_zones),
     ("pictures: BMP and PPM in and out, damaged files, fitting", pictures),
+    ("wallpaper: covering the screen, behind the windows", wallpaper),
     ("heap: alloc and free", heap_alloc_free),
     ("heap: 1 MiB buffer", heap_large_buffer),
     ("ring: order and overflow", ring_buffer),
@@ -2183,7 +2184,7 @@ fn wm_windows() -> TestResult {
     red.canvas().fill_rect(Rect::new(0, 0, 40, 30), 0xFF0000);
     green.canvas().fill_rect(Rect::new(0, 0, 40, 30), 0x00FF00);
     let mut order = Vec::new();
-    desk.draw_with(&canvas, |id, window| {
+    desk.draw_with(&canvas, None, |id, window| {
         order.push(id);
         let at = window.content();
         canvas.blit(&(if id == a { red.canvas() } else { green.canvas() }), at.x, at.y);
@@ -2861,5 +2862,39 @@ fn pictures() -> TestResult {
     check_eq!(fit(640, 480, 640, 480), (640, 480, 100));
     check_eq!(fit(10_000, 1, 100, 100), (100, 1, 1));
     check_eq!(fit(0, 5, 100, 100), (0, 0, 0));
+    Ok(())
+}
+
+fn wallpaper() -> TestResult {
+    use crate::image::cover_pixel;
+    // Same shape: one to one, corners to corners.
+    check_eq!(cover_pixel(100, 50, 200, 100, 0, 0), (0, 0));
+    check_eq!(cover_pixel(100, 50, 200, 100, 199, 99), (99, 49));
+    // A square picture on a wide screen: scaled to the width, the top and
+    // bottom cut off evenly.
+    check_eq!(cover_pixel(100, 100, 200, 100, 0, 0), (0, 25));
+    check_eq!(cover_pixel(100, 100, 200, 100, 199, 99), (99, 74));
+    // A tall screen: the sides are cut off.
+    check_eq!(cover_pixel(100, 100, 100, 200, 0, 0), (25, 0));
+    // Every pixel of the screen comes from inside the picture.
+    for (w, h, rw, rh) in [(3, 7, 640, 480), (1920, 1080, 800, 600), (1, 1, 5, 5), (640, 480, 1, 1)] {
+        for (x, y) in [(0, 0), (rw - 1, 0), (0, rh - 1), (rw - 1, rh - 1)] {
+            let (sx, sy) = cover_pixel(w, h, rw, rh, x, y);
+            check!(sx < w && sy < h);
+        }
+    }
+    // Drawn behind the windows.
+    let format = crate::display::PixelFormat::Xrgb8888;
+    let (Some(screen), Some(paper)) = (crate::gfx::Surface::new(320, 240, format), crate::gfx::Surface::new(320, 240, format)) else {
+        return Err(String::from("no memory for the test"));
+    };
+    paper.canvas().fill_rect(paper.canvas().bounds(), 0x336699);
+    let mut desk = crate::wm::Desktop::new();
+    desk.open("Window", crate::gfx::Rect::new(100, 100, 100, 80));
+    desk.draw_with(&screen.canvas(), Some(&paper.canvas()), |_, _| {});
+    check_eq!(screen.canvas().pixel(5, 5), 0x336699);
+    check!(screen.canvas().pixel(150, 150) != 0x336699); // the window covers it
+    desk.draw_with(&screen.canvas(), None, |_, _| {});
+    check_eq!(screen.canvas().pixel(5, 5), crate::wm::BACKGROUND);
     Ok(())
 }

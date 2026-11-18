@@ -23,6 +23,8 @@ const DESKTOP_FILE: &str = "/system/desktop";
 /// Shown at boot when it exists (at most `BANNER_LINES` lines).
 const BANNER_FILE: &str = "/system/banner";
 const BANNER_LINES: usize = 20;
+/// The path of the desktop's wallpaper picture.
+const WALLPAPER_FILE: &str = "/system/wallpaper";
 /// The time zone for local time ("UTC", "CET", "+05:30").
 const TIMEZONE_FILE: &str = "/system/timezone";
 /// "auto off": the other processors are not started at boot.
@@ -282,6 +284,18 @@ impl Shell {
         for line in text.lines().take(BANNER_LINES) {
             let line: String = line.chars().filter(|c| !c.is_control() || *c == '\t').take(200).collect();
             println!("{line}");
+        }
+    }
+
+    /// At boot: the saved wallpaper, if its picture is still there.
+    pub fn load_wallpaper(&mut self) {
+        let data = self.storage.fs().read_file(WALLPAPER_FILE).ok();
+        let Some(path) = data.as_deref().and_then(|d| core::str::from_utf8(d).ok()).map(str::trim).map(String::from) else { return };
+        match crate::view::load(&mut self.storage, &path) {
+            Ok(picture) => {
+                let _ = console::set_wallpaper(Some(picture));
+            }
+            Err(why) => println!("[desk] wallpaper {path}: {why}"),
         }
     }
 
@@ -821,7 +835,32 @@ impl Shell {
             },
             ("terminal", _) => error("usage: terminal"),
             ("desktop", [state @ ("on" | "off")]) => self.desktop(state),
-            ("desktop", _) => error("usage: desktop [on | off]"),
+            ("desktop", ["wallpaper", "none"]) => {
+                let _ = console::set_wallpaper(None);
+                // No saved wallpaper is fine too.
+                let _ = self.storage.fs().remove(WALLPAPER_FILE);
+                println!("wallpaper: none, the plain color");
+            }
+            ("desktop", ["wallpaper", file]) => {
+                let path = self.abs(file);
+                let picture = crate::view::load(&mut self.storage, &path);
+                match picture.map(|p| (p.width, p.height, console::set_wallpaper(Some(p)))) {
+                    Ok((w, h, Ok(()))) => {
+                        let mut fs = self.storage.fs();
+                        let saved = fs.mkdir_all("/system").and_then(|_| fs.write_file(WALLPAPER_FILE, format!("{path}\n").as_bytes()));
+                        drop(fs);
+                        let note = match (saved, self.storage.persistent) {
+                            (Ok(()), true) => "saved",
+                            (Ok(()), false) => "RAM disk: not kept after reboot",
+                            (Err(_), _) => "could not save",
+                        };
+                        println!("wallpaper: {path} ({w} x {h}, scaled to cover the screen; {note})");
+                    }
+                    Ok((_, _, Err(why))) => error(&format!("desktop wallpaper: {why}")),
+                    Err(why) => error(&format!("desktop wallpaper {file}: {why}")),
+                }
+            }
+            ("desktop", _) => error("usage: desktop [on | off | wallpaper FILE|none]"),
             ("install", []) => self.install_list(),
             ("install", [disk]) => self.install(disk, ""),
             ("install", [disk, option @ ("--erase" | "--reinstall")]) => self.install(disk, option),
@@ -2158,7 +2197,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("cpu [start|test|auto on|off]", "the processor: name, how many, clock, features; start the others; measure; at boot or not (saved)"),
     ("sleep SECONDS", "wait (Ctrl+C ends it)"),
     ("terminal", "one more terminal window on the desktop, with a shell of its own"),
-    ("desktop [on|off]", "graphical desktop: the terminal in a window (on by default; saved)"),
+    ("desktop [on|off]", "graphical desktop: the terminal in a window (on by default; saved); 'desktop wallpaper FILE|none'"),
     ("slots", "A/B kernel slots: which one runs, last trial"),
     ("crash [exception]", "deliberately crash the kernel: a panic, or a CPU exception (tests crash reports)"),
     ("reboot, shutdown", "restart / power off"),
