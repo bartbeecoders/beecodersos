@@ -205,6 +205,18 @@ fn wait_micros(micros: u64) {
     }
 }
 
+/// Should the other processors start at boot? A boot flag decides first
+/// (`smp=off` or `smp=on`), then what was saved (`/system/cpu`: "auto on"
+/// or "auto off"); without either they start.
+pub fn choice(cmdline: &str, saved: Option<&str>) -> bool {
+    match crate::bootargs::value_in(cmdline, "smp") {
+        Some("off") => return false,
+        Some(_) => return true,
+        None => {}
+    }
+    saved.map(str::trim) != Some("auto off")
+}
+
 /// How many processors run this OS now (1 until `start`).
 pub fn running() -> usize {
     1 + ONLINE.load(SeqCst)

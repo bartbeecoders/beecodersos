@@ -5,4 +5,4 @@ count: 1, 1 in use
 ~ ^clock: \d+ MHz$
 ~ ^can do: .*sse2
 $ cpu now
-usage: cpu [start | test]
+usage: cpu [start | test | auto on|off]

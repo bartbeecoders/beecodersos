@@ -1,6 +1,8 @@
 # A machine with four processors: `cpu start` starts the other three, and
 # work can then be spread over all of them.
 @cpus 4
+# Started by hand here: the boot flag keeps them waiting (cpu-auto.scn: at boot).
+@args smp=off
 $ cpu
 count: 4, 1 in use ('cpu start' starts the others)
 $ cpu test
@@ -25,4 +27,4 @@ $ echo still here > /x.txt
 $ cat /x.txt
 still here
 $ cpu sideways
-usage: cpu [start | test]
+usage: cpu [start | test | auto on|off]

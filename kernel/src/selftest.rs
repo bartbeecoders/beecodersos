@@ -57,6 +57,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("mouse: clicks inside windows, desktop buttons", mouse_clicks),
     ("cpu: name, features, the list of processors", cpu_facts),
     ("processors: every piece of a job runs exactly once, also nested", smp_jobs),
+    ("processors: started at boot or not", smp_choice),
     ("heap: alloc and free", heap_alloc_free),
     ("heap: 1 MiB buffer", heap_large_buffer),
     ("ring: order and overflow", ring_buffer),
@@ -2581,5 +2582,18 @@ fn smp_jobs() -> TestResult {
     let inner = AtomicUsize::new(0);
     crate::smp::run(8, &|_| crate::smp::run(10, &|n| { inner.fetch_add(n + 1, SeqCst); }));
     check_eq!(inner.load(SeqCst), 8 * 55);
+    Ok(())
+}
+
+fn smp_choice() -> TestResult {
+    let choice = crate::smp::choice;
+    // Nothing said: they start.
+    check!(choice("", None) && choice("test slot=a", None));
+    // What was saved: only "auto off" keeps them waiting.
+    check!(!choice("test", Some("auto off")) && !choice("", Some("auto off\n")));
+    check!(choice("", Some("auto on\n")) && choice("", Some("")) && choice("", Some("off")));
+    // A boot flag wins over what was saved.
+    check!(choice("test smp=on", Some("auto off")) && !choice("smp=off", Some("auto on")) && !choice("smp=off", None));
+    check!(choice("nosmp=off smps=off", None));
     Ok(())
 }

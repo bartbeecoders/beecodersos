@@ -147,6 +147,7 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info: u32) -> ! {
     shell.go_home();
     shell.load_display();
     shell.load_desktop();
+    shell.load_cpus();
     shell.load_network();
     shell.load_hive();
     shell.load_remote_work();

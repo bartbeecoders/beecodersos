@@ -20,6 +20,8 @@ const LAYOUT_FILE: &str = "/system/keyboard";
 const DISPLAY_FILE: &str = "/system/display";
 /// "on" or "off": the desktop (`desktop on` / `desktop off`). No file: on.
 const DESKTOP_FILE: &str = "/system/desktop";
+/// "auto off": the other processors are not started at boot.
+const CPU_FILE: &str = "/system/cpu";
 /// Contains "off" when the AI features are switched off (`ai off`).
 const AI_SWITCH: &str = "/system/ai";
 /// The network link to beehive (`ai connect`): host, port, this machine's
@@ -265,6 +267,40 @@ impl Shell {
         console::apply_desktop_setting(data.as_deref().and_then(|d| core::str::from_utf8(d).ok()));
     }
 
+    /// At boot: start the other processors, unless that was switched off.
+    pub fn load_cpus(&mut self) {
+        let data = self.storage.fs().read_file(CPU_FILE).ok();
+        let saved = data.as_deref().and_then(|d| core::str::from_utf8(d).ok());
+        if crate::cpu::processors().len() < 2 {
+            return;
+        }
+        if !crate::smp::choice(crate::bootargs::cmdline(), saved) {
+            println!("[cpu]  1 of {} processors in use ('cpu auto on' starts the others at boot)", crate::cpu::processors().len());
+            return;
+        }
+        match crate::smp::start() {
+            Ok(running) => println!("[cpu]  {running} of {} processors in use ('cpu auto off' to use one)", crate::cpu::processors().len()),
+            Err(why) => println!("[cpu]  only 1 processor in use: {why}"),
+        }
+    }
+
+    /// `cpu auto on|off`: start the other processors at boot or not (saved).
+    fn cpu_auto(&mut self, state: &str) {
+        let mut fs = self.storage.fs();
+        let saved = fs.mkdir_all("/system").and_then(|_| fs.write_file(CPU_FILE, format!("auto {state}
+").as_bytes()));
+        drop(fs);
+        let note = match (saved, self.storage.persistent) {
+            (Ok(()), true) => "saved",
+            (Ok(()), false) => "RAM disk: not kept after reboot",
+            (Err(_), _) => "could not save",
+        };
+        match state {
+            "on" => println!("the other processors start at boot ({note})"),
+            _ => println!("only one processor at the next boot ({note})"),
+        }
+    }
+
     /// `desktop on` / `desktop off`: switch, and remember it for the next boot.
     fn desktop(&mut self, state: &str) {
         if let Err(e) = console::set_desktop(state == "on") {
@@ -462,7 +498,8 @@ impl Shell {
                 Err(why) => error(&format!("cpu start: {why}")),
             },
             ("cpu", ["test"]) => self.cpu_test(),
-            ("cpu", _) => error("usage: cpu [start | test]"),
+            ("cpu", ["auto", state @ ("on" | "off")]) => self.cpu_auto(state),
+            ("cpu", _) => error("usage: cpu [start | test | auto on|off]"),
             ("about" | "version", []) => {
                 println!("BeeCodersOs {} b{} - x86_64 kernel in Rust", crate::OS_VERSION, crate::OS_BUILD);
                 println!("filesystem: BeeFS on {}", if self.storage.persistent { "ATA disk" } else { "RAM disk" });
@@ -1858,7 +1895,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("display [mode WxH]", "screen: driver, resolution; 'display font 1|2|auto'; 'display test'; 'display speed'"),
     ("edit FILE", "text editor in a window on the desktop (Ctrl+S saves, Ctrl+Q leaves)"),
     ("files [FOLDER]", "file manager in a window: browse, open in the editor, new folder, rename, delete"),
-    ("cpu [start|test]", "the processor: name, how many, clock, features; start the others; measure them"),
+    ("cpu [start|test|auto on|off]", "the processor: name, how many, clock, features; start the others; measure; at boot or not (saved)"),
     ("sleep SECONDS", "wait (Ctrl+C ends it)"),
     ("terminal", "one more terminal window on the desktop, with a shell of its own"),
     ("desktop [on|off]", "graphical desktop: the terminal in a window (on by default; saved)"),

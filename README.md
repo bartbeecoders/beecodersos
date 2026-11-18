@@ -1226,16 +1226,16 @@ desktop.
   `desktop-launch.scn` uses the buttons and clicks in windows. Through
   `beectl.py text` the host sees the text of every window.
 
-## Processors: `cpu`, `cpu start`, `cpu test`
+## Processors: `cpu`, `cpu start`, `cpu test`, `cpu auto`
 
 ```
+[cpu]  4 of 4 processors in use ('cpu auto off' to use one)
+...
 bee:/$ cpu
 processor: Intel(R) Core(TM) i5-4590 CPU @ 3.30GHz
-count: 4, 1 in use ('cpu start' starts the others)
+count: 4, 4 in use
 clock: 3292 MHz
 can do: sse2 sse3 ssse3 sse4.1 sse4.2 avx avx2 aes rdrand
-bee:/$ cpu start
-4 of 4 processors in use
 bee:/$ cpu test
 hashing 64 MiB on 1 processor: ... ms
 hashing 64 MiB on 4: ... ms
@@ -1247,7 +1247,13 @@ machine's processors (cores and hardware threads) in the ACPI table "APIC".
 The table is firmware data: every length is checked, a table that is cut off
 gives the entries that are whole.
 
-`kernel/src/smp.rs` starts the other processors on `cpu start` (INIT and
+The other processors start at boot. `cpu auto off` (saved in `/system/cpu`)
+keeps them waiting from the next boot on, `cpu auto on` undoes it, and the
+boot flag `smp=off` / `smp=on` wins over what was saved; `cpu start` starts
+them by hand. A kernel that cannot start them on some machine is caught by
+the A/B trial boot like any other.
+
+`kernel/src/smp.rs` starts the other processors (INIT and
 STARTUP through the local APIC; a small trampoline at 0x8000 takes each one
 from 16-bit to 64-bit mode with the kernel's page tables, descriptor tables
 and memory types). The kernel itself (threads, drivers, files) still runs on
@@ -1264,7 +1270,7 @@ while one job is handed out, another (from the timer interrupt, or from a
 piece) runs on its own processor alone. `smp::Disjoint` wraps what pieces
 share when each touches only a part of its own. Tests: self-tests (names, features,
 tables cut off anywhere; every piece of a job runs exactly once), `cpu.scn`
-`cpu-many.scn` and `display-many.scn` (a 4-processor VM: `@cpus 4`).
+`cpu-many.scn`, `cpu-auto.scn` and `display-many.scn` (a 4-processor VM: `@cpus 4`).
 
 ## USB: keyboard and mouse (xHCI) ✅ in QEMU, not yet tried on the HP
 
