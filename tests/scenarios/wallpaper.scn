@@ -2,8 +2,7 @@
 # screenshot taken while a viewer window was open: once the viewer is
 # closed, its title bar (blue, 3a6ea5, at 300,36: above the terminal,
 # which covers 38..762 x 42..558 at 800x600) is still in the wallpaper.
-# On the RAM disk: writing megabytes to the test's IDE disk is slow (see
-# the BeeFS write speed note in the README); the HP checks the reboot.
+@disk
 @ai
 $ ai control on
 $ display mode 800x600
@@ -16,10 +15,15 @@ $ screenshot /paper.bmp
 $ sleep 1
 @screenshot 800x600 pixels 300,36=a8d0f0
 $ desktop wallpaper /paper.bmp
-wallpaper: /paper.bmp (800 x 600, scaled to cover the screen; RAM disk: not kept after reboot)
+wallpaper: /paper.bmp (800 x 600, scaled to cover the screen; saved)
 @screenshot 800x600 pixels 300,36=3a6ea5 5,5=a8d0f0
 $ cat /system/wallpaper
 /paper.bmp
+# The next boot loads it again.
+@reboot
+$ display mode 800x600
+~ ^mode: 800x600
+@screenshot 800x600 pixels 300,36=3a6ea5
 # Another size: the wallpaper is scaled again (by 1.28 for 1024x768, so
 # the title bar is now at 384,40).
 $ display mode 1024x768
