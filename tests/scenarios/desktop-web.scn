@@ -1,0 +1,35 @@
+# The desktop's Web button (the fourth, from 322,6): the web page viewer on
+# start.html in the home folder, written there the first time.
+@usb kbd mouse
+@ai
+$ ai control on
+$ cat /start.html
+/start.html: no such file or directory
+# The pointer starts in the middle (960,540).
+@mouse -620 -524
+@button left down
+@button left up
+$ sleep 1
+$ threads
+~ browse     (waiting|ready)
+$ head -n 2 /start.html
+<title>Start</title>
+<h1>Start</h1>
+@ctl text {machine}
+~ ^ Start - /start\.html  \(100%\)$
+~ ^  \* The first web site \(CERN, 1991\)$
+~ ^  \* notes\.txt$
+# Its local link opens notes.txt from the same folder (which is not there yet).
+@ctl keys {machine} "{end}{tab}"
+@ctl keys {machine} "{tab}{tab}{tab}{tab}{enter}"
+@ctl text {machine}
+~ ^ /notes\.txt: no such file or directory$
+# A page of one's own stays: a second click shows it as it was changed.
+@ctl keys {machine} "q"
+$ echo "<h1>Mine</h1>" > /start.html
+@button left down
+@button left up
+$ sleep 1
+@ctl text {machine}
+~ ^ /start\.html  \(100%\)$
+~ ^Mine$

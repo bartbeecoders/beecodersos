@@ -1,0 +1,38 @@
+# head, tail, wc and grep: the first and last lines of a file, counting,
+# and finding lines in a file or in every file of a folder.
+$ mkdir /notes
+$ echo first bee > /notes/a.txt
+$ echo second line >> /notes/a.txt
+$ echo third Bee >> /notes/a.txt
+$ echo fourth >> /notes/a.txt
+$ echo a bee here too > /notes/b.txt
+$ head -n 2 /notes/a.txt
+first bee
+second line
+$ tail -1 /notes/a.txt
+fourth
+$ tail /notes/a.txt
+first bee
+second line
+third Bee
+fourth
+$ wc /notes/a.txt
+4 lines, 7 words, 39 bytes  /notes/a.txt
+$ grep bee /notes/a.txt
+1: first bee
+$ grep -i bee /notes/a.txt
+1: first bee
+3: third Bee
+$ cd /notes
+$ grep -i bee .
+/notes/a.txt:1: first bee
+/notes/a.txt:3: third Bee
+/notes/b.txt:1: a bee here too
+$ grep wasp a.txt
+no line contains "wasp"
+$ grep bee missing.txt
+missing.txt: no such file or directory
+$ head -n many a.txt
+usage: head [-n N] FILE   (the first 10 lines unless N is given)
+$ wc
+usage: wc FILE

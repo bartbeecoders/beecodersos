@@ -1,0 +1,61 @@
+# The web page viewer: `browse` shows HTML files from the disk and pages
+# from the web in a window. It is driven here from the host (keys typed
+# into its window, the text of the windows read back).
+@ai
+@net
+@http
+$ ai control on
+$ mkdir /site
+$ echo "<title>Bee pages</title><h1>Welcome</h1><p>Go to <a href=two.html>page two</a> or <a href='https://x.org/'>a secure one</a>.<ul><li>first<li>second</ul>" > /site/index.html
+$ echo "<p>This is <b>page two</b>. <a href=../site/index.html>Home</a>" > /site/two.html
+$ browse /site/index.html
+/site/index.html in a new window: Tab picks a link, Enter follows it, q leaves
+$ threads
+~ browse     (waiting|ready)
+@ctl text {machine}
+~ ^--- window 1 ---$
+~ ^ Bee pages - /site/index\.html  \(100%\)$
+~ ^Welcome$
+~ ^Go to page two or a secure one\.$
+~ ^  \* first$
+~ ^  \* second$
+~ Tab link  Enter/click follow  Backspace back
+
+# Tab picks a link, Enter follows it; Backspace comes back.
+@ctl keys {machine} "{tab}{enter}"
+@ctl text {machine}
+~ ^ /site/two\.html  \(100%\)$
+~ ^This is page two\. Home$
+@ctl keys {machine} "{backspace}"
+@ctl text {machine}
+~ ^ Bee pages - /site/index\.html
+# A secure page cannot be opened: the viewer says so and stays.
+@ctl keys {machine} "{tab}{tab}{enter}"
+@ctl text {machine}
+~ ^ an https:// page: this OS has no TLS yet\. f reads it through FrogFind$
+~ ^Welcome$
+
+# `g` asks for an address: here a file on the disk.
+@ctl keys {machine} "g/site/two.html{enter}"
+@ctl text {machine}
+~ ^ /site/two\.html  \(100%\)$
+@ctl keys {machine} "q"
+$ threads
+!~ browse
+
+# A page from the web, in a window of its own; a missing page says why.
+$ net dhcp
+~ ^address 10\.0\.2\.15/24 \(DHCP\)
+$ browse http://{http}/hello
+~ ^http://10\.0\.2\.2:\d+/hello in a new window
+$ sleep 1
+@ctl text {machine}
+~ ^ http://10\.0\.2\.2:\d+/hello  \(100%\)$
+~ ^Hello from the test web server$
+$ browse {http}/nothing-here
+~ ^http://10\.0\.2\.2:\d+/nothing-here in a new window
+$ sleep 1
+@ctl text {machine}
+~ ^ http://10\.0\.2\.2:\d+/nothing-here: \S
+$ browse
+usage: browse URL|FILE|WORDS   (words: a search on FrogFind)

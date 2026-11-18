@@ -21,9 +21,18 @@ mod bootmods;
 #[macro_use]
 mod console;
 mod cpu;
+mod smp;
 mod desk;
 mod filemgr;
 mod textedit;
+mod textops;
+mod doplan;
+mod monitor;
+mod clock;
+mod image;
+mod view;
+mod vnc;
+mod web;
 // After `console`: uses println!.
 mod bootslots;
 mod crash;
@@ -146,6 +155,10 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info: u32) -> ! {
     shell.go_home();
     shell.load_display();
     shell.load_desktop();
+    shell.load_wallpaper();
+    shell.load_cpus();
+    shell.load_timezone();
+    clock::start();
     shell.load_network();
     shell.load_hive();
     shell.load_remote_work();
@@ -158,6 +171,9 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info: u32) -> ! {
     if let Some(port) = httpd::load() {
         println!("[httpd] status page on port {port} ('httpd' for details)");
     }
+    if let Some(port) = vnc::load() {
+        println!("[vnc]  remote desktop on port {port}, not encrypted ('vnc' for details)");
+    }
     if let Some(port) = remote::load() {
         println!("[remote] remote shell on port {port}, not encrypted ('remote' for details)");
     }
@@ -167,6 +183,7 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info: u32) -> ! {
         Some(bootslots::Report::Trial) => trial_health_check(&mut shell),
         None => {}
     }
+    shell.show_banner();
     println!();
     println!("Type 'help' for a list of commands.");
     console::settle();

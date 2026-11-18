@@ -1,0 +1,30 @@
+# The other processors start at boot by themselves; `cpu auto off` keeps
+# them waiting from the next boot on (saved in /system/cpu).
+@disk
+@cpus 4
+$ cpu
+~ ^processor: \S
+count: 4, 4 in use
+~ ^clock: \d+ MHz$
+~ ^can do:
+$ cpu auto off
+only one processor at the next boot (saved)
+$ cat /system/cpu
+auto off
+@reboot
+$ cpu
+~ ^processor: \S
+count: 4, 1 in use ('cpu start' starts the others)
+~ ^clock: \d+ MHz$
+~ ^can do:
+$ cpu start
+4 of 4 processors in use
+$ cpu auto on
+the other processors start at boot (saved)
+@reboot
+$ cpu test
+~ ^hashing 64 MiB on 1 processor: \d+ ms$
+~ ^hashing 64 MiB on 4: \d+ ms$
+~ ^same result; \d+\.\d times as fast$
+$ cpu auto sometimes
+usage: cpu [start | test | auto on|off]

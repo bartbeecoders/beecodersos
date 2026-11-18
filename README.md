@@ -29,6 +29,8 @@ Current version: **0.0.3** (see [Versioning](#versioning)).
 | T | Cooperative kernel threads, console sessions | ✅ |
 | N6 | Networking: status page (`httpd`) ✅, remote shell (`remote`) ✅; network signals, kernel download | in progress |
 
+The project's web site (os.beecoders.com) is in `website/`.
+
 The roadmap is `Docs/self-improving-os-plan.html`, the network plan is
 `Docs/network-stack-plan.html`; each phase is described below.
 
@@ -226,6 +228,7 @@ kernel/
   src/cpu.rs           the processor: name, features, how many there are (`cpu`)
   src/textedit.rs      the text editor (`edit`)
   src/filemgr.rs       the file manager (`files`)
+  src/web.rs           the web page viewer (`browse`); beenet/src/html.rs lays pages out
   src/keyboard.rs      PS/2 keyboard driver + scancode decoder (modifiers, dead keys)
   src/layouts.rs       keyboard layouts (US, Belgian Period)
   src/uart.rs          16550 serial port: detection, sending and receiving with limits
@@ -272,6 +275,15 @@ disk **image file** on the host.
 (64-byte inodes: 10 direct + single + double indirect pointers, max file ≈ 8 MiB)
 → data. Directories hold 32-byte entries; names up to 26 bytes.
 
+**Writing speed:** during one operation BeeFS keeps the bookkeeping blocks
+it works on (bitmap, pointer tables) in memory and writes each once: before
+any inode is written (so an inode never points at tables not yet on disk)
+and when the operation ends. The search for a free block starts where the
+last one was found, and a data block that a write fills completely is not
+zeroed first. Writing a 1.4 MB file went from 11,448 block writes and 8,327
+reads to 3,000 writes and 37 reads (`large_writes_do_little_bookkeeping`
+checks it); on the test VM's IDE disk from more than 10 s to 4 s.
+
 At boot the kernel mounts the first disk containing BeeFS (incrementing
 `/system/boot_count` and appending to `/system/boot.log`): a disk on the
 legacy IDE ports, or a SATA disk on an AHCI controller (`kernel/src/ahci.rs`,
@@ -317,9 +329,22 @@ Serial input bypasses the layout: the host terminal has already translated keys.
 line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
-`cat`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
-`mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `ai`,
-`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `sleep`, `cpu`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`cat`, `head`, `tail`, `wc`, `grep`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
+`mem`, `about`, `calc`, `date`, `timezone`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `do`, `ai`,
+`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `cpu`, `monitor`, `view`, `screenshot`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `vnc`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+
+**Text tools** (`kernel/src/textops.rs`, self-tested; `text-tools.scn`):
+`head` / `tail [-n N | -N] FILE` show the first or last lines (10 unless N
+is given), `wc FILE` counts lines, words and bytes, and `grep [-i] TEXT
+FILE|FOLDER` shows the lines that contain TEXT with their numbers; on a
+folder it searches every file in it and below (`path:line: text`, at most
+1000 lines; a binary file only says that it matches). `-i`: upper and
+lower case alike.
+
+**Banner:** the text of `/system/banner`, if it exists, is shown at boot
+just before "Type 'help'" (the first 20 lines, control characters left
+out): `echo Welcome > /system/banner`, or write it with `edit`. Asked for
+with `wish`; `banner.scn` tests it.
 
 **Under the hood:** interrupts are enabled (IDT + remapped PIC; IRQ0 timer,
 IRQ1 keyboard, IRQ3 COM2 AI bridge, IRQ4 COM1 serial). Handlers queue raw bytes; the shell decodes them and sleeps with
@@ -462,7 +487,19 @@ holding an API key:
 
 - **In the OS:** `ask how do I copy a folder?` answers on screen (Ctrl+C
   cancels). `explain` explains the last failed command, or the crash of the
-  previous boot. `ai` shows the bridge status; `ai off` / `ai on` is the kill
+  previous boot. **`do TASK`** asks the AI to turn a task in plain words
+  into shell commands (`do "make a folder photos with a readme in it"`;
+  quotes keep `>` inside the task). They are listed, and run one after the
+  other only after **y**; the first that fails stops the rest. A plan never
+  runs `install`, `update`, `slots`, `reboot`, `shutdown`, `crash`, `ai`,
+  `remote`, `httpd`, `net`, another `do`/`ask`/`explain`, or a command that
+  changes a saved setting (`desktop off`, `cpu auto`...), even with y
+  (`kernel/src/doplan.rs`; the answer is untrusted: at most 10 commands of
+  200 characters, no control characters). Like `ask`, only the outcome is
+  logged, never the task or the plan; tested by a self-test and
+  `ai-do.scn`. Keys typed while the AI answers are kept for what comes
+  next (`input::unread`), so a `y` typed early is not lost.
+  `ai` shows the bridge status; `ai off` / `ai on` is the kill
   switch (saved in `/system/ai`). Wishes, feedback, missing commands and crash
   reports are also sent to beehive when it runs. Without beehive, or without a
   COM2 port, everything else works as before.
@@ -491,7 +528,7 @@ holding an API key:
     (default 200), every request with its answer in `exchanges.jsonl`, signals
     in `signals.jsonl`.
 - **Protocol** (one JSON object per line, documented in `kernel/src/aibridge.rs`):
-  `hello`/`welcome`, `ask`/`explain` -> `ack`, `line`..., `done` (or `error`),
+  `hello`/`welcome`, `ask`/`explain`/`do` -> `ack`, `line`..., `done` (or `error`),
   `cancel`, and fire-and-forget `signal`s.
 - **QEMU:** `make run` adds COM2 as a TCP server on port 4556. **libvirt:** `vm1`
   has a second serial port: *Add Hardware → Serial*, mode TCP, bind
@@ -989,6 +1026,41 @@ do over the serial port. Plan: `Docs/beehive-network-plan.html`.
   a new kernel over the link (H4). On the HP the key is lost at every restart
   until BeeFS lives on a disk there (it runs from a RAM disk).
 
+## Remote desktop: `vnc` ✅ in QEMU
+
+```
+bee:/$ vnc on
+remote desktop (VNC) on, port 5900 (saved)
+password: 4fqfqhgu   (shown only now; 'vnc password' makes a new one)
+not encrypted: the screen and all that is typed can be seen on the network; use it on your own network only
+```
+
+A VNC server (`kernel/src/vnc.rs`, protocol in `beenet/src/rfb.rs`): any
+VNC viewer (TigerVNC, Remmina, `gvncviewer`, macOS Screen Sharing) shows
+the screen and works the keyboard and mouse. Off by default; `vnc on
+[PORT]`, `vnc off` and `vnc password` work only on the machine's own
+console (a remote session or the AI host can't switch it on), like the
+remote shell. The password is made up by the OS (8 characters, the most
+VNC Authentication uses) and never crosses the network: VNC Authentication
+answers a random challenge with DES (checked against openssl's answers).
+One viewer at a time, a 2 s pause after a wrong password, 30 s to log in,
+30 minutes without input ends a session; logins are counted (`vnc`),
+addresses never logged. **Not encrypted**: what is on the screen and what
+is typed can be seen on the network.
+
+The viewer gets the screen as drawn in memory, read on every processor,
+in Raw rectangles of the 64x64 tiles that changed since its last update
+(at most 20 updates a second), in any true-color format of 8, 16 or 32
+bits it asks for. Its keys are typed as on this machine's keyboard
+(`keyboard::push_key`; no layout applies, the viewer sends characters;
+Control+letter, Alt+Tab), its mouse moves the desktop's pointer. Protocol
+versions 3.3, 3.7 and 3.8. Tests: `rfb` unit tests (DES known answers,
+messages in pieces, a 4 GB clipboard and 65,535 encodings bounded,
+pixel formats, keysyms), a self-test (keys, changed tiles) and `vnc.scn`
+(switching, saving, the RFB greeting on a real connection). End to end, a
+viewer logged in to a QEMU VM, got the 1920x1080 screen, and typed a
+command that the console ran.
+
 ## Driven from the host: kernels over the link, remote control ✅ in QEMU
 
 ```
@@ -1139,7 +1211,7 @@ video memory: write-combining
   of one by one. On real hardware that makes drawing many times faster; in a
   VM it changes nothing. `display` shows `video memory: write-combining`, or
   `plain` and why. The boot flag `wc=off` switches it off.
-- **Measuring:** `display test` and `display speed` print how long drawing the whole screen takes.
+- **Measuring:** `display test` and `display speed` print how long drawing the whole screen takes; `display speed` also shows the part spent copying to video memory.
 - **The screen in memory:** everything is drawn on a copy of the screen in
   normal memory, and only the parts that changed are copied to the video
   memory (`console.rs`). A prompt, typed text or a word without a line end
@@ -1205,6 +1277,65 @@ desktop.
   deletes after a `y` (a folder only when it is empty), **u** reads the
   folder again, **q** leaves. A **click** on an entry puts the bar there, a
   second click opens it. It is a list of text for now: no icons.
+- **Web page viewer:** `browse URL|FILE|WORDS` shows a page in a window of its
+  own (`kernel/src/web.rs`): an `http://` page from the web (the `http://`
+  may be left out) or an HTML or text file from the disk. The page is shown
+  as text, laid out for the window's width by `beenet/src/html.rs`
+  (headings, paragraphs, lists, preformatted blocks, links; no styles,
+  scripts or pictures, an image shows its `alt` text). Arrows, Page Up/Down,
+  Space, Home and End scroll; **Tab** picks the next link (it is scrolled
+  into view), **Enter** or a **click** follows it, **Backspace** goes back,
+  **g** asks for an address, **r** loads the page again, **q** leaves. Links
+  of a page on the disk lead to files on the disk. `https://` pages cannot
+  be opened directly yet (no TLS); pages are at most 1 MiB.
+  **Searching:** words instead of an address (`browse honey bees`, or
+  after **g**: with a space, or without a dot) search on FrogFind
+  (frogfind.com), a search engine for simple browsers. Choosing an
+  `https://` link says it cannot be opened; **f** then reads it through
+  FrogFind's reader, which hands the page out as plain HTML over http (a
+  typed `https://` address goes there too). Both are the user's choice:
+  FrogFind sees what is searched for and which pages are read through it.
+  On the HP this finds things and shows Wikipedia articles. A page is untrusted data:
+  the layout is bounded (20,000 lines, 2,000 links) and has host tests with
+  input cut off anywhere. Tests: `html` unit tests in `beenet`, a self-test
+  for keys, links, history and addresses, and `browse.scn` (files, links,
+  back, a page from the test web server). On the HP it shows
+  http://info.cern.ch, the first web site, and follows its links.
+- **Pictures:** `screenshot FILE` saves the screen (as drawn in memory)
+  as a 24-bit BMP; `view FILE` shows a BMP (uncompressed, 24 or 32 bits)
+  or binary PPM (P6) picture in a window (`kernel/src/view.rs`), as large
+  as fits and at most twice its size, in the middle on a dark background.
+  The lines are scaled on every processor in use (`console::pane_picture`);
+  a window that shows a picture is not covered again by its text. Files
+  are untrusted: `kernel/src/image.rs` checks every size, refuses
+  pictures over 4096 x 4096 pixels, and has a self-test with files cut
+  off at every byte. `pictures.scn` saves the screen at 800x600, views it
+  on a 4-processor VM and checks the pixels of the window.
+- **Wallpaper:** `desktop wallpaper FILE` puts a BMP or PPM picture behind
+  the windows, scaled to cover the whole screen (cut off evenly where its
+  shape differs; made on every processor in use, and again when the screen
+  changes size); `desktop wallpaper none` brings back the plain color. The
+  path is saved in `/system/wallpaper` and the picture loaded at boot.
+  Self-tested (covering, drawing behind windows); `wallpaper.scn` uses a
+  screenshot as wallpaper and checks its pixels at two screen sizes and
+  after a reboot.
+- **Clock and time zone:** the desktop shows the local date and time at
+  the right end of its row of buttons ("Wed 18 Nov 20:13"); a small thread
+  (`kernel/src/clock.rs`) changes it when the minute does. `timezone
+  UTC|CET|+HH:MM|-HH:MM` sets the zone (saved in `/system/timezone`;
+  UTC without one); `CET` follows the EU's summer time (CEST from the last
+  Sunday of March to the last Sunday of October, 01:00 UTC). `date` then
+  shows local time with UTC after it. A self-test covers the rules (the
+  2026 switches to the second) and where the clock fits; `timezone.scn`
+  checks the setting across a reboot and the clock on the screen.
+- **System monitor:** `monitor` opens a window (`kernel/src/monitor.rs`)
+  that shows every second the share of time each extra processor spent on
+  jobs (processor 0 runs the kernel itself and is not measured yet: that
+  needs the scheduler to count its idle time), the kernel heap, network
+  traffic per second and in total, and every thread with its state. **q**
+  leaves. Even a quiet desktop keeps the extra processors a few percent
+  busy: they draw the screen. A self-test covers the bars and lines;
+  `monitor.scn` reads the window from the host on a 4-processor VM.
 - `sleep SECONDS` waits (used by the tests while another window works).
 - The boot flags `desktop=off` and `desktop=on` decide for one boot, whatever
   was saved. The screen is set up before the disk is read, so a machine with
@@ -1213,8 +1344,11 @@ desktop.
   first moves, and the window on top can be dragged by its title bar; it
   stays completely on the screen. `desktop` shows where the pointer is.
   **Buttons** at the top of the desktop start programs with a click:
-  Terminal, Files (the file manager on the home folder) and Notes (the
-  editor on `notes.txt` there). A click **inside a window** goes to its
+  Terminal, Files (the file manager on the home folder), Notes (the
+  editor on `notes.txt` there) and Web (the web page viewer on
+  `start.html` there: written the first time with links to the first web
+  site, FrogFind, 68k.news and NeverSSL, sites that still work without
+  https; after that it is the user's page and is left alone). A click **inside a window** goes to its
   program as the character under the pointer: the file manager chooses and
   opens, the editor puts its cursor there.
 - **Tests:** self-tests for the layout at every screen size and for drawing on
@@ -1223,25 +1357,55 @@ desktop.
   types in a second window, changes focus with Alt+Tab and the mouse, and
   closes windows; `desktop-edit.scn` edits and saves files;
   `desktop-files.scn` drives the file manager from the host,
-  `desktop-launch.scn` uses the buttons and clicks in windows. Through
+  `desktop-launch.scn` uses the buttons and clicks in windows,
+  `desktop-web.scn` the Web button and its start page. Through
   `beectl.py text` the host sees the text of every window.
 
-## Processors: `cpu` (one in use so far)
+## Processors: `cpu`, `cpu start`, `cpu test`, `cpu auto`
 
 ```
+[cpu]  4 of 4 processors in use ('cpu auto off' to use one)
+...
 bee:/$ cpu
 processor: Intel(R) Core(TM) i5-4590 CPU @ 3.30GHz
-count: 4 (this OS runs on one of them so far)
+count: 4, 4 in use
 clock: 3292 MHz
 can do: sse2 sse3 ssse3 sse4.1 sse4.2 avx avx2 aes rdrand
+bee:/$ cpu test
+hashing 64 MiB on 1 processor: ... ms
+hashing 64 MiB on 4: ... ms
+same result; 3.9 times as fast
 ```
 
 `kernel/src/cpu.rs` asks the processor what it is (CPUID) and counts the
 machine's processors (cores and hardware threads) in the ACPI table "APIC".
 The table is firmware data: every length is checked, a table that is cut off
-gives the entries that are whole. The OS still runs on one processor; starting
-the others is the next step. Tests: a self-test (names, features, tables cut
-off anywhere) and `cpu.scn`.
+gives the entries that are whole.
+
+The other processors start at boot. `cpu auto off` (saved in `/system/cpu`)
+keeps them waiting from the next boot on, `cpu auto on` undoes it, and the
+boot flag `smp=off` / `smp=on` wins over what was saved; `cpu start` starts
+them by hand. A kernel that cannot start them on some machine is caught by
+the A/B trial boot like any other.
+
+`kernel/src/smp.rs` starts the other processors (INIT and
+STARTUP through the local APIC; a small trampoline at 0x8000 takes each one
+from 16-bit to 64-bit mode with the kernel's page tables, descriptor tables
+and memory types). The kernel itself (threads, drivers, files) still runs on
+the first processor; the others only do `smp::run(count, job)`: the pieces of
+a job, handed out to every processor, for work on memory only. Waiting
+processors sleep in MONITOR/MWAIT (or spin in a VM) and take no interrupts.
+`cpu test` hashes the same 64 MiB on one processor and on all, checks the
+results match and shows the speed-up. The screen uses them too: redrawing
+the console spreads its lines over every processor in use, and the copy to
+video memory goes in bands of 32 lines (on the HP, a full redraw at
+1280x1024 takes 7.0 ms on four instead of 12.7 ms on one; `display speed`
+shows how much of it is the copy). `smp::run` may be called from anywhere:
+while one job is handed out, another (from the timer interrupt, or from a
+piece) runs on its own processor alone. `smp::Disjoint` wraps what pieces
+share when each touches only a part of its own. Tests: self-tests (names, features,
+tables cut off anywhere; every piece of a job runs exactly once), `cpu.scn`
+`cpu-many.scn`, `cpu-auto.scn` and `display-many.scn` (a 4-processor VM: `@cpus 4`).
 
 ## USB: keyboard and mouse (xHCI) ✅ in QEMU, not yet tried on the HP
 

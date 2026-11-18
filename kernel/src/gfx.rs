@@ -108,11 +108,18 @@ impl Canvas {
         if r.is_empty() {
             return;
         }
-        let bytes = self.mode.format.bytes();
-        for y in r.y..r.y + r.height {
-            let at = y * self.mode.pitch as usize + r.x * bytes;
-            unsafe { core::ptr::copy_nonoverlapping(other.framebuffer.add(at), self.framebuffer.add(at), r.width * bytes) };
-        }
+        let (bytes, pitch) = (self.mode.format.bytes(), self.mode.pitch as usize);
+        // In bands of lines, on every processor in use (a whole screen
+        // after a redraw is megabytes); each band has lines of its own.
+        const BAND: usize = 32;
+        let (from, to) = (crate::smp::Disjoint(other.framebuffer), crate::smp::Disjoint(self.framebuffer));
+        crate::smp::run(r.height.div_ceil(BAND), &|band| {
+            let first = r.y + band * BAND;
+            for y in first..(first + BAND).min(r.y + r.height) {
+                let at = y * pitch + r.x * bytes;
+                unsafe { core::ptr::copy_nonoverlapping(from.get().add(at), to.get().add(at), r.width * bytes) };
+            }
+        });
     }
 
     /// Copy the whole picture of another canvas (a window's content) onto
@@ -232,6 +239,18 @@ impl Canvas {
             *b = unsafe { self.framebuffer.add(at + i).read_volatile() };
         }
         self.mode.format.decode(u32::from_le_bytes(value))
+    }
+
+    /// A line of 0xRRGGBB pixels from (x, y) to the right; what falls
+    /// outside the canvas (or its clip) is left out.
+    pub fn put_row(&self, x: usize, y: usize, row: &[u32]) {
+        let line = Rect::new(x, y, row.len(), 1).clip(&self.clip);
+        if line.is_empty() {
+            return;
+        }
+        for (i, rgb) in row[line.x - x..line.x - x + line.width].iter().enumerate() {
+            self.put(line.x + i, y, self.mode.format.encode(*rgb));
+        }
     }
 
     /// Callers have checked: x < width and y < height.

@@ -216,7 +216,8 @@ fn damage(rect: Rect) {
 fn compose(rect: Rect) {
     let (Some(desk), Some(shadow)) = (DESKTOP.get().as_ref(), SHADOW.get().as_ref()) else { return };
     let canvas = shadow.back.clipped(rect);
-    desk.draw_with(&canvas, |id, window| {
+    let wallpaper = WALLPAPER.get().as_ref().map(|(_, surface)| surface.canvas());
+    desk.draw_with(&canvas, wallpaper.as_ref(), |id, window| {
         let content = if id == TERMINAL {
             CONSOLE_SURFACE.get().as_ref().map(|s| s.canvas())
         } else {
@@ -288,6 +289,9 @@ struct Pane {
     _cells: Vec<u16>,
     con: FbCon<'static>,
     surface: Surface,
+    /// The window shows a picture (`pane_picture`), not its text: a redraw
+    /// of the text would cover it.
+    picture: bool,
 }
 
 static PANES: Global<Vec<Pane>> = Global::new(Vec::new());
@@ -300,7 +304,7 @@ static LAUNCHES: Global<Vec<usize>> = Global::new(Vec::new());
 
 /// The buttons on the desktop, left to right: what a click on each starts
 /// is up to desk.rs.
-pub const BUTTONS: [&str; 3] = ["Terminal", "Files", "Notes"];
+pub const BUTTONS: [&str; 4] = ["Terminal", "Files", "Notes", "Web"];
 
 pub const MAX_PANES: usize = 4;
 /// The size of a new terminal window, in characters.
@@ -336,7 +340,7 @@ pub fn open_pane(title: &str) -> Result<usize, &'static str> {
     let _rebuilding = Rebuilding::start();
     let Some(desk) = DESKTOP.get().as_mut() else { return Err("windows need the desktop (see desktop)") };
     let window = desk.open(title, frame);
-    PANES.get().push(Pane { window, _cells: cells, con, surface });
+    PANES.get().push(Pane { window, _cells: cells, con, surface, picture: false });
     compose(bounds);
     show(true);
     Ok(window)
@@ -374,6 +378,121 @@ pub fn pane_show(window: usize, lines: &[Vec<u16>], cursor: (usize, usize)) {
     }
     pane.con.set_cursor(cursor.0 * pane.con.width() + cursor.1);
     show(true);
+}
+
+/// Show a picture in a window instead of text: as large as fits (at most
+/// twice its size), in the middle, on a dark background; the lines are
+/// scaled on every processor in use. Returns the size it is shown at, in
+/// percent.
+pub fn pane_picture(window: usize, image: &crate::image::Image) -> Option<usize> {
+    let pane = PANES.get().iter_mut().find(|p| p.window == window)?;
+    let canvas = pane.surface.canvas();
+    let (room_w, room_h) = (canvas.width(), canvas.height());
+    let (w, h, percent) = crate::image::fit(image.width, image.height, room_w, room_h);
+    canvas.fill_rect(canvas.bounds(), 0x202020);
+    let (left, top) = ((room_w - w) / 2, (room_h - h) / 2);
+    let shared = crate::smp::Disjoint(canvas);
+    crate::smp::run(h, &|y| {
+        // Nearest neighbour: each shown pixel takes the picture's pixel under it.
+        let from = y * image.height / h;
+        let row: Vec<u32> = (0..w).map(|x| image.pixels[from * image.width + x * image.width / w]).collect();
+        shared.get().put_row(left, top + y, &row);
+    });
+    pane.picture = true;
+    let id = pane.window;
+    window_changed(id, canvas.bounds());
+    show(true);
+    Some(percent)
+}
+
+/// The desktop's wallpaper: the picture, and the picture scaled to cover
+/// the screen (made again when the screen changes size).
+static WALLPAPER: Global<Option<(crate::image::Image, Surface)>> = Global::new(None);
+
+/// The picture scaled to cover a screen of this size and format; the
+/// lines are made on every processor in use.
+fn cover(picture: &crate::image::Image, width: usize, height: usize, format: crate::display::PixelFormat) -> Option<Surface> {
+    let surface = Surface::new(width, height, format)?;
+    let canvas = crate::smp::Disjoint(surface.canvas());
+    crate::smp::run(height, &|y| {
+        let row: Vec<u32> = (0..width)
+            .map(|x| {
+                let (sx, sy) = crate::image::cover_pixel(picture.width, picture.height, width, height, x, y);
+                picture.pixels[sy * picture.width + sx]
+            })
+            .collect();
+        canvas.get().put_row(0, y, &row);
+    });
+    Some(surface)
+}
+
+/// Put a picture behind the desktop (`None`: the plain color again).
+pub fn set_wallpaper(picture: Option<crate::image::Image>) -> Result<(), &'static str> {
+    let shadow = SHADOW.get().as_ref().ok_or("needs a graphics screen")?;
+    let bounds = shadow.back.bounds();
+    *WALLPAPER.get() = match picture {
+        Some(picture) => {
+            let surface = cover(&picture, bounds.width, bounds.height, shadow.back.format()).ok_or("not enough memory for the wallpaper")?;
+            Some((picture, surface))
+        }
+        None => None,
+    };
+    let _rebuilding = Rebuilding::start();
+    compose(bounds);
+    show(true);
+    Ok(())
+}
+
+/// The screen changed size: scale the wallpaper again (or drop it if
+/// there is no memory for it).
+fn refit_wallpaper() {
+    let Some(shadow) = SHADOW.get().as_ref() else { return };
+    let bounds = shadow.back.bounds();
+    let format = shadow.back.format();
+    if let Some((picture, surface)) = WALLPAPER.get().as_mut() {
+        if surface.canvas().width() == bounds.width && surface.canvas().height() == bounds.height {
+            return;
+        }
+        match cover(picture, bounds.width, bounds.height, format) {
+            Some(new) => *surface = new,
+            None => *WALLPAPER.get() = None,
+        }
+    }
+}
+
+/// Where the mouse pointer is on the desktop, if it has one.
+pub fn pointer_at() -> Option<(usize, usize)> {
+    DESKTOP.get().as_ref()?.pointer().map(|p| (p.x, p.y))
+}
+
+/// Copy the screen (as drawn in memory) into `into`, line by line, each
+/// pixel 0xRRGGBB; the lines are read on every processor in use. Returns
+/// the size, or `None` without a graphics screen kept in memory.
+pub fn capture_rgb(into: &mut Vec<u32>) -> Option<(usize, usize)> {
+    show(true);
+    let back = SHADOW.get().as_ref()?.back;
+    let (w, h) = (back.width(), back.height());
+    into.clear();
+    into.resize(w * h, 0);
+    let (source, target) = (crate::smp::Disjoint(back), crate::smp::Disjoint(into.as_mut_ptr()));
+    crate::smp::run(h, &|y| {
+        let back = source.get();
+        for x in 0..w {
+            // SAFETY: each piece writes its own line of a buffer of w * h.
+            unsafe { *target.get().add(y * w + x) = back.pixel(x, y) };
+        }
+    });
+    Some((w, h))
+}
+
+/// The whole screen as it is drawn in memory: width, height and a function
+/// that gives each pixel as 0xRRGGBB (`screenshot`). `None` without a
+/// graphics screen kept in memory.
+pub fn with_screen<R>(f: impl FnOnce(usize, usize, &dyn Fn(usize, usize) -> u32) -> R) -> Option<R> {
+    show(true);
+    let shadow = SHADOW.get().as_ref()?;
+    let back = shadow.back;
+    Some(f(back.width(), back.height(), &|x, y| back.pixel(x, y)))
 }
 
 pub fn pane_exists(window: usize) -> bool {
@@ -622,6 +741,8 @@ fn lay_out(target: Target, desktop: bool) -> bool {
             let surface = Surface::new(inside.width, inside.height, target.mode.format)?;
             desk.set_pointer(*POINTER.get(), canvas.bounds());
             desk.set_buttons(&BUTTONS, canvas.width());
+            desk.set_clock(CLOCK.get());
+            refit_wallpaper();
             Some((desk, surface))
         });
     let (mut screen, desk, surface) = match windowed {
@@ -724,6 +845,17 @@ pub fn take_clicks() -> Vec<(usize, u16, u16)> {
     core::mem::take(CLICKS.get())
 }
 
+/// The clock on the desktop shows this text (the clock thread sets it
+/// when the minute changes; "" hides it). Nothing happens without a desktop.
+static CLOCK: Global<String> = Global::new(String::new());
+
+pub fn set_clock(text: &str) {
+    *CLOCK.get() = String::from(text);
+    let _rebuilding = Rebuilding::start();
+    let Some(rect) = DESKTOP.get().as_mut().and_then(|desk| desk.set_clock(text)) else { return };
+    compose(rect);
+}
+
 /// Desktop buttons clicked since the last call (their place in `BUTTONS`).
 pub fn take_launches() -> Vec<usize> {
     core::mem::take(LAUNCHES.get())
@@ -775,14 +907,15 @@ pub fn show_color_bars() {
     show(true);
 }
 
-/// Draw the whole screen again; returns how long it took in microseconds.
-pub fn redraw() -> u64 {
+/// Draw the whole screen again; returns how long it took in microseconds:
+/// in all, and the part spent copying to video memory.
+pub fn redraw() -> (u64, u64) {
     let start = crate::time::micros();
     if let Screen::Graphics(screen) = SCREEN.get() {
         screen.redraw();
         match SHADOW.get() {
             Some(shadow) if DESKTOP.get().is_some() => {
-                for pane in PANES.get().iter_mut() {
+                for pane in PANES.get().iter_mut().filter(|p| !p.picture) {
                     pane.con.redraw();
                 }
                 compose(shadow.back.bounds());
@@ -790,8 +923,10 @@ pub fn redraw() -> u64 {
             _ => damage(screen.canvas().bounds()),
         }
     }
+    let copy = crate::time::micros();
     show(true);
-    crate::time::micros() - start
+    let end = crate::time::micros();
+    (end - start, end - copy)
 }
 
 pub fn clear() {

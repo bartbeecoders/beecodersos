@@ -8,7 +8,7 @@ use crate::vga::Color;
 use crate::aibridge::{self, Outcome};
 use crate::json::Obj;
 use crate::ring::Global;
-use crate::{allocator, bootslots, display, hivectl, httpd, install, update, remote, session, console, crash, eventlog, keyboard, net, pci, power, selftest, thread, time};
+use crate::{allocator, bootslots, display, hivectl, httpd, install, update, remote, session, console, crash, eventlog, keyboard, net, pci, power, selftest, textops, doplan, thread, time};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -20,6 +20,15 @@ const LAYOUT_FILE: &str = "/system/keyboard";
 const DISPLAY_FILE: &str = "/system/display";
 /// "on" or "off": the desktop (`desktop on` / `desktop off`). No file: on.
 const DESKTOP_FILE: &str = "/system/desktop";
+/// Shown at boot when it exists (at most `BANNER_LINES` lines).
+const BANNER_FILE: &str = "/system/banner";
+const BANNER_LINES: usize = 20;
+/// The path of the desktop's wallpaper picture.
+const WALLPAPER_FILE: &str = "/system/wallpaper";
+/// The time zone for local time ("UTC", "CET", "+05:30").
+const TIMEZONE_FILE: &str = "/system/timezone";
+/// "auto off": the other processors are not started at boot.
+const CPU_FILE: &str = "/system/cpu";
 /// Contains "off" when the AI features are switched off (`ai off`).
 const AI_SWITCH: &str = "/system/ai";
 /// The network link to beehive (`ai connect`): host, port, this machine's
@@ -225,10 +234,110 @@ impl Shell {
         }
     }
 
+    /// `cpu test`: the same work (hashing 64 MiB) on one processor and
+    /// on all that are in use, with the time each took.
+    fn cpu_test(&mut self) {
+        use core::sync::atomic::{AtomicU64, Ordering};
+        const PIECES: usize = 64;
+        let data: Vec<u8> = (0..1024 * 1024u32).map(|i| (i.wrapping_mul(2654435761) >> 24) as u8).collect();
+        // Each piece hashes the megabyte with its own number in front; the
+        // result of the job is all those hashes folded together.
+        let piece = |n: usize| {
+            let mut hash = beenet::sha256::Sha256::new();
+            hash.update(&[n as u8]);
+            hash.update(&data);
+            u64::from_le_bytes(hash.finish()[..8].try_into().unwrap_or([0; 8]))
+        };
+        let start = time::micros();
+        let alone = (0..PIECES).fold(0u64, |sum, n| sum ^ piece(n).rotate_left(n as u32));
+        let alone_ms = (time::micros() - start) / 1000;
+        let sum = AtomicU64::new(0);
+        let start = time::micros();
+        crate::smp::run(PIECES, &|n| {
+            sum.fetch_xor(piece(n).rotate_left(n as u32), Ordering::SeqCst);
+        });
+        let together_ms = (time::micros() - start) / 1000;
+        let running = crate::smp::running();
+        println!("hashing 64 MiB on 1 processor: {alone_ms} ms");
+        println!("hashing 64 MiB on {running}: {together_ms} ms");
+        if sum.load(Ordering::SeqCst) == alone {
+            let tenths = alone_ms * 10 / together_ms.max(1);
+            println!("same result; {}.{} times as fast", tenths / 10, tenths % 10);
+        } else {
+            error("cpu test: the results differ");
+        }
+    }
+
     /// Follow the desktop choice saved on disk, if any (default: on).
     pub fn load_desktop(&mut self) {
         let data = self.storage.fs().read_file(DESKTOP_FILE).ok();
         console::apply_desktop_setting(data.as_deref().and_then(|d| core::str::from_utf8(d).ok()));
+    }
+
+    /// At boot: the text of `/system/banner`, if there is one (the first
+    /// lines; control characters left out).
+    pub fn show_banner(&mut self) {
+        let data = self.storage.fs().read_file(BANNER_FILE).ok();
+        let Some(data) = data else { return };
+        let text = String::from_utf8_lossy(&data);
+        println!();
+        for line in text.lines().take(BANNER_LINES) {
+            let line: String = line.chars().filter(|c| !c.is_control() || *c == '\t').take(200).collect();
+            println!("{line}");
+        }
+    }
+
+    /// At boot: the saved wallpaper, if its picture is still there.
+    pub fn load_wallpaper(&mut self) {
+        let data = self.storage.fs().read_file(WALLPAPER_FILE).ok();
+        let Some(path) = data.as_deref().and_then(|d| core::str::from_utf8(d).ok()).map(str::trim).map(String::from) else { return };
+        match crate::view::load(&mut self.storage, &path) {
+            Ok(picture) => {
+                let _ = console::set_wallpaper(Some(picture));
+            }
+            Err(why) => println!("[desk] wallpaper {path}: {why}"),
+        }
+    }
+
+    /// At boot: the saved time zone (UTC without one).
+    pub fn load_timezone(&mut self) {
+        let data = self.storage.fs().read_file(TIMEZONE_FILE).ok();
+        let zone = data.as_deref().and_then(|d| core::str::from_utf8(d).ok()).and_then(time::parse_zone);
+        time::set_zone(zone.unwrap_or(time::Zone::Utc));
+    }
+
+    /// At boot: start the other processors, unless that was switched off.
+    pub fn load_cpus(&mut self) {
+        let data = self.storage.fs().read_file(CPU_FILE).ok();
+        let saved = data.as_deref().and_then(|d| core::str::from_utf8(d).ok());
+        if crate::cpu::processors().len() < 2 {
+            return;
+        }
+        if !crate::smp::choice(crate::bootargs::cmdline(), saved) {
+            println!("[cpu]  1 of {} processors in use ('cpu auto on' starts the others at boot)", crate::cpu::processors().len());
+            return;
+        }
+        match crate::smp::start() {
+            Ok(running) => println!("[cpu]  {running} of {} processors in use ('cpu auto off' to use one)", crate::cpu::processors().len()),
+            Err(why) => println!("[cpu]  only 1 processor in use: {why}"),
+        }
+    }
+
+    /// `cpu auto on|off`: start the other processors at boot or not (saved).
+    fn cpu_auto(&mut self, state: &str) {
+        let mut fs = self.storage.fs();
+        let saved = fs.mkdir_all("/system").and_then(|_| fs.write_file(CPU_FILE, format!("auto {state}
+").as_bytes()));
+        drop(fs);
+        let note = match (saved, self.storage.persistent) {
+            (Ok(()), true) => "saved",
+            (Ok(()), false) => "RAM disk: not kept after reboot",
+            (Err(_), _) => "could not save",
+        };
+        match state {
+            "on" => println!("the other processors start at boot ({note})"),
+            _ => println!("only one processor at the next boot ({note})"),
+        }
     }
 
     /// `desktop on` / `desktop off`: switch, and remember it for the next boot.
@@ -383,6 +492,19 @@ impl Shell {
             ("tree", []) => self.tree(&self.cwd.clone()),
             ("tree", [dir]) => self.tree(&self.abs(dir)),
             ("cat" | "type", [file]) => self.cat(file),
+            ("head" | "tail", args) => match textops::parse_count(args) {
+                Some((n, file)) => self.head_tail(file, n, cmd == "tail"),
+                None => error(&format!("usage: {cmd} [-n N] FILE   (the {} 10 lines unless N is given)", if cmd == "tail" { "last" } else { "first" })),
+            },
+            ("wc", [file]) => {
+                let Some(text) = self.read_text(file) else { return };
+                let (lines, words, bytes) = textops::count(&text);
+                println!("{lines} lines, {words} words, {bytes} bytes  {file}");
+            }
+            ("wc", _) => error("usage: wc FILE"),
+            ("grep", [pattern, path]) => self.grep(pattern, path, false),
+            ("grep", ["-i", pattern, path]) => self.grep(pattern, path, true),
+            ("grep", _) => error("usage: grep [-i] TEXT FILE|FOLDER   (-i: upper and lower case alike)"),
             ("touch", [file]) => self.touch(file),
             ("mkdir", [dir]) => {
                 let dir = self.abs(dir);
@@ -416,10 +538,20 @@ impl Shell {
             ("cpu", []) => {
                 let processors = crate::cpu::processors();
                 println!("processor: {}", crate::cpu::name());
-                println!("count: {} (this OS runs on one of them so far)", processors.len());
+                match crate::smp::running() {
+                    1 if processors.len() > 1 => println!("count: {}, 1 in use ('cpu start' starts the others)", processors.len()),
+                    running => println!("count: {}, {running} in use", processors.len()),
+                }
                 println!("clock: {} MHz", time::tsc_mhz());
                 println!("can do: {}", crate::cpu::features(crate::cpu::raw()).join(" "));
             }
+            ("cpu", ["start"]) => match crate::smp::start() {
+                Ok(running) => println!("{running} of {} processors in use", crate::cpu::processors().len()),
+                Err(why) => error(&format!("cpu start: {why}")),
+            },
+            ("cpu", ["test"]) => self.cpu_test(),
+            ("cpu", ["auto", state @ ("on" | "off")]) => self.cpu_auto(state),
+            ("cpu", _) => error("usage: cpu [start | test | auto on|off]"),
             ("about" | "version", []) => {
                 println!("BeeCodersOs {} b{} - x86_64 kernel in Rust", crate::OS_VERSION, crate::OS_BUILD);
                 println!("filesystem: BeeFS on {}", if self.storage.persistent { "ATA disk" } else { "RAM disk" });
@@ -433,9 +565,31 @@ impl Shell {
                 Err(e) => error(&format!("calc: {e}")),
             },
             ("date", []) => match time::now_unix() {
-                Some(t) => println!("{}", time::iso8601(t)),
+                Some(t) if time::zone() == time::Zone::Utc => println!("{}", time::iso8601(t)),
+                Some(t) => println!("{}   ({})", time::local(time::zone(), t), time::iso8601(t)),
                 None => error("no real-time clock"),
             },
+            ("timezone", []) => {
+                let zone = time::zone();
+                println!("time zone: {} ('timezone UTC|CET|+HH:MM' to change)", time::zone_name(zone));
+            }
+            ("timezone", [name]) => match time::parse_zone(name) {
+                Some(zone) => {
+                    time::set_zone(zone);
+                    let mut fs = self.storage.fs();
+                    let saved = fs.mkdir_all("/system").and_then(|_| fs.write_file(TIMEZONE_FILE, format!("{}\n", time::zone_name(zone)).as_bytes()));
+                    drop(fs);
+                    let note = match (saved, self.storage.persistent) {
+                        (Ok(()), true) => "saved",
+                        (Ok(()), false) => "RAM disk: not kept after reboot",
+                        (Err(_), _) => "could not save",
+                    };
+                    println!("time zone: {} ({note})", time::zone_name(zone));
+                    crate::clock::refresh();
+                }
+                None => error("usage: timezone UTC | CET (Central Europe, with summer time) | +HH:MM | -HH:MM"),
+            },
+            ("timezone", _) => error("usage: timezone UTC | CET (Central Europe, with summer time) | +HH:MM | -HH:MM"),
             ("uptime", []) => println!("up {}", time::format_duration(time::uptime_ms())),
             ("log", []) => self.show_log(10),
             ("log", [n]) => match n.parse() {
@@ -446,6 +600,8 @@ impl Shell {
             ("wish" | "feedback", words) => self.signal(&cmd, &words.join(" ")),
             ("ask", []) => error("usage: ask QUESTION"),
             ("ask", words) => self.ask(&words.join(" ")),
+            ("do", []) => error("usage: do TASK   (e.g. do make a folder photos with a file readme.txt in it)"),
+            ("do", words) => self.do_task(&words.join(" ")),
             ("explain", []) => self.explain(),
             ("ai", []) => self.ai_status(),
             ("ai", [s @ ("on" | "off")]) => self.ai_switch(s),
@@ -521,6 +677,15 @@ impl Shell {
             ("remote", ["off"]) => self.remote_command(Some(None)),
             ("remote", ["password"]) => self.remote_command(None),
             ("remote", _) => error("usage: remote [on [PORT] | off | password]"),
+            ("vnc", []) => self.vnc_status(),
+            ("vnc", ["on"]) => self.vnc_command(Some(Some(crate::vnc::DEFAULT_PORT))),
+            ("vnc", ["on", port]) => match port.parse::<u16>() {
+                Ok(p) if p != 0 => self.vnc_command(Some(Some(p))),
+                _ => error("usage: vnc [on [PORT] | off | password]"),
+            },
+            ("vnc", ["off"]) => self.vnc_command(Some(None)),
+            ("vnc", ["password"]) => self.vnc_command(None),
+            ("vnc", _) => error("usage: vnc [on [PORT] | off | password]"),
             ("wget", [url]) => self.wget(url, None),
             ("wget", [url, file]) => self.wget(url, Some(file)),
             ("wget", _) => error("usage: wget URL [FILE]   (or: wget URL > FILE)"),
@@ -570,7 +735,7 @@ impl Shell {
                 // Ctrl+D is also what a closed remote session gives: never wait for more.
                 use crate::input::Key;
                 while !matches!(crate::input::read_key(), Key::Enter | Key::Ctrl('c' | 'd')) {}
-                let micros = console::redraw();
+                let (micros, _) = console::redraw();
                 println!("drawing the whole screen again took {}.{} ms", micros / 1000, micros % 1000 / 100);
             }
             ("display", ["speed"]) if display::current().is_none() => {
@@ -578,8 +743,9 @@ impl Shell {
             }
             ("display", ["speed"]) => {
                 // Unlike `display test` this waits for no key: it can be asked from afar.
-                let best = (0..5).map(|_| console::redraw()).min().unwrap_or(0);
+                let (best, copy) = (0..5).map(|_| console::redraw()).min().unwrap_or((0, 0));
                 println!("drawing the whole screen again takes {}.{} ms (best of 5)", best / 1000, best % 1000 / 100);
+                println!("of which copying to video memory: {}.{} ms", copy / 1000, copy % 1000 / 100);
             }
             ("display", ["font", size]) => match display::parse_font(size) {
                 Some(_) if display::current().is_none() => error("display font: needs a graphics mode, and this is the text screen"),
@@ -626,13 +792,84 @@ impl Shell {
                 }
             }
             ("files", _) => error("usage: files [FOLDER]"),
+            ("browse", [address]) if { let path = self.abs(address); self.storage.fs().exists(&path) } => {
+                // A file that is there is shown from the disk.
+                let path = self.abs(address);
+                match crate::desk::open_web(&path) {
+                    Ok(_) => println!("{path} in a new window: Tab picks a link, Enter follows it, q leaves"),
+                    Err(why) => error(&format!("browse {path}: {why}")),
+                }
+            }
+            ("browse", words @ [_, ..]) => {
+                // A web address, or words to search for.
+                let typed = words.join(" ");
+                match crate::web::typed_address(&typed).map(|t| (crate::desk::open_web(&t), t)) {
+                    Ok((Ok(_), t)) => println!("{t} in a new window: Tab picks a link, Enter follows it, q leaves"),
+                    Ok((Err(why), t)) => error(&format!("browse {t}: {why}")),
+                    Err(why) => error(&format!("browse {typed}: {why}")),
+                }
+            }
+            ("browse", _) => error("usage: browse URL|FILE|WORDS   (words: a search on FrogFind)"),
+            ("view", [file]) => {
+                let path = self.abs(file);
+                match crate::desk::open_picture(&path) {
+                    Ok((_, w, h)) => println!("{path} ({w} x {h} pixels) in a new window: q leaves"),
+                    Err(why) => error(&format!("view {file}: {why}")),
+                }
+            }
+            ("view", _) => error("usage: view FILE   (a BMP or PPM picture)"),
+            ("screenshot", [file]) => {
+                let path = self.abs(file);
+                let picture = console::with_screen(|w, h, pixel| (w, h, crate::image::encode_bmp(w, h, pixel)));
+                match picture {
+                    Some((w, h, bmp)) => {
+                        let saved = self.storage.fs().write_file(&path, &bmp);
+                        match saved {
+                            Ok(()) => println!("saved the screen ({w} x {h}) to {path} ({} KiB)", bmp.len() / 1024),
+                            Err(e) => error(&format!("screenshot {file}: {e}")),
+                        }
+                    }
+                    None => error("screenshot: needs a graphics screen"),
+                }
+            }
+            ("screenshot", _) => error("usage: screenshot FILE   (saves the screen as a BMP picture)"),
+            ("monitor", []) => match crate::desk::open_monitor() {
+                Ok(_) => println!("the system monitor in a new window: q leaves"),
+                Err(why) => error(&format!("monitor: {why}")),
+            },
+            ("monitor", _) => error("usage: monitor"),
             ("terminal", []) => match crate::desk::open_terminal() {
                 Ok(_) => println!("a new terminal window ({} open): Alt+Tab or a click changes window, 'exit' or its close box ends it", crate::desk::count()),
                 Err(why) => error(&format!("terminal: {why}")),
             },
             ("terminal", _) => error("usage: terminal"),
             ("desktop", [state @ ("on" | "off")]) => self.desktop(state),
-            ("desktop", _) => error("usage: desktop [on | off]"),
+            ("desktop", ["wallpaper", "none"]) => {
+                let _ = console::set_wallpaper(None);
+                // No saved wallpaper is fine too.
+                let _ = self.storage.fs().remove(WALLPAPER_FILE);
+                println!("wallpaper: none, the plain color");
+            }
+            ("desktop", ["wallpaper", file]) => {
+                let path = self.abs(file);
+                let picture = crate::view::load(&mut self.storage, &path);
+                match picture.map(|p| (p.width, p.height, console::set_wallpaper(Some(p)))) {
+                    Ok((w, h, Ok(()))) => {
+                        let mut fs = self.storage.fs();
+                        let saved = fs.mkdir_all("/system").and_then(|_| fs.write_file(WALLPAPER_FILE, format!("{path}\n").as_bytes()));
+                        drop(fs);
+                        let note = match (saved, self.storage.persistent) {
+                            (Ok(()), true) => "saved",
+                            (Ok(()), false) => "RAM disk: not kept after reboot",
+                            (Err(_), _) => "could not save",
+                        };
+                        println!("wallpaper: {path} ({w} x {h}, scaled to cover the screen; {note})");
+                    }
+                    Ok((_, _, Err(why))) => error(&format!("desktop wallpaper: {why}")),
+                    Err(why) => error(&format!("desktop wallpaper {file}: {why}")),
+                }
+            }
+            ("desktop", _) => error("usage: desktop [on | off | wallpaper FILE|none]"),
             ("install", []) => self.install_list(),
             ("install", [disk]) => self.install(disk, ""),
             ("install", [disk, option @ ("--erase" | "--reinstall")]) => self.install(disk, option),
@@ -984,6 +1221,56 @@ impl Shell {
         );
     }
 
+    fn vnc_status(&self) {
+        let Some(port) = crate::vnc::port() else {
+            return println!("remote desktop (VNC): off (vnc on [PORT] starts it)");
+        };
+        let (logins, failures, connected) = crate::vnc::counters();
+        let how = match net::address() {
+            // VNC viewers take "host::port", or "host:display" for port 5900 + display.
+            Some(ip) if port == crate::vnc::DEFAULT_PORT => format!("connect a VNC viewer to {ip}"),
+            Some(ip) => format!("connect a VNC viewer to {ip}::{port}"),
+            None => format!("port {port}, but the network has no address yet (see net)"),
+        };
+        println!("remote desktop (VNC): on, {how}");
+        println!(
+            "since boot: {logins} logins, {failures} wrong passwords; {}",
+            if connected { "a viewer is connected now" } else { "no viewer is connected" }
+        );
+    }
+
+    /// `vnc on [PORT]` / `vnc off` (Some) or `vnc password` (None); like
+    /// `remote`, only from the machine's own console.
+    fn vnc_command(&mut self, switch: Option<Option<u16>>) {
+        if session::current().is_some() {
+            return error("vnc: this can only be changed on the machine's own console");
+        }
+        let saved = if self.storage.persistent { " (saved)" } else { " (not saved: RAM disk)" };
+        let password = match switch {
+            Some(port) => match crate::vnc::set(port) {
+                Ok(password) => {
+                    match port {
+                        Some(port) => println!("remote desktop (VNC) on, port {port}{saved}"),
+                        None => return println!("remote desktop (VNC) off{saved}"),
+                    }
+                    password
+                }
+                Err(e) => return error(&format!("vnc: {e}")),
+            },
+            None => match crate::vnc::change_password() {
+                Ok(password) => Some(password),
+                Err(e) => return error(&format!("vnc: {e}")),
+            },
+        };
+        match password {
+            Some(p) => println!("password: {p}   (shown only now; 'vnc password' makes a new one)"),
+            None => println!("password: as before ('vnc password' makes a new one)"),
+        }
+        if switch.is_some() {
+            println!("not encrypted: the screen and all that is typed can be seen on the network; use it on your own network only");
+        }
+    }
+
     /// `remote on [PORT]` / `remote off` (Some) or `remote password` (None).
     /// Only from the machine's own console: a remote session can't open the
     /// door wider or change the lock.
@@ -1215,6 +1502,71 @@ impl Shell {
             let fields = Obj::new().str("text", question).str("cwd", &self.cwd);
             self.ai_request("ask", fields);
         }
+    }
+
+    /// `do TASK`: the AI suggests commands for the task; they run, one
+    /// after the other, only when the user says yes. Some are never run
+    /// (doplan::refused); the first one that fails stops the rest.
+    fn do_task(&mut self, task: &str) {
+        if !self.ai_ready() {
+            return;
+        }
+        let mut answer = Vec::new();
+        let fields = Obj::new().str("text", task).str("cwd", &self.cwd);
+        let outcome = aibridge::request("do", fields, |l| answer.push(String::from(l)));
+        let result = match outcome {
+            Outcome::Done => "done",
+            Outcome::Cancelled => "cancelled",
+            Outcome::Offline => "offline",
+            Outcome::Error(_) => "error",
+        };
+        // Only the outcome is logged, not the task or the plan.
+        let ev = eventlog::event("ai").str("kind", "do").str("result", result).num("lines", answer.len() as i64).finish();
+        eventlog::write(&mut self.storage.fs(), ev);
+        match outcome {
+            Outcome::Done => {}
+            Outcome::Cancelled => return println!("(cancelled)"),
+            Outcome::Offline => return error("AI offline: beehive is not running on the host (start it with: make beehive)"),
+            Outcome::Error(e) => return error(&format!("AI error: {e}")),
+        }
+        let (commands, notes) = doplan::parse(&answer);
+        console::set_color(Color::LightCyan, Color::Black);
+        for note in notes.iter().filter(|n| !n.trim().is_empty()) {
+            println!("{note}");
+        }
+        console::set_color(Color::LightGray, Color::Black);
+        if commands.is_empty() {
+            return println!("(no commands to run)");
+        }
+        for (i, cmd) in commands.iter().enumerate() {
+            match doplan::refused(cmd) {
+                Some(why) => println!("  {}. {cmd}   (will not run: {why})", i + 1),
+                None => println!("  {}. {cmd}", i + 1),
+            }
+        }
+        print!("Run {}? y: yes, any other key: no ", if commands.len() == 1 { "it" } else { "them" });
+        console::flush();
+        let yes = matches!(crate::input::read_key(), crate::input::Key::Char('y' | 'Y'));
+        println!();
+        if !yes {
+            return println!("nothing was run");
+        }
+        let (mut ran, total) = (0, commands.len());
+        for cmd in &commands {
+            if let Some(why) = doplan::refused(cmd) {
+                println!("skipped: {cmd} ({why})");
+                continue;
+            }
+            console::set_color(Color::DarkGray, Color::Black);
+            println!("$ {cmd}");
+            console::set_color(Color::LightGray, Color::Black);
+            self.run_line(cmd);
+            if self.status != Status::Ok {
+                return error(&format!("stopped: '{cmd}' did not work ({ran} of {total} ran)"));
+            }
+            ran += 1;
+        }
+        println!("done: {ran} of {total} ran");
     }
 
     fn explain(&mut self) {
@@ -1703,6 +2055,84 @@ impl Shell {
         }
     }
 
+    /// A file's content as text; prints why not and gives `None` otherwise.
+    fn read_text(&mut self, file: &str) -> Option<String> {
+        let path = self.abs(file);
+        let data = self.storage.fs().read_file(&path);
+        match data {
+            Ok(data) => Some(String::from_utf8_lossy(&data).into_owned()),
+            Err(e) => {
+                error(&format!("{file}: {e}"));
+                None
+            }
+        }
+    }
+
+    /// `head` / `tail`: the first or last `n` lines of a file.
+    fn head_tail(&mut self, file: &str, n: usize, last: bool) {
+        let Some(text) = self.read_text(file) else { return };
+        let part = if last { textops::tail(&text, n) } else { textops::head(&text, n) };
+        print!("{part}");
+        if !part.is_empty() && !part.ends_with('\n') {
+            println!();
+        }
+    }
+
+    /// `grep [-i] TEXT FILE|FOLDER`: the lines that contain TEXT, with their
+    /// numbers; in a folder, every file in it and below (with its path).
+    fn grep(&mut self, pattern: &str, path: &str, ignore_case: bool) {
+        const MAX_MATCHES: usize = 1000;
+        let start = self.abs(path);
+        let folder = self.storage.fs().is_dir(&start);
+        let mut files = Vec::new();
+        if folder {
+            let mut todo = alloc::vec![start.clone()];
+            while let Some(dir) = todo.pop() {
+                let Ok(entries) = self.storage.fs().read_dir(&dir) else { continue };
+                for e in entries.iter().rev() {
+                    let full = format!("{}/{}", dir.trim_end_matches('/'), e.name);
+                    match e.kind {
+                        FileKind::Directory => todo.push(full),
+                        FileKind::File => files.push(full),
+                    }
+                }
+            }
+            files.sort();
+        } else {
+            files.push(start);
+        }
+        let mut found = 0;
+        for file in &files {
+            let data = match self.storage.fs().read_file(file) {
+                Ok(data) => data,
+                Err(e) if !folder => return error(&format!("{path}: {e}")),
+                Err(_) => continue,
+            };
+            if textops::is_binary(&data) {
+                if String::from_utf8_lossy(&data).contains(pattern) {
+                    println!("{file}: a binary file, it matches");
+                }
+                continue;
+            }
+            let text = String::from_utf8_lossy(&data);
+            for (number, line) in textops::grep(&text, pattern, ignore_case) {
+                if found == MAX_MATCHES {
+                    println!("... (stopped after {MAX_MATCHES} lines)");
+                    return;
+                }
+                found += 1;
+                if folder {
+                    println!("{file}:{number}: {line}");
+                } else {
+                    println!("{number}: {line}");
+                }
+            }
+        }
+        if found == 0 {
+            println!("no line contains {pattern:?}");
+        }
+    }
+
     fn touch(&mut self, file: &str) {
         let path = self.abs(file);
         let exists = self.storage.fs().exists(&path);
@@ -1775,6 +2205,9 @@ const COMMANDS: &[(&str, &str)] = &[
     ("ls [DIR]", "list a directory"),
     ("cd [DIR], pwd", "change / show the current directory"),
     ("cat FILE", "show a file"),
+    ("head|tail [-n N] FILE", "the first / last N lines of a file (10 unless N is given)"),
+    ("wc FILE", "count the lines, words and bytes of a file"),
+    ("grep [-i] TEXT PATH", "lines that contain TEXT, in a file or every file of a folder"),
     ("touch FILE", "create an empty file"),
     ("mkdir DIR", "create a directory (with parents)"),
     ("rm PATH", "remove a file or empty directory"),
@@ -1786,12 +2219,14 @@ const COMMANDS: &[(&str, &str)] = &[
     ("history", "previous commands (Up/Down to recall)"),
     ("mem, about", "memory usage, system info"),
     ("calc EXPR", "integer arithmetic: + - * / % ( )"),
-    ("date, uptime", "current date and time (UTC), time since boot"),
+    ("date, uptime", "current date and time (in the time zone, and UTC), time since boot"),
+    ("timezone [ZONE]", "the time zone for date and the desktop clock: UTC, CET, +HH:MM (saved)"),
     ("log [N]", "last N events from the event log"),
     ("wish TEXT", "tell the OS what you'd like it to do"),
     ("feedback TEXT", "tell the OS what could be better"),
     ("ask QUESTION", "ask the AI (needs beehive on the host)"),
     ("explain", "ask the AI about the last error or crash"),
+    ("do TASK", "the AI suggests commands for a task in plain words; they run if you say y"),
     ("update [auto on|off]", "fetch a new kernel from the AI host and put it on trial"),
     ("ai control [on|off]", "let the AI host run commands here and see the screen"),
     ("ai connect HOST NAME KEY", "reach beehive over the network (ai disconnect: stop)"),
@@ -1802,6 +2237,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("nslookup NAME", "look up the address of a host name"),
     ("nc HOST PORT [TEXT]", "open a TCP connection: type lines, see the answers"),
     ("httpd [on [PORT]|off]", "status page for the local network (off by default)"),
+    ("vnc [on|off|password]", "remote desktop: see and use this screen from a VNC viewer (off by default; not encrypted)"),
     ("remote [on|off]", "remote shell with a password, not encrypted (off by default)"),
     ("wget URL [FILE]", "fetch a web address (http://): show it or save it"),
     ("ntp [SERVER]", "set the clock from a time server"),
@@ -1811,13 +2247,17 @@ const COMMANDS: &[(&str, &str)] = &[
     ("install [DISK]", "put the OS on a disk, or upgrade it (alone: list the disks)"),
     ("lsusb", "USB controller and devices"),
     ("threads", "what runs side by side inside the kernel"),
+    ("monitor", "system monitor in a window: work per processor, memory, network, threads"),
+    ("view FILE", "show a picture (BMP or PPM) in a window"),
+    ("screenshot FILE", "save the screen as a BMP picture"),
     ("display [mode WxH]", "screen: driver, resolution; 'display font 1|2|auto'; 'display test'; 'display speed'"),
     ("edit FILE", "text editor in a window on the desktop (Ctrl+S saves, Ctrl+Q leaves)"),
+    ("browse URL|FILE|WORDS", "web page viewer in a window: http:// pages, HTML files, or a search; Tab/Enter/click follow links"),
     ("files [FOLDER]", "file manager in a window: browse, open in the editor, new folder, rename, delete"),
-    ("cpu", "the processor: name, how many, clock speed, what it can do"),
+    ("cpu [start|test|auto on|off]", "the processor: name, how many, clock, features; start the others; measure; at boot or not (saved)"),
     ("sleep SECONDS", "wait (Ctrl+C ends it)"),
     ("terminal", "one more terminal window on the desktop, with a shell of its own"),
-    ("desktop [on|off]", "graphical desktop: the terminal in a window (on by default; saved)"),
+    ("desktop [on|off]", "graphical desktop: the terminal in a window (on by default; saved); 'desktop wallpaper FILE|none'"),
     ("slots", "A/B kernel slots: which one runs, last trial"),
     ("crash [exception]", "deliberately crash the kernel: a panic, or a CPU exception (tests crash reports)"),
     ("reboot, shutdown", "restart / power off"),

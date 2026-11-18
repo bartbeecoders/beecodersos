@@ -9,7 +9,7 @@
 use crate::input::Key;
 use crate::ring::Global;
 use crate::shell::Shell;
-use crate::{console, filemgr, keyboard, session, storage, textedit, thread};
+use crate::{console, filemgr, keyboard, session, storage, textedit, thread, web};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -51,19 +51,52 @@ pub fn open_files(folder: &str) -> Result<usize, &'static str> {
     open("Files", "files", false, move |window| filemgr::run(window, folder, storage))
 }
 
+/// Open a web page viewer on an address (an http:// URL or an absolute path).
+pub fn open_web(address: &str) -> Result<usize, &'static str> {
+    let storage = storage::handle().ok_or("no file system is mounted")?;
+    let address = String::from(address);
+    open("Web", "browse", false, move |window| web::run(window, address, storage))
+}
+
+/// Open a picture viewer on a file (`path` is absolute); the picture is
+/// read before the window opens, so a file that is no picture opens none.
+pub fn open_picture(path: &str) -> Result<(usize, usize, usize), String> {
+    let mut storage = storage::handle().ok_or("no file system is mounted")?;
+    let picture = crate::view::load(&mut storage, path)?;
+    let (width, height) = (picture.width, picture.height);
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let window = open(&format!("View: {name}"), "view", false, move |window| crate::view::run(window, picture))?;
+    Ok((window, width, height))
+}
+
+/// Open the system monitor in a window.
+pub fn open_monitor() -> Result<usize, &'static str> {
+    open("Monitor", "monitor", false, crate::monitor::run)
+}
+
 /// The folder new windows start in: the data partition if there is one.
 fn home() -> &'static str {
     if storage::has_data() { storage::DATA_DIR } else { "/" }
 }
 
 /// What a click on a desktop button starts (`console::BUTTONS`): a
-/// terminal, the file manager on the home folder, or the editor on
-/// `notes.txt` there.
+/// terminal, the file manager on the home folder, the editor on
+/// `notes.txt` there, or the web page viewer on `start.html` there.
 pub fn launch(button: usize) -> Result<usize, &'static str> {
     match button {
         0 => open_terminal(),
         1 => open_files(home()),
         2 => open_editor(&filemgr::join(home(), "notes.txt")),
+        3 => {
+            let start = filemgr::join(home(), web::START_NAME);
+            let mut storage = storage::handle().ok_or("no file system is mounted")?;
+            let missing = !storage.fs().exists(&start);
+            if missing {
+                // A page of its own to start from; a disk that is full simply has none.
+                let _ = storage.fs().write_file(&start, web::START_PAGE.as_bytes());
+            }
+            open_web(&start)
+        }
         _ => Err("no such button"),
     }
 }

@@ -1,0 +1,26 @@
+# The time zone: `date` in local time, and the clock at the top right of
+# the desktop (its box always ends 50 pixels from the right edge).
+@disk
+$ timezone
+time zone: UTC ('timezone UTC|CET|+HH:MM' to change)
+$ date
+~ ^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$
+@screenshot 1920x1080 pixels 1865,8=1f3a5f 1875,8=a8d0f0
+$ timezone cet
+time zone: CET (saved)
+$ date
+~ ^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d CES?T   \(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\)$
+$ cat /system/timezone
+CET
+$ timezone +05:30
+time zone: UTC+05:30 (saved)
+$ timezone mars
+usage: timezone UTC | CET (Central Europe, with summer time) | +HH:MM | -HH:MM
+@reboot
+$ timezone
+time zone: UTC+05:30 ('timezone UTC|CET|+HH:MM' to change)
+$ threads
+~ clock +(waiting|ready)
+@screenshot 1920x1080 pixels 1865,8=1f3a5f
+$ timezone utc
+time zone: UTC (saved)

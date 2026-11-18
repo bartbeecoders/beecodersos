@@ -56,6 +56,16 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("file manager: order, choosing, questions, what the window shows", file_manager),
     ("mouse: clicks inside windows, desktop buttons", mouse_clicks),
     ("cpu: name, features, the list of processors", cpu_facts),
+    ("processors: every piece of a job runs exactly once, also nested", smp_jobs),
+    ("processors: started at boot or not", smp_choice),
+    ("web viewer: links, scrolling, back, addresses", web_viewer),
+    ("text tools: head, tail, wc, grep", text_tools),
+    ("do: the plan in an answer, commands it may not run", do_plan),
+    ("monitor: bars, sizes, what the window shows", monitor_render),
+    ("time zones: UTC, offsets, CET with summer time, the desktop clock", time_zones),
+    ("pictures: BMP and PPM in and out, damaged files, fitting", pictures),
+    ("wallpaper: covering the screen, behind the windows", wallpaper),
+    ("remote desktop: a viewer's keys, the tiles that changed", vnc_parts),
     ("heap: alloc and free", heap_alloc_free),
     ("heap: 1 MiB buffer", heap_large_buffer),
     ("ring: order and overflow", ring_buffer),
@@ -2175,7 +2185,7 @@ fn wm_windows() -> TestResult {
     red.canvas().fill_rect(Rect::new(0, 0, 40, 30), 0xFF0000);
     green.canvas().fill_rect(Rect::new(0, 0, 40, 30), 0x00FF00);
     let mut order = Vec::new();
-    desk.draw_with(&canvas, |id, window| {
+    desk.draw_with(&canvas, None, |id, window| {
         order.push(id);
         let at = window.content();
         canvas.blit(&(if id == a { red.canvas() } else { green.canvas() }), at.x, at.y);
@@ -2553,5 +2563,371 @@ fn cpu_facts() -> TestResult {
     }
     check_eq!(madt_processors(&many).len(), MAX_PROCESSORS);
     check!(!crate::cpu::processors().is_empty());
+    Ok(())
+}
+
+fn smp_jobs() -> TestResult {
+    use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering::SeqCst};
+    // On however many processors are in use (one, unless `cpu start` was given).
+    check!(crate::smp::running() >= 1);
+    let counts: Vec<AtomicU32> = (0..1000).map(|_| AtomicU32::new(0)).collect();
+    let sum = AtomicUsize::new(0);
+    for round in 0..20 {
+        crate::smp::run(counts.len(), &|n| {
+            counts[n].fetch_add(1, SeqCst);
+            sum.fetch_add(n, SeqCst);
+        });
+        check!(counts.iter().all(|c| c.load(SeqCst) == round + 1));
+    }
+    check_eq!(sum.load(SeqCst), 20 * (999 * 1000 / 2));
+    // No pieces: nothing runs. One piece: it gets number 0.
+    crate::smp::run(0, &|_| panic!("a job without pieces ran"));
+    let only = AtomicUsize::new(usize::MAX);
+    crate::smp::run(1, &|n| only.store(n, SeqCst));
+    check_eq!(only.load(SeqCst), 0);
+    // A job inside a piece (as a copy from the timer interrupt may be)
+    // runs on that processor alone, and every piece of both runs once.
+    let inner = AtomicUsize::new(0);
+    crate::smp::run(8, &|_| crate::smp::run(10, &|n| { inner.fetch_add(n + 1, SeqCst); }));
+    check_eq!(inner.load(SeqCst), 8 * 55);
+    Ok(())
+}
+
+fn smp_choice() -> TestResult {
+    let choice = crate::smp::choice;
+    // Nothing said: they start.
+    check!(choice("", None) && choice("test slot=a", None));
+    // What was saved: only "auto off" keeps them waiting.
+    check!(!choice("test", Some("auto off")) && !choice("", Some("auto off\n")));
+    check!(choice("", Some("auto on\n")) && choice("", Some("")) && choice("", Some("off")));
+    // A boot flag wins over what was saved.
+    check!(choice("test smp=on", Some("auto off")) && !choice("smp=off", Some("auto on")) && !choice("smp=off", None));
+    check!(choice("nosmp=off smps=off", None));
+    Ok(())
+}
+
+fn web_viewer() -> TestResult {
+    use crate::web::{resolve, Action, Viewer};
+    use alloc::string::ToString;
+    // Where links lead: on the disk, and on the web.
+    check_eq!(resolve("/site/a/index.html", "b.html"), Ok("/site/a/b.html".to_string()));
+    check_eq!(resolve("/site/a/index.html", "../top.html#x"), Ok("/site/top.html".to_string()));
+    check_eq!(resolve("/site/a/index.html", "/../../etc"), Ok("/etc".to_string()));
+    check_eq!(resolve("http://h:8080/a/b/c.html", "../d.html?q=1"), Ok("http://h:8080/a/d.html?q=1".to_string()));
+    check_eq!(resolve("http://h/a/", "/x"), Ok("http://h/x".to_string()));
+    check_eq!(resolve("http://h/a/", "http://other.org"), Ok("http://other.org/".to_string()));
+    check_eq!(resolve("http://h/a/", "//cdn.org/s"), Ok("http://cdn.org/s".to_string()));
+    check!(resolve("http://h/", "https://secure.org/").is_err());
+    check!(resolve("http://h/", "mailto:someone@example.org").is_err());
+    check!(resolve("/a.html", "javascript:void(0)").is_err());
+    // What is typed: a path, an address, or words to search for.
+    let typed = crate::web::typed_address;
+    check_eq!(typed("/site/a.html"), Ok("/site/a.html".to_string()));
+    check_eq!(typed("example.org/x"), Ok("http://example.org/x".to_string()));
+    check_eq!(typed("10.0.2.2:8080"), Ok("http://10.0.2.2:8080/".to_string()));
+    check_eq!(typed("localhost"), Ok("http://localhost/".to_string()));
+    check_eq!(typed("honey bees"), Ok("http://frogfind.com/?q=honey%20bees".to_string()));
+    check_eq!(typed("rust"), Ok("http://frogfind.com/?q=rust".to_string()));
+    check_eq!(typed("what is 2+2? "), Ok("http://frogfind.com/?q=what%20is%202%2B2%3F".to_string()));
+    check_eq!(typed("https://en.wikipedia.org/wiki/Bee"), Ok("http://frogfind.com/read?a=https%3A%2F%2Fen.wikipedia.org%2Fwiki%2FBee".to_string()));
+    check!(crate::web::looks_like_html("http://h/", "<!DOCTYPE html><p>x"));
+    check!(!crate::web::looks_like_html("http://h/", "just text, 1 < 2"));
+    check!(!crate::web::looks_like_html("/notes.txt", "<p>shown as it is</p>"));
+
+    let mut v = Viewer::new();
+    let mut body = String::from("<title>Start</title><h1>Top</h1><p><a href=one.html>One</a> and <a href='https://x/'>Secure</a>");
+    for i in 0..40 {
+        body.push_str(&alloc::format!("<p>line {i}</p>"));
+    }
+    body.push_str("<p><a href=/last.html>Last</a>");
+    v.show("/site/index.html", &body, false, false);
+    let (w, h) = (40, 12);
+    let lines = v.lines(w);
+    check_eq!(v.title(), "Start");
+    check_eq!(v.address(), "/site/index.html");
+    check_eq!(lines[0].as_str(), "Top");
+    check_eq!(lines[2].as_str(), "One and Secure");
+    check_eq!(v.link(0), Some("one.html"));
+    // Enter without a link chosen does nothing; Tab picks the first one.
+    check_eq!(v.key(Key::Enter, w, h), Action::None);
+    check_eq!(v.key(Key::Tab, w, h), Action::None);
+    check_eq!(v.key(Key::Enter, w, h), Action::Open("/site/one.html".to_string()));
+    // The second link cannot be followed: it says why and stays.
+    check_eq!(v.key(Key::Tab, w, h), Action::None);
+    check_eq!(v.key(Key::Enter, w, h), Action::None);
+    let (cells, _) = v.render(w, h);
+    let status: String = cells[0].iter().map(|c| (*c & 0xFF) as u8 as char).collect();
+    check!(status.starts_with(" an https:// page: this OS has no TLS"));
+    // `f` reads it through the reader; only right after it was chosen.
+    check_eq!(v.key(Key::Char('f'), w, h), Action::Open("http://frogfind.com/read?a=https%3A%2F%2Fx%2F".to_string()));
+    check_eq!(v.key(Key::Char('f'), w, h), Action::None);
+    // The third link is far down: Tab scrolls to it.
+    check_eq!(v.key(Key::Tab, w, h), Action::None);
+    let (cells, _) = v.render(w, h);
+    let shown: Vec<String> = cells.iter().map(|l| l.iter().map(|c| (*c & 0xFF) as u8 as char).collect::<String>()).collect();
+    check!(shown.iter().any(|l| l.starts_with("Last")));
+    check_eq!(v.key(Key::Enter, w, h), Action::Open("/last.html".to_string()));
+    // Scrolling stays within the page.
+    check_eq!(v.key(Key::Home, w, h), Action::None);
+    check_eq!(v.key(Key::Up, w, h), Action::None);
+    let (cells, _) = v.render(w, h);
+    check_eq!(cells[1][0] & 0xFF, b'T' as u16);
+    // A click on a link follows it (row 3 of the window is line 2 of the page).
+    check_eq!(v.key(Key::Click(1, 3), w, h), Action::Open("/site/one.html".to_string()));
+    check_eq!(v.key(Key::Click(5, 3), w, h), Action::None); // " and " is no link
+    // Going on and coming back.
+    check_eq!(v.key(Key::Backspace, w, h), Action::None); // nothing to go back to
+    v.show("/site/one.html", "<p>Page one <a href=index.html>home</a>", false, false);
+    check_eq!(v.key(Key::Backspace, w, h), Action::Back("/site/index.html".to_string()));
+    v.show("/site/index.html", &body, true, false);
+    check_eq!(v.key(Key::Backspace, w, h), Action::None); // the way back was used up
+    // `g` asks for an address; one without http:// is a web address.
+    check_eq!(v.key(Key::Char('g'), w, h), Action::None);
+    for c in "example.org/x".chars() {
+        check_eq!(v.key(Key::Char(c), w, h), Action::None);
+    }
+    let (_, cursor) = v.render(w, h);
+    check_eq!(cursor, (0, 8 + 13));
+    check_eq!(v.key(Key::Enter, w, h), Action::Open("http://example.org/x".to_string()));
+    check_eq!(v.key(Key::Char('r'), w, h), Action::Reload("/site/index.html".to_string()));
+    check_eq!(v.key(Key::Char('q'), w, h), Action::Quit);
+    // Plain text is shown as it is, and a narrow window gets the page anew.
+    v.show("/notes.txt", "a <b>  c\nnext", false, false);
+    check_eq!(v.lines(40), alloc::vec!["a <b>  c".to_string(), "next".to_string()]);
+    check_eq!(v.lines(10).len(), 2);
+    Ok(())
+}
+
+fn text_tools() -> TestResult {
+    use crate::textops::*;
+    let text = "one\ntwo\nthree\nfour\n";
+    check_eq!(head(text, 2), "one\ntwo\n");
+    check_eq!(head(text, 9), text);
+    check_eq!(head(text, 0), "");
+    check_eq!(tail(text, 2), "three\nfour\n");
+    check_eq!(tail(text, 4), text);
+    check_eq!(tail(text, 9), text);
+    check_eq!(tail("a\nb", 1), "b");
+    check_eq!(tail("", 3), "");
+    check_eq!(count(text), (4, 4, 19));
+    check_eq!(count("no end"), (1, 2, 6));
+    check_eq!(count(""), (0, 0, 0));
+    check_eq!(count("\n\n"), (2, 0, 2));
+    let found: Vec<(usize, &str)> = grep("Bee\nbee hive\nwasp\n", "bee", false).collect();
+    check_eq!(found, alloc::vec![(2, "bee hive")]);
+    let found: Vec<(usize, &str)> = grep("Bee\nbee hive\nwasp\n", "BEE", true).collect();
+    check_eq!(found, alloc::vec![(1, "Bee"), (2, "bee hive")]);
+    check!(contains("anything", "", true) && !contains("", "x", true));
+    check!(is_binary(b"ab\0c") && !is_binary(b"text\n"));
+    check_eq!(parse_count(&["f"]), Some((10, "f")));
+    check_eq!(parse_count(&["-n", "3", "f"]), Some((3, "f")));
+    check_eq!(parse_count(&["-5", "f"]), Some((5, "f")));
+    check_eq!(parse_count(&["-n", "x", "f"]), None);
+    check_eq!(parse_count(&[]), None);
+    Ok(())
+}
+
+fn do_plan() -> TestResult {
+    use crate::doplan::{parse, refused, MAX_COMMANDS};
+    let lines = |l: &[&str]| l.iter().map(|s| String::from(*s)).collect::<Vec<String>>();
+    let (cmds, notes) = parse(&lines(&["I will make the folder.", "$ mkdir /photos", "  $ echo hi > /photos/a.txt", "$ ", "$x", "", "Done."]));
+    check_eq!(cmds, lines(&["mkdir /photos", "echo hi > /photos/a.txt"]));
+    check_eq!(notes, lines(&["I will make the folder.", "$x", "", "Done."]));
+    // Bounded: at most MAX_COMMANDS, no control characters, no endless lines.
+    let many: Vec<String> = (0..30).map(|i| alloc::format!("$ echo {i}")).collect();
+    check_eq!(parse(&many).0.len(), MAX_COMMANDS);
+    check!(parse(&lines(&["$ echo a\u{1b}[2J"])).0.is_empty());
+    check!(parse(&[alloc::format!("$ echo {}", "x".repeat(300))]).0.is_empty());
+    // What a plan may never run.
+    for cmd in ["install sata0 --erase", "update", "reboot", "shutdown", "crash", "ai off", "remote on", "httpd on", "net off", "do it again", "cpu auto off", "desktop off", "layout us"] {
+        check!(refused(cmd).is_some());
+    }
+    for cmd in ["mkdir /a", "echo hi > /a/b.txt", "ls", "cpu", "cpu test", "desktop", "rm /a/b.txt", "grep -i x /"] {
+        check!(refused(cmd).is_none());
+    }
+    Ok(())
+}
+
+fn monitor_render() -> TestResult {
+    use crate::monitor::{bar, bytes, render, Sample};
+    check_eq!(bar(0, 100, 10), "[..........]");
+    check_eq!(bar(50, 100, 10), "[#####.....]");
+    check_eq!(bar(100, 100, 10), "[##########]");
+    check_eq!(bar(500, 100, 10), "[##########]");
+    check_eq!(bar(5, 0, 4), "[....]");
+    check_eq!(bytes(512), "512 B");
+    check_eq!(bytes(1536), "1.5 KiB");
+    check_eq!(bytes(3 << 20), "3.0 MiB");
+    let before = Sample { micros: 1_000_000, tsc: 1000, busy: alloc::vec![0, 100], heap_size: 1 << 20, ..Sample::default() };
+    let now = Sample {
+        micros: 2_000_000,
+        tsc: 2000,
+        busy: alloc::vec![1000, 350],
+        heap_used: 256 << 10,
+        heap_size: 1 << 20,
+        rx_bytes: 2048,
+        tx_bytes: 0,
+        threads: alloc::vec![(String::from("main"), String::from("running")), (String::from("net"), String::from("waiting"))],
+        ..Sample::default()
+    };
+    let lines: Vec<String> = render(&before, &now, 60).into_iter().map(|(text, _)| text).collect();
+    check!(lines.iter().all(|l| l.chars().count() <= 60));
+    check!(lines.iter().any(|l| l == " Processors: 3 in use"));
+    check!(lines.iter().any(|l| l.starts_with("  cpu 1  [") && l.ends_with("100% on jobs")));
+    check!(lines.iter().any(|l| l.starts_with("  cpu 2  [") && l.ends_with(" 25% on jobs")));
+    check!(lines.iter().any(|l| l.contains("256.0 KiB of 1.0 MiB")));
+    check!(lines.iter().any(|l| l.starts_with("  in  2.0 KiB/s  (2.0 KiB so far)   out 0 B/s")));
+    check!(lines.iter().any(|l| l == " Threads: 2"));
+    check!(lines.iter().any(|l| l.starts_with("  net ") && l.ends_with("waiting")));
+    // A narrow window: nothing wider than it.
+    check!(render(&before, &now, 20).iter().all(|(l, _)| l.chars().count() <= 30));
+    Ok(())
+}
+
+fn time_zones() -> TestResult {
+    use crate::time::{local, offset, parse_zone, zone_name, Zone};
+    check_eq!(parse_zone("utc"), Some(Zone::Utc));
+    check_eq!(parse_zone(" CET\n"), Some(Zone::Cet));
+    check_eq!(parse_zone("+05:30"), Some(Zone::Fixed(330)));
+    check_eq!(parse_zone("-3"), Some(Zone::Fixed(-180)));
+    check_eq!(parse_zone("+00:00"), Some(Zone::Utc));
+    for bad in ["", "+", "+15", "+14:30", "+1:60", "5", "CETT", "+a:00", "+123"] {
+        check_eq!(parse_zone(bad), None);
+    }
+    check_eq!(zone_name(Zone::Fixed(-570)), "UTC-09:30");
+    check_eq!(zone_name(Zone::Cet), "CET");
+    // What is saved comes back.
+    for zone in [Zone::Utc, Zone::Cet, Zone::Fixed(330), Zone::Fixed(-570)] {
+        check_eq!(parse_zone(&zone_name(zone)), Some(zone));
+    }
+    // EU summer time 2026: from 29 March 01:00 UTC to 25 October 01:00 UTC.
+    let spring = crate::time::days_from_civil(2026, 3, 29) as u64 * 86400 + 3600;
+    let autumn = crate::time::days_from_civil(2026, 10, 25) as u64 * 86400 + 3600;
+    check_eq!(offset(Zone::Cet, spring - 1).0, 60);
+    check_eq!(offset(Zone::Cet, spring).0, 120);
+    check_eq!(offset(Zone::Cet, autumn - 1), (120, String::from("CEST")));
+    check_eq!(offset(Zone::Cet, autumn), (60, String::from("CET")));
+    // 2026-11-18 19:05:31 UTC
+    let t = crate::time::days_from_civil(2026, 11, 18) as u64 * 86400 + 19 * 3600 + 5 * 60 + 31;
+    check_eq!(local(Zone::Cet, t), "2026-11-18 20:05:31 CET");
+    check_eq!(local(Zone::Utc, t), "2026-11-18 19:05:31 UTC");
+    check_eq!(local(Zone::Fixed(330), t), "2026-11-19 00:35:31 UTC+05:30");
+    check_eq!(crate::clock::text(Zone::Cet, t), "Wed 18 Nov 20:05");
+    check_eq!(crate::clock::text(Zone::Utc, 0), "Thu 1 Jan 00:00");
+    // On the desktop: right of the buttons, and only where it fits.
+    let mut desk = crate::wm::Desktop::new();
+    desk.set_buttons(&["Terminal"], 640);
+    let first = desk.set_clock("Wed 18 Nov 20:05");
+    check!(first.is_some_and(|r| r.x + r.width <= 640 && r.x > 180));
+    check_eq!(desk.set_clock("Wed 18 Nov 20:05"), None); // nothing changed
+    check!(desk.set_clock("Wed 18 Nov 20:06").is_some());
+    let mut narrow = crate::wm::Desktop::new();
+    narrow.set_buttons(&["Terminal", "Files"], 300);
+    check_eq!(narrow.set_clock("Wed 18 Nov 20:05"), None); // does not fit
+    Ok(())
+}
+
+fn pictures() -> TestResult {
+    use crate::image::{decode, encode_bmp, fit, Image};
+    // A BMP written here comes back the same (3 pixels wide: the lines need padding).
+    let colors = [0xFF0000, 0x00FF00, 0x0000FF, 0x123456, 0xFFFFFF, 0x000000];
+    let bmp = encode_bmp(3, 2, |x, y| colors[y * 3 + x]);
+    check_eq!(bmp.len(), 54 + 12 * 2);
+    check_eq!(decode(&bmp), Ok(Image { width: 3, height: 2, pixels: colors.to_vec() }));
+    // Stored from the bottom (positive height), as most programs write it.
+    let mut bottom_up = bmp.clone();
+    bottom_up[22..26].copy_from_slice(&2i32.to_le_bytes());
+    check_eq!(decode(&bottom_up).map(|i| i.pixels), Ok(alloc::vec![0x123456, 0xFFFFFF, 0x000000, 0xFF0000, 0x00FF00, 0x0000FF]));
+    // PPM with a comment.
+    let ppm = b"P6\n# made by hand\n2 1\n255\n\xff\x00\x00\x00\x00\xff";
+    check_eq!(decode(ppm), Ok(Image { width: 2, height: 1, pixels: alloc::vec![0xFF0000, 0x0000FF] }));
+    // Damaged or cut off anywhere: an error, never a crash.
+    for end in 0..bmp.len() {
+        check!(decode(&bmp[..end]).is_err());
+    }
+    for end in 0..ppm.len() {
+        check!(decode(&ppm[..end]).is_err());
+    }
+    check!(decode(b"GIF89a").is_err());
+    check!(decode(b"P6 5000 5000 255 ").is_err()); // too large
+    check!(decode(b"P6 2 1 65535 ").is_err());
+    let mut huge = bmp.clone();
+    huge[18..22].copy_from_slice(&100_000i32.to_le_bytes());
+    check!(decode(&huge).is_err());
+    let mut negative = bmp.clone();
+    negative[18..22].copy_from_slice(&(-3i32).to_le_bytes());
+    check!(decode(&negative).is_err());
+    // Fitting: as large as fits, at most twice the size.
+    check_eq!(fit(1920, 1080, 640, 480), (640, 360, 33));
+    check_eq!(fit(100, 50, 640, 480), (200, 100, 200));
+    check_eq!(fit(640, 480, 640, 480), (640, 480, 100));
+    check_eq!(fit(10_000, 1, 100, 100), (100, 1, 1));
+    check_eq!(fit(0, 5, 100, 100), (0, 0, 0));
+    Ok(())
+}
+
+fn wallpaper() -> TestResult {
+    use crate::image::cover_pixel;
+    // Same shape: one to one, corners to corners.
+    check_eq!(cover_pixel(100, 50, 200, 100, 0, 0), (0, 0));
+    check_eq!(cover_pixel(100, 50, 200, 100, 199, 99), (99, 49));
+    // A square picture on a wide screen: scaled to the width, the top and
+    // bottom cut off evenly.
+    check_eq!(cover_pixel(100, 100, 200, 100, 0, 0), (0, 25));
+    check_eq!(cover_pixel(100, 100, 200, 100, 199, 99), (99, 74));
+    // A tall screen: the sides are cut off.
+    check_eq!(cover_pixel(100, 100, 100, 200, 0, 0), (25, 0));
+    // Every pixel of the screen comes from inside the picture.
+    for (w, h, rw, rh) in [(3, 7, 640, 480), (1920, 1080, 800, 600), (1, 1, 5, 5), (640, 480, 1, 1)] {
+        for (x, y) in [(0, 0), (rw - 1, 0), (0, rh - 1), (rw - 1, rh - 1)] {
+            let (sx, sy) = cover_pixel(w, h, rw, rh, x, y);
+            check!(sx < w && sy < h);
+        }
+    }
+    // Drawn behind the windows.
+    let format = crate::display::PixelFormat::Xrgb8888;
+    let (Some(screen), Some(paper)) = (crate::gfx::Surface::new(320, 240, format), crate::gfx::Surface::new(320, 240, format)) else {
+        return Err(String::from("no memory for the test"));
+    };
+    paper.canvas().fill_rect(paper.canvas().bounds(), 0x336699);
+    let mut desk = crate::wm::Desktop::new();
+    desk.open("Window", crate::gfx::Rect::new(100, 100, 100, 80));
+    desk.draw_with(&screen.canvas(), Some(&paper.canvas()), |_, _| {});
+    check_eq!(screen.canvas().pixel(5, 5), 0x336699);
+    check!(screen.canvas().pixel(150, 150) != 0x336699); // the window covers it
+    desk.draw_with(&screen.canvas(), None, |_, _| {});
+    check_eq!(screen.canvas().pixel(5, 5), crate::wm::BACKGROUND);
+    Ok(())
+}
+
+fn vnc_parts() -> TestResult {
+    use crate::vnc::{changed_tiles, Keys, TILE};
+    let mut keys = Keys::default();
+    check_eq!(keys.event(true, b'a' as u32), Some(Key::Char('a')));
+    check_eq!(keys.event(false, b'a' as u32), None); // letting go types nothing
+    check_eq!(keys.event(true, 0xE9), Some(Key::Char('é'))); // no layout applies
+    check_eq!(keys.event(true, 0xFF0D), Some(Key::Enter));
+    // Control held: letters become Ctrl+letter, until it is let go.
+    check_eq!(keys.event(true, 0xFFE3), None);
+    check_eq!(keys.event(true, b'C' as u32), Some(Key::Ctrl('c')));
+    check_eq!(keys.event(true, b'1' as u32), Some(Key::Char('1')));
+    check_eq!(keys.event(false, 0xFFE3), None);
+    check_eq!(keys.event(true, b'c' as u32), Some(Key::Char('c')));
+    // Alt+Tab: the next window.
+    check_eq!(keys.event(true, 0xFFE9), None);
+    check_eq!(keys.event(true, 0xFF09), Some(Key::NextWindow));
+    check_eq!(keys.event(false, 0xFFE9), None);
+    check_eq!(keys.event(true, 0xFF09), Some(Key::Tab));
+    check_eq!(keys.event(true, 0xFFBE), None); // F1: nothing yet
+    // Tiles: everything the first time, then only what changed.
+    let (w, h) = (150, 70); // 3 x 2 tiles, the last ones narrower
+    let old = alloc::vec![0u32; w * h];
+    check_eq!(changed_tiles(&[], &old, w, h).len(), 6);
+    check!(changed_tiles(&old, &old, w, h).is_empty());
+    let mut new = old.clone();
+    new[66 * w + 149] = 0xFFFFFF; // bottom right corner
+    check_eq!(changed_tiles(&old, &new, w, h), alloc::vec![(2 * TILE, TILE, w - 2 * TILE, h - TILE)]);
+    new[0] = 1;
+    check_eq!(changed_tiles(&old, &new, w, h).len(), 2);
     Ok(())
 }

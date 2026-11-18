@@ -354,6 +354,18 @@ pub fn request(kind: &str, fields: Obj, mut on_line: impl FnMut(&str)) -> Outcom
     send(&msg);
     let mut acked = false;
     let mut deadline = time::uptime_ms() + ACK_TIMEOUT_MS;
+    // Keys typed meanwhile (other than the ones that cancel) are given back
+    // afterwards: they were meant for what comes next.
+    let mut typed = Vec::new();
+    struct GiveBack<'a>(&'a mut Vec<Key>);
+    impl Drop for GiveBack<'_> {
+        fn drop(&mut self) {
+            for key in self.0.drain(..) {
+                input::unread(key);
+            }
+        }
+    }
+    let typed = GiveBack(&mut typed);
     loop {
         while let Some(m) = poll_message() {
             if m.num("id") != Some(id) {
@@ -371,8 +383,10 @@ pub fn request(kind: &str, fields: Obj, mut on_line: impl FnMut(&str)) -> Outcom
         while let Some(k) = input::poll_key() {
             if matches!(k, Key::Ctrl('c') | Key::Escape) {
                 send(&Obj::new().str("type", "cancel").num("id", id).finish());
+                typed.0.clear();
                 return Outcome::Cancelled;
             }
+            typed.0.push(k);
         }
         if over_network && !LINK.get().connected {
             return Outcome::Error("the connection to the AI host was lost".into());
@@ -709,8 +723,10 @@ fn session(settings: &Settings, generation: u32) -> (bool, String) {
         if let Some(problem) = problem {
             break problem;
         }
-        let tick = time::uptime_ms();
-        thread::wait_until(|| time::uptime_ms() != tick || !LINK.get().outgoing.is_empty());
+        // Until there is something to send, something arrived, or the next
+        // timer tick: an answer is handed on as soon as it is there.
+        let (tick, frames) = (time::uptime_ms(), crate::net::frames_received());
+        thread::wait_until(|| time::uptime_ms() != tick || !LINK.get().outgoing.is_empty() || crate::net::frames_received() != frames);
     };
     (true, String::from(ended))
 }

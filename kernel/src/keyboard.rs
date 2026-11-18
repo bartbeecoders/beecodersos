@@ -73,8 +73,22 @@ pub fn push_scancode(code: u8) {
     SCANCODES.push(code);
 }
 
+/// Keys typed from elsewhere (the remote desktop, vnc.rs): already
+/// decoded, so no keyboard layout applies to them. At most `MAX_INJECTED`.
+static INJECTED: Global<alloc::collections::VecDeque<Key>> = Global::new(alloc::collections::VecDeque::new());
+const MAX_INJECTED: usize = 64;
+
+/// Type a key as if on this keyboard: it goes where keys go (the window
+/// that has the focus, or the console).
+pub fn push_key(key: Key) {
+    let queue = INJECTED.get();
+    if queue.len() < MAX_INJECTED {
+        queue.push_back(key);
+    }
+}
+
 pub fn pending() -> bool {
-    !SCANCODES.is_empty() || STATE.get().queued.is_some()
+    !SCANCODES.is_empty() || STATE.get().queued.is_some() || !INJECTED.get().is_empty()
 }
 
 /// Decode queued scancodes into the next key event, if any.
@@ -82,6 +96,9 @@ pub fn poll() -> Option<Key> {
     let s = STATE.get();
     if let Some(c) = s.queued.take() {
         return Some(Key::Char(c));
+    }
+    if let Some(key) = INJECTED.get().pop_front() {
+        return Some(key);
     }
     while let Some(sc) = SCANCODES.pop() {
         if let Some(k) = s.feed(sc) {

@@ -88,7 +88,7 @@ DEFAULT_TARGETS = ["127.0.0.1:4555", "127.0.0.1:4556"]  # libvirt vm1, make run
 WIDTH = 78  # the OS console is 80 columns
 
 SYSTEM_PROMPT = """You are the built-in assistant of BeeCodersOs, a small hobby operating system \
-written from scratch in Rust. People talk to you from its shell with the `ask` and `explain` commands.
+written from scratch in Rust. People talk to you from its shell with the `ask`, `explain` and `do` commands.
 
 Your answers appear on an 80-column text console:
 - Plain text only. No Markdown: no **bold**, # headings, `backticks`, tables or code fences.
@@ -104,6 +104,15 @@ If BeeCodersOs cannot do something, say so plainly and suggest the user type \
 <reference>
 {readme}
 </reference>"""
+
+DO_TASK = """Task for the shell: {text}
+Current directory: {cwd}
+The user wants BeeCodersOs to do this with BeeShell commands (the `do` command). Answer with \
+one short sentence saying what you will do, then the commands, each on its own line starting \
+with "$ " (dollar, space), at most 10 of them, in the order to run them. Use only commands \
+from the reference, with their exact syntax; each command line under 76 characters. The user \
+sees the commands and decides whether they run. If it cannot be done with the commands that \
+exist, give no "$ " lines and say why in one sentence."""
 
 EXPLAIN_FAILURE = """The user ran this BeeShell command line:
   {cmd}
@@ -138,6 +147,14 @@ class FakeBackend:
     name, model = "fake", "fake"
 
     def stream(self, system: str, prompt: str, cancel: threading.Event):
+        if prompt.startswith("Task for the shell: "):
+            # `do`: the task itself is the plan, commands separated by ";".
+            task = prompt.split("\n", 1)[0][len("Task for the shell: "):]
+            yield "Plan from the fake backend (no LLM).\n"
+            for cmd in task.split(";"):
+                if cmd.strip():
+                    yield f"$ {cmd.strip()}\n"
+            return
         if "slow" in prompt:
             for _ in range(200):  # 20 s, unless cancelled
                 if cancel.is_set():
@@ -640,7 +657,7 @@ class Link(threading.Thread):
                       **{k: msg.get(k) for k in ("kind", "text", "build", "t")}}
             self.hive.state.append("signals.jsonl", record)
             log(f"{self.target}: signal {msg.get('kind')}: {str(msg.get('text'))[:60]}")
-        elif kind in ("ask", "explain") and isinstance(msg.get("id"), int):
+        elif kind in ("ask", "explain", "do") and isinstance(msg.get("id"), int):
             ev = threading.Event()
             self.cancels[msg["id"]] = ev
             threading.Thread(target=self.answer, args=(msg, ev), daemon=True).start()
@@ -979,6 +996,8 @@ class Hive:
         get = lambda k, d="": str(msg.get(k) or d)
         if msg["type"] == "ask":
             return f"Current directory: {get('cwd', '/')}\nQuestion: {get('text')}"
+        if msg["type"] == "do":
+            return DO_TASK.format(text=get("text").replace("\n", " "), cwd=get("cwd", "/"))
         if msg.get("crash"):
             return EXPLAIN_CRASH.format(build=get("build", "?"), cmd=get("cmd", "?"),
                                         kind=get("kind", "panic"), crash=get("crash"))

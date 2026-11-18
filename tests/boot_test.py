@@ -17,6 +17,7 @@ Scenario files (tests/scenarios/*.scn):
     @disk                      (first lines) boot with a fresh BeeFS disk instead of the RAM disk
     @sata                      (first lines, with @disk) attach the disk to an AHCI (SATA)
                                controller instead of the legacy IDE ports
+    @cpus N                    (first lines) the machine has N processors instead of one
     @e1000e                    (first lines, with @net or @wire) the network card is an
                                e1000e (Intel 82574L) instead of the e1000
     @ai                        (first lines) attach COM2 and run beehive with its fake backend
@@ -188,7 +189,7 @@ class Vm:
 
     def __init__(self, *, kernel_args=None, cdrom=None, disk=None, uefi=False, ai_port=None, bootdisk=None,
                  wire=None, usernet=None, forward=None, forward_shell=None, sata=False, nic="e1000",
-                 extra_args=None, vga=None, qmp=None, usb=None, initrd=None):
+                 extra_args=None, vga=None, qmp=None, usb=None, initrd=None, cpus=None):
         # The ISO carries the install image (17 MiB), which the bootloader loads into
         # memory: under UEFI that needs more than 128 MiB.
         cmd = ["qemu-system-x86_64", "-m", "256M" if cdrom else "128M", "-display", "none", "-serial", "stdio",
@@ -196,6 +197,8 @@ class Vm:
                "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04"]
         if USE_KVM:
             cmd += ["-enable-kvm", "-cpu", "host"]
+        if cpus:
+            cmd += ["-smp", str(cpus)]
         if cdrom:
             cmd += ["-cdrom", str(cdrom)]
         elif bootdisk and sata:  # the same, from a SATA disk
@@ -447,7 +450,7 @@ def parse_scenario(path: Path):
         elif line in ("@boot-disk", "@boot-disk crash", "@disk-untouched", "@boot-medium") or line.startswith("@boot-medium "):
             kind, _, arg = line[1:].partition(" ")
             steps.append((kind, arg.strip() or f"({kind})", []))
-        elif line.startswith(("@args ", "@vga ")):
+        elif line.startswith(("@args ", "@vga ", "@cpus ")):
             opts.add(line[1:].replace(" ", ":", 1))
         elif line.startswith("@screenshot "):
             steps.append(("screenshot", line[12:].strip(), []))
@@ -1002,6 +1005,7 @@ def test_scenario(path: Path):
         forward = free_port() if "forward" in opts else None
         forward_shell = free_port() if "forward" in opts else None
         extra_args = next((o[5:] for o in opts if o.startswith("args:")), None)
+        cpus = next((int(o[5:]) for o in opts if o.startswith("cpus:")), None)
         if extra_args and bootdisk:
             raise TestFailure(f"{path.name}: @args does not work with @bootdisk")
         vga = next((o[4:] for o in opts if o.startswith("vga:")), None)
@@ -1047,7 +1051,7 @@ def test_scenario(path: Path):
             return Vm(disk=disk, ai_port=ai_port, bootdisk=bootdisk, wire=wire.ports if wire else None,
                       usernet=usernet, forward=forward, forward_shell=forward_shell, sata="sata" in opts,
                       nic="e1000e" if "e1000e" in opts else "e1000", extra_args=extra_args, vga=vga, qmp=qmp,
-                      usb=usb, initrd=medium(mode["medium"]) if medium_words is not None else None)
+                      usb=usb, initrd=medium(mode["medium"]) if medium_words is not None else None, cpus=cpus)
 
         vm = boot()
         out = []

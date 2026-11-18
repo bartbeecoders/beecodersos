@@ -156,6 +156,9 @@ pub struct Desktop {
     pointer: Option<Pointer>,
     /// Buttons on the desktop itself, in a row at the top: label and place.
     buttons: Vec<(String, Rect)>,
+    /// The clock at the right end of the row (empty: none), and the screen's width.
+    clock: String,
+    width: usize,
 }
 
 /// Where the row of desktop buttons starts, and how high a button is.
@@ -165,7 +168,7 @@ const BUTTON_GAP: usize = 8;
 
 impl Desktop {
     pub fn new() -> Self {
-        Desktop { windows: Vec::new(), ids: Vec::new(), next_id: 0, pointer: None, buttons: Vec::new() }
+        Desktop { windows: Vec::new(), ids: Vec::new(), next_id: 0, pointer: None, buttons: Vec::new(), clock: String::new(), width: 0 }
     }
 
     /// Put a row of buttons on the desktop (to start programs with the
@@ -173,6 +176,7 @@ impl Desktop {
     /// left out. Returns where each one is.
     pub fn set_buttons(&mut self, labels: &[&str], width: usize) -> Vec<Rect> {
         self.buttons.clear();
+        self.width = width;
         let mut x = BUTTONS_AT.0;
         for label in labels {
             let w = (label.chars().count() + 2) * GLYPH_WIDTH;
@@ -183,6 +187,32 @@ impl Desktop {
             x += w + BUTTON_GAP;
         }
         self.buttons.iter().map(|(_, rect)| *rect).collect()
+    }
+
+    /// Where the clock goes for this text: at the right end of the row of
+    /// buttons; `None` if it would not fit next to them.
+    fn clock_place(&self, text: &str) -> Option<Rect> {
+        if text.is_empty() {
+            return None;
+        }
+        let w = (text.chars().count() + 2) * GLYPH_WIDTH;
+        let x = self.width.checked_sub(w + BUTTONS_AT.0 / 2)?;
+        let end_of_buttons = self.buttons.last().map_or(BUTTONS_AT.0, |(_, r)| r.x + r.width + BUTTON_GAP);
+        (x >= end_of_buttons).then(|| Rect::new(x, BUTTONS_AT.1, w, BUTTON_HEIGHT))
+    }
+
+    /// Show this text as the clock ("" hides it). Returns the part of the
+    /// screen to draw again (nothing when the text did not change).
+    pub fn set_clock(&mut self, text: &str) -> Option<Rect> {
+        if self.clock == text {
+            return None;
+        }
+        let old = self.clock_place(&self.clock);
+        self.clock = String::from(text);
+        match (old, self.clock_place(text)) {
+            (Some(a), Some(b)) => Some(a.union(&b)),
+            (a, b) => a.or(b),
+        }
     }
 
     /// Add a window on top of the others; returns its number (the first
@@ -241,19 +271,27 @@ impl Desktop {
     /// Draw the background and every window frame. The owners then draw
     /// their content again.
     pub fn draw(&self, canvas: &Canvas) {
-        self.draw_with(canvas, |_, _| {});
+        self.draw_with(canvas, None, |_, _| {});
     }
 
     /// The same, for windows that overlap: after each frame, back to front,
     /// `content` is called with the window's number and the window, to
     /// draw what is inside before the next window goes over it.
-    pub fn draw_with(&self, canvas: &Canvas, mut content: impl FnMut(usize, &Window)) {
-        canvas.fill_rect(canvas.bounds(), BACKGROUND);
+    /// `wallpaper`: a picture of the screen's size behind everything, instead of the plain color.
+    pub fn draw_with(&self, canvas: &Canvas, wallpaper: Option<&Canvas>, mut content: impl FnMut(usize, &Window)) {
+        match wallpaper {
+            Some(picture) => canvas.blit(picture, 0, 0),
+            None => canvas.fill_rect(canvas.bounds(), BACKGROUND),
+        }
         for (label, rect) in &self.buttons {
             canvas.fill_rect(*rect, BORDER_COLOR);
             let inside = Rect::new(rect.x + 1, rect.y + 1, rect.width - 2, rect.height - 2);
             canvas.fill_rect(inside, TITLE_BAR);
             canvas.text(rect.x + GLYPH_WIDTH, rect.y + 4, label, TITLE_TEXT, TITLE_BAR, rect.width);
+        }
+        if let Some(rect) = self.clock_place(&self.clock) {
+            canvas.fill_rect(rect, BORDER_COLOR);
+            canvas.text(rect.x + GLYPH_WIDTH, rect.y + 4, &self.clock, TITLE_TEXT, BORDER_COLOR, rect.width);
         }
         for (i, window) in self.windows.iter().enumerate() {
             window.draw(canvas, i + 1 == self.windows.len());

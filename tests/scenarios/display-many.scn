@@ -1,0 +1,21 @@
+# The screen drawn by four processors: after `cpu start` the console's
+# lines and the copy to video memory are spread over all of them. What a
+# monitor shows must be the same as with one.
+@cpus 4
+@args desktop=off
+$ cpu start
+4 of 4 processors in use
+@screenshot 1920x1080 text
+$& display test
+@screenshot 1920x1080 bars
+> x
+$wait
+color bars on the screen: press Enter to go on
+~ ^drawing the whole screen again took \d+\.\d ms$
+@screenshot 1920x1080 text
+$ display speed
+~ ^drawing the whole screen again takes \d+\.\d ms \(best of 5\)$
+~ ^of which copying to video memory: \d+\.\d ms$
+$ echo still typing
+still typing
+@screenshot 1920x1080 text

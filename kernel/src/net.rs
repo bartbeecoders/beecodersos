@@ -206,6 +206,17 @@ pub fn take_notice() -> Option<(&'static str, String)> {
     NET.get().as_mut()?.notices.pop_front()
 }
 
+/// Bytes received and sent so far (0 without a network card).
+pub fn traffic() -> (u64, u64) {
+    NET.get().as_ref().map_or((0, 0), |net| (net.counters.rx_bytes, net.counters.tx_bytes))
+}
+
+/// How many frames arrived so far: a thread that waits for the network
+/// can wake up when this changes instead of at the next timer tick.
+pub fn frames_received() -> u64 {
+    NET.get().as_ref().map_or(0, |net| net.counters.rx_frames)
+}
+
 /// Start the thread that keeps the network going: it looks at the card when
 /// the card interrupts, and on every timer tick anyway (timeouts, and cards
 /// whose interrupt can't be used), whatever the other threads are doing.

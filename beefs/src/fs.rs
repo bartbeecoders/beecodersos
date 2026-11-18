@@ -249,7 +249,21 @@ pub struct FileSystem<D: BlockDevice> {
     dev: D,
     sb: Superblock,
     sb_dirty: bool,
+    /// Bookkeeping blocks (bitmap, pointer tables) read or changed during
+    /// the current operation: (block, content, changed). Written to the
+    /// device once, when the operation ends (`commit`), instead of after
+    /// every data block. Nothing else reads these blocks meanwhile.
+    meta: Vec<(u64, Block, bool)>,
+    /// The bitmap block where the last free block was found: the next
+    /// search starts there.
+    bitmap_hint: u32,
+    /// The data block about to be allocated will be filled completely by
+    /// its writer: it need not be zeroed first.
+    whole_block: bool,
 }
+
+/// At most this many bookkeeping blocks are kept (bitmap, tables at two levels).
+const META_CACHE: usize = 6;
 
 impl<D: BlockDevice> FileSystem<D> {
     // ----- lifecycle --------------------------------------------------------
@@ -293,7 +307,7 @@ impl<D: BlockDevice> FileSystem<D> {
             free_blocks: total - data_start,
             free_inodes: inode_count - 1,
         };
-        let mut fs = FileSystem { dev, sb, sb_dirty: true };
+        let mut fs = FileSystem { dev, sb, sb_dirty: true, meta: Vec::new(), bitmap_hint: 0, whole_block: false };
         fs.write_inode(ROOT_INODE, &Inode::new(KIND_DIR))?;
         fs.commit()?;
         Ok(fs)
@@ -307,7 +321,7 @@ impl<D: BlockDevice> FileSystem<D> {
         if sb.block_count as u64 > dev.block_count() {
             return Err(FsError::Corrupt);
         }
-        Ok(FileSystem { dev, sb, sb_dirty: false })
+        Ok(FileSystem { dev, sb, sb_dirty: false, meta: Vec::new(), bitmap_hint: 0, whole_block: false })
     }
 
     /// Does `dev` contain a BeeFS filesystem? (Reads block 0 only.)
@@ -459,6 +473,7 @@ impl<D: BlockDevice> FileSystem<D> {
     }
 
     fn commit(&mut self) -> Result<()> {
+        self.write_meta()?;
         if self.sb_dirty {
             let b = self.sb.encode();
             self.dev.write_block(0, &b)?;
@@ -657,7 +672,12 @@ impl<D: BlockDevice> FileSystem<D> {
             let pos = offset + done as u64;
             let block_off = (pos % BLOCK_SIZE as u64) as usize;
             let n = (BLOCK_SIZE - block_off).min(data.len() - done);
-            let block = self.map_block(inode, pos / BLOCK_SIZE as u64, true)?;
+            // A data block that this write fills completely need not be
+            // zeroed first (pointer tables allocated on the way always are).
+            self.whole_block = n == BLOCK_SIZE;
+            let block = self.map_block(inode, pos / BLOCK_SIZE as u64, true);
+            self.whole_block = false;
+            let block = block?;
             if n < BLOCK_SIZE {
                 self.dev.read_block(block as u64, &mut buf)?;
             }
@@ -673,48 +693,57 @@ impl<D: BlockDevice> FileSystem<D> {
     fn map_block(&mut self, inode: &mut Inode, idx: u64, alloc: bool) -> Result<u32> {
         let p = PTRS_PER_BLOCK;
         if idx < DIRECT as u64 {
-            return self.ensure(&mut inode.direct[idx as usize], alloc);
+            return self.ensure(&mut inode.direct[idx as usize], alloc, false);
         }
         let idx = idx - DIRECT as u64;
         if idx < p {
-            let table = self.ensure(&mut inode.indirect, alloc)?;
+            let table = self.ensure(&mut inode.indirect, alloc, true)?;
             if table == 0 {
                 return Ok(0);
             }
-            return self.table_entry(table, idx as usize, alloc);
+            return self.table_entry(table, idx as usize, alloc, false);
         }
         let idx = idx - p;
         if idx < p * p {
-            let top = self.ensure(&mut inode.dindirect, alloc)?;
+            let top = self.ensure(&mut inode.dindirect, alloc, true)?;
             if top == 0 {
                 return Ok(0);
             }
-            let mid = self.table_entry(top, (idx / p) as usize, alloc)?;
+            let mid = self.table_entry(top, (idx / p) as usize, alloc, true)?;
             if mid == 0 {
                 return Ok(0);
             }
-            return self.table_entry(mid, (idx % p) as usize, alloc);
+            return self.table_entry(mid, (idx % p) as usize, alloc, false);
         }
         Err(FsError::FileTooLarge)
     }
 
-    fn ensure(&mut self, slot: &mut u32, alloc: bool) -> Result<u32> {
+    /// The block in `slot`, allocated if it is 0 and `alloc`. `table`: the
+    /// new block is a pointer table, which is always zeroed.
+    fn ensure(&mut self, slot: &mut u32, alloc: bool, table: bool) -> Result<u32> {
         if *slot == 0 && alloc {
-            *slot = self.alloc_block()?;
+            *slot = if table { self.alloc_table()? } else { self.alloc_block()? };
         }
         Ok(*slot)
     }
 
-    fn table_entry(&mut self, table: u32, i: usize, alloc: bool) -> Result<u32> {
-        let mut buf = [0u8; BLOCK_SIZE];
-        self.dev.read_block(table as u64, &mut buf)?;
+    /// A new pointer table: zeroed, whatever the data block after it needs.
+    fn alloc_table(&mut self) -> Result<u32> {
+        let whole = core::mem::replace(&mut self.whole_block, false);
+        let r = self.alloc_block();
+        self.whole_block = whole;
+        r
+    }
+
+    fn table_entry(&mut self, table: u32, i: usize, alloc: bool, new_is_table: bool) -> Result<u32> {
+        let mut buf = self.meta_read(table as u64)?;
         let v = rd32(&buf, i * 4);
         if v != 0 || !alloc {
             return Ok(v);
         }
-        let new = self.alloc_block()?;
+        let new = if new_is_table { self.alloc_table()? } else { self.alloc_block()? };
         wr32(&mut buf, i * 4, new);
-        self.dev.write_block(table as u64, &buf)?;
+        self.meta_write(table as u64, &buf)?;
         Ok(new)
     }
 
@@ -737,8 +766,7 @@ impl<D: BlockDevice> FileSystem<D> {
 
     /// Free a pointer table, its children (`depth` levels), and itself.
     fn free_table(&mut self, table: u32, depth: u32) -> Result<()> {
-        let mut buf = [0u8; BLOCK_SIZE];
-        self.dev.read_block(table as u64, &mut buf)?;
+        let buf = self.meta_read(table as u64)?;
         for i in 0..PTRS_PER_BLOCK as usize {
             let b = rd32(&buf, i * 4);
             if b == 0 {
@@ -753,16 +781,64 @@ impl<D: BlockDevice> FileSystem<D> {
         self.free_block(table)
     }
 
+    // ----- bookkeeping blocks, kept during an operation -----------------------
+
+    fn meta_read(&mut self, block: u64) -> Result<Block> {
+        if let Some(at) = self.meta.iter().position(|(b, _, _)| *b == block) {
+            // The most recently used stays at the end.
+            let entry = self.meta.remove(at);
+            let content = entry.1;
+            self.meta.push(entry);
+            return Ok(content);
+        }
+        let mut buf = [0u8; BLOCK_SIZE];
+        self.dev.read_block(block, &mut buf)?;
+        self.meta_keep(block, buf, false)?;
+        Ok(buf)
+    }
+
+    fn meta_write(&mut self, block: u64, buf: &Block) -> Result<()> {
+        self.meta.retain(|(b, _, _)| *b != block);
+        self.meta_keep(block, *buf, true)
+    }
+
+    fn meta_keep(&mut self, block: u64, buf: Block, changed: bool) -> Result<()> {
+        if self.meta.len() >= META_CACHE {
+            let (old, content, old_changed) = self.meta.remove(0);
+            if old_changed {
+                self.dev.write_block(old, &content)?;
+            }
+        }
+        self.meta.push((block, buf, changed));
+        Ok(())
+    }
+
+    /// A block was freed or handed out anew: what was kept of it is stale.
+    fn meta_forget(&mut self, block: u64) {
+        self.meta.retain(|(b, _, _)| *b != block);
+    }
+
+    fn write_meta(&mut self) -> Result<()> {
+        for (block, content, changed) in core::mem::take(&mut self.meta) {
+            if changed {
+                self.dev.write_block(block, &content)?;
+            }
+        }
+        Ok(())
+    }
+
     // ----- block allocation ---------------------------------------------------
 
     fn alloc_block(&mut self) -> Result<u32> {
         if self.sb.free_blocks == 0 {
             return Err(FsError::NoSpace);
         }
-        let mut buf = [0u8; BLOCK_SIZE];
-        for i in 0..self.sb.bitmap_blocks {
+        // From where the last free block was found, round to the start.
+        let count = self.sb.bitmap_blocks;
+        for n in 0..count {
+            let i = (self.bitmap_hint + n) % count;
             let bm = (self.sb.bitmap_start + i) as u64;
-            self.dev.read_block(bm, &mut buf)?;
+            let mut buf = self.meta_read(bm)?;
             let Some(byte) = buf.iter().position(|&b| b != 0xFF) else { continue };
             let bit = (!buf[byte]).trailing_zeros();
             let block = i * BITS_PER_BLOCK + byte as u32 * 8 + bit;
@@ -770,10 +846,14 @@ impl<D: BlockDevice> FileSystem<D> {
                 return Err(FsError::Corrupt);
             }
             buf[byte] |= 1 << bit;
-            self.dev.write_block(bm, &buf)?;
+            self.meta_write(bm, &buf)?;
+            self.bitmap_hint = i;
             self.sb.free_blocks -= 1;
             self.sb_dirty = true;
-            self.dev.write_block(block as u64, &[0u8; BLOCK_SIZE])?;
+            self.meta_forget(block as u64);
+            if !core::mem::take(&mut self.whole_block) {
+                self.dev.write_block(block as u64, &[0u8; BLOCK_SIZE])?;
+            }
             return Ok(block);
         }
         Err(FsError::NoSpace)
@@ -785,12 +865,12 @@ impl<D: BlockDevice> FileSystem<D> {
         }
         let bm = (self.sb.bitmap_start + block / BITS_PER_BLOCK) as u64;
         let bit = block % BITS_PER_BLOCK;
-        let mut buf = [0u8; BLOCK_SIZE];
-        self.dev.read_block(bm, &mut buf)?;
+        self.meta_forget(block as u64);
+        let mut buf = self.meta_read(bm)?;
         let mask = 1u8 << (bit % 8);
         if buf[(bit / 8) as usize] & mask != 0 {
             buf[(bit / 8) as usize] &= !mask;
-            self.dev.write_block(bm, &buf)?;
+            self.meta_write(bm, &buf)?;
             self.sb.free_blocks += 1;
             self.sb_dirty = true;
         }
@@ -816,6 +896,10 @@ impl<D: BlockDevice> FileSystem<D> {
     }
 
     fn write_inode(&mut self, ino: u32, inode: &Inode) -> Result<()> {
+        // What the inode points to (tables, the bitmap) reaches the disk
+        // first, as before the bookkeeping blocks were kept: a crash in
+        // between never leaves an inode pointing at tables not written yet.
+        self.write_meta()?;
         let (block, off) = self.inode_location(ino)?;
         let mut buf = [0u8; BLOCK_SIZE];
         self.dev.read_block(block, &mut buf)?;
@@ -947,6 +1031,74 @@ mod tests {
         let mut fs = FileSystem::mount(fs.into_device()).unwrap();
         assert_eq!(fs.read_file("/big.bin").unwrap(), data);
         assert_eq!(fs.metadata("/big.bin").unwrap().size, 200_000);
+    }
+
+    /// A RamDisk that counts what is done to it.
+    struct Counting {
+        disk: RamDisk,
+        reads: u64,
+        writes: u64,
+    }
+
+    impl BlockDevice for Counting {
+        fn block_count(&self) -> u64 {
+            self.disk.block_count()
+        }
+        fn read_block(&mut self, i: u64, b: &mut Block) -> Result<()> {
+            self.reads += 1;
+            self.disk.read_block(i, b)
+        }
+        fn write_block(&mut self, i: u64, b: &Block) -> Result<()> {
+            self.writes += 1;
+            self.disk.write_block(i, b)
+        }
+    }
+
+    #[test]
+    fn large_writes_do_little_bookkeeping() {
+        let dev = Counting { disk: RamDisk::new(4 * 1024 * 1024), reads: 0, writes: 0 };
+        let mut fs = FileSystem::format(dev).unwrap();
+        let data: Vec<u8> = (0..1_440_054u32).map(|i| (i * 7 % 253) as u8).collect();
+        let blocks = data.len().div_ceil(BLOCK_SIZE) as u64;
+        let (r0, w0) = (fs.device().reads, fs.device().writes);
+        fs.write_file("/paper.bmp", &data).unwrap();
+        let (reads, writes) = (fs.device().reads - r0, fs.device().writes - w0);
+        // Each data block once, plus a little bookkeeping (was: 4 writes
+        // and 3 reads per block).
+        assert!(writes <= blocks + blocks / 20, "{writes} writes for {blocks} blocks");
+        assert!(reads <= blocks / 20, "{reads} reads for {blocks} blocks");
+        // Everything is on the device: a fresh mount reads it back.
+        let mut fs = FileSystem::mount(fs.into_device().disk).unwrap();
+        assert_eq!(fs.read_file("/paper.bmp").unwrap(), data);
+    }
+
+    #[test]
+    fn rewrite_reuses_freed_tables_as_data() {
+        // Writing a file again frees its blocks (pointer tables too) and
+        // allocates new ones in the same operation: a freed table that comes
+        // back as data must hold the data, not the old table.
+        let mut fs = fresh();
+        let first: Vec<u8> = (0..400_000u32).map(|i| (i % 249) as u8).collect();
+        let second: Vec<u8> = (0..390_000u32).map(|i| (i * 13 % 241) as u8).collect();
+        fs.write_file("/f", &first).unwrap();
+        let free = fs.stats().free_blocks;
+        fs.write_file("/f", &second).unwrap();
+        assert_eq!(fs.read_file("/f").unwrap(), second);
+        fs.write_file("/f", b"small").unwrap();
+        fs.append("/f", &first[..1000]).unwrap();
+        let mut fs = FileSystem::mount(fs.into_device()).unwrap();
+        let mut expected = b"small".to_vec();
+        expected.extend_from_slice(&first[..1000]);
+        assert_eq!(fs.read_file("/f").unwrap(), expected);
+        // Writing the big file again leaves as many blocks free as before.
+        fs.write_file("/f", &first).unwrap();
+        assert_eq!(fs.stats().free_blocks, free);
+        // A partial block written to a fresh block reads back zeros after it.
+        fs.write_file("/g", &[9u8; 100]).unwrap();
+        fs.append("/g", &[8u8; 10]).unwrap();
+        let g = fs.read_file("/g").unwrap();
+        assert_eq!(g.len(), 110);
+        assert!(g[..100].iter().all(|b| *b == 9) && g[100..].iter().all(|b| *b == 8));
     }
 
     #[test]

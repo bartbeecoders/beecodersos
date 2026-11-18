@@ -31,10 +31,11 @@ Connection: close
 ~ <td>command net: ok</td>
 !~ 10\.0\.2\.
 ~ No files are shared\. Files put in /public appear here\.
+# Threads: 4 since the desktop clock got a thread of its own (clock.rs).
 @request GET /status.json
 HTTP/1.1 200 OK
 Content-Type: application/json
-~ ^\{"os":"BeeCodersOs","version":"[\d.]+","build":"\d+","uptime_ms":\d+,"time":"[^"]+","slot":"","on_trial":false,"threads":3,"heap_used_kib":\d+\}$
+~ ^\{"os":"BeeCodersOs","version":"[\d.]+","build":"\d+","uptime_ms":\d+,"time":"[^"]+","slot":"","on_trial":false,"threads":4,"heap_used_kib":\d+\}$
 # Files: only what is in /public, by plain name.
 $ mkdir /public
 $ echo shared with the network > /public/hello.txt
