@@ -301,16 +301,22 @@ pub fn run(window: usize, start: String, mut storage: Storage) {
                 }
             }
             Action::Delete(path) => {
-                let result = storage.fs().remove(&path);
+                let result = crate::users::console_may_change(&mut storage, &path)
+                    .map_err(|whose| alloc::format!("it {whose}"))
+                    .and_then(|()| storage.fs().remove(&path).map_err(|e| alloc::format!("{e}")));
                 said = Some(match result {
                     Ok(()) => (String::from("deleted"), false),
                     Err(e) => (format!("not deleted: {e}"), true),
                 });
             }
             Action::MakeFolder(path) => {
-                let result = {
-                    let mut fs = storage.fs();
-                    if fs.exists(&path) { Err(beefs::FsError::AlreadyExists) } else { fs.mkdir_all(&path) }
+                let result = match crate::users::console_may_change(&mut storage, &path) {
+                    Err(whose) => Err(format!("this folder {whose}")),
+                    Ok(()) => {
+                        let mut fs = storage.fs();
+                        let made = if fs.exists(&path) { Err(beefs::FsError::AlreadyExists) } else { fs.mkdir_all(&path) };
+                        made.map_err(|e| format!("{e}"))
+                    }
                 };
                 match result {
                     Ok(()) => choose = path.rsplit('/').next().map(String::from),
@@ -318,9 +324,13 @@ pub fn run(window: usize, start: String, mut storage: Storage) {
                 }
             }
             Action::Rename(from, to) => {
-                let result = {
-                    let mut fs = storage.fs();
-                    if fs.exists(&to) { Err(beefs::FsError::AlreadyExists) } else { fs.rename(&from, &to) }
+                let result = match crate::users::console_may_change(&mut storage, &from) {
+                    Err(whose) => Err(format!("it {whose}")),
+                    Ok(()) => {
+                        let mut fs = storage.fs();
+                        let renamed = if fs.exists(&to) { Err(beefs::FsError::AlreadyExists) } else { fs.rename(&from, &to) };
+                        renamed.map_err(|e| format!("{e}"))
+                    }
                 };
                 match result {
                     Ok(()) => choose = to.rsplit('/').next().map(String::from),

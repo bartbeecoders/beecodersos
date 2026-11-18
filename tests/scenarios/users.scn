@@ -51,6 +51,21 @@ $ vnc
 remote desktop (VNC): off (vnc on [PORT] starts it)
 $ useradd eve
 useradd: only for admins (ann is not one; see whoami)
+# Files: her home is hers, /system the admins', bart's home bart's; anyone may read.
+$ echo hello > /home/ann/a.txt
+$ cat /home/ann/a.txt
+hello
+$ echo shared > /shared.txt
+$ echo x > /home/bart/b.txt
+/home/bart/b.txt: belongs to bart (anyone may read it, only they may change it)
+$ rm /system/users
+/system/users: belongs to the admins (anyone may read it, only they may change it)
+$ mv /home/ann/a.txt /home/bart/a.txt
+/home/bart/a.txt: belongs to bart (anyone may read it, only they may change it)
+$ mkdir /home/eve
+/home/eve: belongs to eve (anyone may read it, only they may change it)
+$ cat /system/users
+~ ^bart:admin:
 # A wrong password: a pause, and the question again.
 $& logout
 > bart
@@ -60,6 +75,7 @@ $& logout
 $wait
 wrong name or password
 welcome, bart
+$ echo admins-may > /home/ann/from-bart.txt
 $ userdel ann
 account ann removed (its home folder stays)
 $ userdel bart

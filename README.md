@@ -1045,10 +1045,20 @@ give nobody anything. Logins are logged as "ok" or "wrong", never with a
 name. Terminal windows run as whoever is logged in at the console; the AI
 host's control shell keeps admin rights (`ai control on` at the console
 allowed it); the remote shell keeps its own password and has no admin
-rights once there are accounts. Files have no owners yet: that is the next
-step. Tests: a self-test (the file, passwords, what needs an admin) and
-`users.scn` (first account, an ordinary one, refusals, logging out and in,
-a wrong password).
+rights once there are accounts.
+
+**Who may change which files** follows the folder (`users::owner_blocking`):
+your home folder `/home/NAME` is yours, `/system` belongs to the admins,
+everything else is shared; admins may change everything, and anyone may
+read. It is checked by every shell command that writes (`echo >`, `cp`,
+`mv`, `rm`, `mkdir`, `touch`, `wget`, `tftp get`, `screenshot`) and by the
+editor and the file manager, which act for whoever is logged in at the
+console: "PATH: belongs to NAME (anyone may read it, only they may change
+it)". Owners per file would need room in BeeFS's inodes (its on-disk
+format is protected). Tests: a self-test (the file, passwords, what needs
+an admin, who may change what) and `users.scn` (first account, an ordinary
+one, refusals, files in homes and /system, logging out and in, a wrong
+password).
 
 ## Remote desktop: `vnc` ✅ in QEMU
 
