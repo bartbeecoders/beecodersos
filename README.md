@@ -319,7 +319,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `head`, `tail`, `wc`, `grep`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
-`mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `ai`,
+`mem`, `about`, `calc`, `date`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `do`, `ai`,
 `slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `cpu`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Text tools** (`kernel/src/textops.rs`, self-tested; `text-tools.scn`):
@@ -476,7 +476,19 @@ holding an API key:
 
 - **In the OS:** `ask how do I copy a folder?` answers on screen (Ctrl+C
   cancels). `explain` explains the last failed command, or the crash of the
-  previous boot. `ai` shows the bridge status; `ai off` / `ai on` is the kill
+  previous boot. **`do TASK`** asks the AI to turn a task in plain words
+  into shell commands (`do "make a folder photos with a readme in it"`;
+  quotes keep `>` inside the task). They are listed, and run one after the
+  other only after **y**; the first that fails stops the rest. A plan never
+  runs `install`, `update`, `slots`, `reboot`, `shutdown`, `crash`, `ai`,
+  `remote`, `httpd`, `net`, another `do`/`ask`/`explain`, or a command that
+  changes a saved setting (`desktop off`, `cpu auto`...), even with y
+  (`kernel/src/doplan.rs`; the answer is untrusted: at most 10 commands of
+  200 characters, no control characters). Like `ask`, only the outcome is
+  logged, never the task or the plan; tested by a self-test and
+  `ai-do.scn`. Keys typed while the AI answers are kept for what comes
+  next (`input::unread`), so a `y` typed early is not lost.
+  `ai` shows the bridge status; `ai off` / `ai on` is the kill
   switch (saved in `/system/ai`). Wishes, feedback, missing commands and crash
   reports are also sent to beehive when it runs. Without beehive, or without a
   COM2 port, everything else works as before.
@@ -505,7 +517,7 @@ holding an API key:
     (default 200), every request with its answer in `exchanges.jsonl`, signals
     in `signals.jsonl`.
 - **Protocol** (one JSON object per line, documented in `kernel/src/aibridge.rs`):
-  `hello`/`welcome`, `ask`/`explain` -> `ack`, `line`..., `done` (or `error`),
+  `hello`/`welcome`, `ask`/`explain`/`do` -> `ack`, `line`..., `done` (or `error`),
   `cancel`, and fire-and-forget `signal`s.
 - **QEMU:** `make run` adds COM2 as a TCP server on port 4556. **libvirt:** `vm1`
   has a second serial port: *Add Hardware → Serial*, mode TCP, bind

@@ -1,6 +1,8 @@
 //! Unified input: key events from the PS/2 keyboard and the serial port.
 
+use crate::ring::Global;
 use crate::{acpi, aibridge, desk, keyboard, serial, session, thread};
+use alloc::collections::VecDeque;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
@@ -42,8 +44,33 @@ fn console_key() -> Option<Key> {
     None
 }
 
+/// Keys that were read while waiting for something else (an AI answer)
+/// and are given back: the next read returns them first. Each belongs to
+/// the session it was typed in (`None`: the console).
+static AHEAD: Global<VecDeque<(Option<u32>, Key)>> = Global::new(VecDeque::new());
+/// No more are kept than this.
+const MAX_AHEAD: usize = 32;
+
+/// Give a key back: the next `poll_key` / `read_key` of this session returns it.
+pub fn unread(key: Key) {
+    let ahead = AHEAD.get();
+    if ahead.len() < MAX_AHEAD {
+        ahead.push_back((session::current(), key));
+    }
+}
+
+fn take_ahead() -> Option<Key> {
+    let me = session::current();
+    let ahead = AHEAD.get();
+    let at = ahead.iter().position(|(owner, _)| *owner == me)?;
+    ahead.remove(at).map(|(_, key)| key)
+}
+
 /// The next key if one is waiting, without blocking.
 pub fn poll_key() -> Option<Key> {
+    if let Some(key) = take_ahead() {
+        return Some(key);
+    }
     if let Some(id) = session::current() {
         return session::poll_key(id);
     }
@@ -58,6 +85,10 @@ pub fn poll_key() -> Option<Key> {
 
 /// True when a key (or the power button) is waiting.
 pub fn pending() -> bool {
+    let me = session::current();
+    if AHEAD.get().iter().any(|(owner, _)| *owner == me) {
+        return true;
+    }
     if let Some(id) = session::current() {
         return session::pending(id);
     }
@@ -71,6 +102,9 @@ pub fn pending() -> bool {
 /// meanwhile, and the CPU sleeps (`hlt`) when none has anything to do.
 /// In a console session that has ended this returns Ctrl+D.
 pub fn read_key() -> Key {
+    if let Some(key) = take_ahead() {
+        return key;
+    }
     if let Some(id) = session::current() {
         return session::read_key(id).unwrap_or(Key::Ctrl('d'));
     }

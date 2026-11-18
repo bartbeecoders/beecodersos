@@ -8,7 +8,7 @@ use crate::vga::Color;
 use crate::aibridge::{self, Outcome};
 use crate::json::Obj;
 use crate::ring::Global;
-use crate::{allocator, bootslots, display, hivectl, httpd, install, update, remote, session, console, crash, eventlog, keyboard, net, pci, power, selftest, textops, thread, time};
+use crate::{allocator, bootslots, display, hivectl, httpd, install, update, remote, session, console, crash, eventlog, keyboard, net, pci, power, selftest, textops, doplan, thread, time};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -555,6 +555,8 @@ impl Shell {
             ("wish" | "feedback", words) => self.signal(&cmd, &words.join(" ")),
             ("ask", []) => error("usage: ask QUESTION"),
             ("ask", words) => self.ask(&words.join(" ")),
+            ("do", []) => error("usage: do TASK   (e.g. do make a folder photos with a file readme.txt in it)"),
+            ("do", words) => self.do_task(&words.join(" ")),
             ("explain", []) => self.explain(),
             ("ai", []) => self.ai_status(),
             ("ai", [s @ ("on" | "off")]) => self.ai_switch(s),
@@ -1345,6 +1347,71 @@ impl Shell {
         }
     }
 
+    /// `do TASK`: the AI suggests commands for the task; they run, one
+    /// after the other, only when the user says yes. Some are never run
+    /// (doplan::refused); the first one that fails stops the rest.
+    fn do_task(&mut self, task: &str) {
+        if !self.ai_ready() {
+            return;
+        }
+        let mut answer = Vec::new();
+        let fields = Obj::new().str("text", task).str("cwd", &self.cwd);
+        let outcome = aibridge::request("do", fields, |l| answer.push(String::from(l)));
+        let result = match outcome {
+            Outcome::Done => "done",
+            Outcome::Cancelled => "cancelled",
+            Outcome::Offline => "offline",
+            Outcome::Error(_) => "error",
+        };
+        // Only the outcome is logged, not the task or the plan.
+        let ev = eventlog::event("ai").str("kind", "do").str("result", result).num("lines", answer.len() as i64).finish();
+        eventlog::write(&mut self.storage.fs(), ev);
+        match outcome {
+            Outcome::Done => {}
+            Outcome::Cancelled => return println!("(cancelled)"),
+            Outcome::Offline => return error("AI offline: beehive is not running on the host (start it with: make beehive)"),
+            Outcome::Error(e) => return error(&format!("AI error: {e}")),
+        }
+        let (commands, notes) = doplan::parse(&answer);
+        console::set_color(Color::LightCyan, Color::Black);
+        for note in notes.iter().filter(|n| !n.trim().is_empty()) {
+            println!("{note}");
+        }
+        console::set_color(Color::LightGray, Color::Black);
+        if commands.is_empty() {
+            return println!("(no commands to run)");
+        }
+        for (i, cmd) in commands.iter().enumerate() {
+            match doplan::refused(cmd) {
+                Some(why) => println!("  {}. {cmd}   (will not run: {why})", i + 1),
+                None => println!("  {}. {cmd}", i + 1),
+            }
+        }
+        print!("Run {}? y: yes, any other key: no ", if commands.len() == 1 { "it" } else { "them" });
+        console::flush();
+        let yes = matches!(crate::input::read_key(), crate::input::Key::Char('y' | 'Y'));
+        println!();
+        if !yes {
+            return println!("nothing was run");
+        }
+        let (mut ran, total) = (0, commands.len());
+        for cmd in &commands {
+            if let Some(why) = doplan::refused(cmd) {
+                println!("skipped: {cmd} ({why})");
+                continue;
+            }
+            console::set_color(Color::DarkGray, Color::Black);
+            println!("$ {cmd}");
+            console::set_color(Color::LightGray, Color::Black);
+            self.run_line(cmd);
+            if self.status != Status::Ok {
+                return error(&format!("stopped: '{cmd}' did not work ({ran} of {total} ran)"));
+            }
+            ran += 1;
+        }
+        println!("done: {ran} of {total} ran");
+    }
+
     fn explain(&mut self) {
         if !self.ai_ready() {
             return;
@@ -2001,6 +2068,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("feedback TEXT", "tell the OS what could be better"),
     ("ask QUESTION", "ask the AI (needs beehive on the host)"),
     ("explain", "ask the AI about the last error or crash"),
+    ("do TASK", "the AI suggests commands for a task in plain words; they run if you say y"),
     ("update [auto on|off]", "fetch a new kernel from the AI host and put it on trial"),
     ("ai control [on|off]", "let the AI host run commands here and see the screen"),
     ("ai connect HOST NAME KEY", "reach beehive over the network (ai disconnect: stop)"),

@@ -1,0 +1,43 @@
+# `do TASK`: the AI suggests commands for a task, they are shown, and they
+# run only after `y`. beehive's fake backend makes the task itself the plan
+# (commands separated by ";").
+@ai
+$& do "mkdir /photos; echo hi > /photos/a.txt; ls /photos"
+> y
+$wait
+Plan from the fake backend (no LLM).
+  1. mkdir /photos
+  2. echo hi > /photos/a.txt
+  3. ls /photos
+~ ^Run them\? y: yes, any other key: no
+~ ^\$ mkdir /photos$
+~ ^\$ echo hi > /photos/a\.txt$
+~ ^\$ ls /photos$
+~ a\.txt
+done: 3 of 3 ran
+# Anything but y runs nothing.
+$& do rm /photos/a.txt
+> n
+$wait
+  1. rm /photos/a.txt
+~ ^Run it\? y: yes, any other key: no
+nothing was run
+$ cat /photos/a.txt
+hi
+# Some commands a plan never runs, even with y; a command that fails stops the rest.
+$& do "reboot; cat /nothing.txt; echo never > /photos/b.txt"
+> y
+$wait
+  1. reboot   (will not run: stops the machine)
+skipped: reboot (stops the machine)
+~ ^\$ cat /nothing\.txt$
+~ no such file or directory
+stopped: 'cat /nothing.txt' did not work (0 of 3 ran)
+$ ls /photos
+!~ b\.txt
+$ do
+usage: do TASK   (e.g. do make a folder photos with a file readme.txt in it)
+# The log has the outcome of each request, never the task or the plan.
+$ log 30
+~ "ev":"ai","kind":"do","result":"done"
+!~ photos

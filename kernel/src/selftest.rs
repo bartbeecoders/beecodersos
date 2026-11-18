@@ -60,6 +60,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("processors: started at boot or not", smp_choice),
     ("web viewer: links, scrolling, back, addresses", web_viewer),
     ("text tools: head, tail, wc, grep", text_tools),
+    ("do: the plan in an answer, commands it may not run", do_plan),
     ("heap: alloc and free", heap_alloc_free),
     ("heap: 1 MiB buffer", heap_large_buffer),
     ("ring: order and overflow", ring_buffer),
@@ -2718,5 +2719,26 @@ fn text_tools() -> TestResult {
     check_eq!(parse_count(&["-5", "f"]), Some((5, "f")));
     check_eq!(parse_count(&["-n", "x", "f"]), None);
     check_eq!(parse_count(&[]), None);
+    Ok(())
+}
+
+fn do_plan() -> TestResult {
+    use crate::doplan::{parse, refused, MAX_COMMANDS};
+    let lines = |l: &[&str]| l.iter().map(|s| String::from(*s)).collect::<Vec<String>>();
+    let (cmds, notes) = parse(&lines(&["I will make the folder.", "$ mkdir /photos", "  $ echo hi > /photos/a.txt", "$ ", "$x", "", "Done."]));
+    check_eq!(cmds, lines(&["mkdir /photos", "echo hi > /photos/a.txt"]));
+    check_eq!(notes, lines(&["I will make the folder.", "$x", "", "Done."]));
+    // Bounded: at most MAX_COMMANDS, no control characters, no endless lines.
+    let many: Vec<String> = (0..30).map(|i| alloc::format!("$ echo {i}")).collect();
+    check_eq!(parse(&many).0.len(), MAX_COMMANDS);
+    check!(parse(&lines(&["$ echo a\u{1b}[2J"])).0.is_empty());
+    check!(parse(&[alloc::format!("$ echo {}", "x".repeat(300))]).0.is_empty());
+    // What a plan may never run.
+    for cmd in ["install sata0 --erase", "update", "reboot", "shutdown", "crash", "ai off", "remote on", "httpd on", "net off", "do it again", "cpu auto off", "desktop off", "layout us"] {
+        check!(refused(cmd).is_some());
+    }
+    for cmd in ["mkdir /a", "echo hi > /a/b.txt", "ls", "cpu", "cpu test", "desktop", "rm /a/b.txt", "grep -i x /"] {
+        check!(refused(cmd).is_none());
+    }
     Ok(())
 }
