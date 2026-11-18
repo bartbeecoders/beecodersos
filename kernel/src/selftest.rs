@@ -2864,6 +2864,10 @@ fn pictures() -> TestResult {
     check_eq!(fit(640, 480, 640, 480), (640, 480, 100));
     check_eq!(fit(10_000, 1, 100, 100), (100, 1, 1));
     check_eq!(fit(0, 5, 100, 100), (0, 0, 0));
+    // A PNG (palette, 4 bits) made by ImageMagick, through the same door as the others.
+    let png = decode(include_bytes!("../../beenet/testdata/pal.png")).map_err(String::from)?;
+    check_eq!((png.width, png.height), (37, 23));
+    check!(decode(&include_bytes!("../../beenet/testdata/pal.png")[..100]).is_err());
     Ok(())
 }
 

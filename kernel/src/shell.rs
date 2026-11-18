@@ -1056,13 +1056,17 @@ impl Shell {
                     Err(why) => error(&format!("view {file}: {why}")),
                 }
             }
-            ("view", _) => error("usage: view FILE   (a BMP or PPM picture)"),
+            ("view", _) => error("usage: view FILE   (a PNG, BMP or PPM picture)"),
             ("screenshot", [file]) => {
                 let path = self.abs(file);
                 if !self.may_change(&path) {
                     return;
                 }
-                let picture = console::with_screen(|w, h, pixel| (w, h, crate::image::encode_bmp(w, h, pixel)));
+                // PNG when the name says so, BMP otherwise.
+                let png = path.to_ascii_lowercase().ends_with(".png");
+                let picture = console::with_screen(|w, h, pixel| {
+                    (w, h, if png { beenet::png::encode(w, h, pixel) } else { crate::image::encode_bmp(w, h, pixel) })
+                });
                 match picture {
                     Some((w, h, bmp)) => {
                         let saved = self.storage.fs().write_file(&path, &bmp);
@@ -1074,7 +1078,7 @@ impl Shell {
                     None => error("screenshot: needs a graphics screen"),
                 }
             }
-            ("screenshot", _) => error("usage: screenshot FILE   (saves the screen as a BMP picture)"),
+            ("screenshot", _) => error("usage: screenshot FILE   (saves the screen as a picture: PNG if FILE ends in .png, BMP otherwise)"),
             ("monitor", []) => match crate::desk::open_monitor() {
                 Ok(_) => println!("the system monitor in a new window: q leaves"),
                 Err(why) => error(&format!("monitor: {why}")),
@@ -2505,8 +2509,8 @@ const COMMANDS: &[(&str, &str)] = &[
     ("lsusb", "USB controller and devices"),
     ("threads", "what runs side by side inside the kernel"),
     ("monitor", "system monitor in a window: work per processor, memory, network, threads"),
-    ("view FILE", "show a picture (BMP or PPM) in a window"),
-    ("screenshot FILE", "save the screen as a BMP picture"),
+    ("view FILE", "show a picture (PNG, BMP or PPM) in a window"),
+    ("screenshot FILE", "save the screen as a picture (FILE.png: PNG, otherwise BMP)"),
     ("display [mode WxH]", "screen: driver, resolution; 'display font 1|2|auto'; 'display test'; 'display speed'"),
     ("edit FILE", "text editor in a window on the desktop (Ctrl+S saves, Ctrl+Q leaves)"),
     ("browse URL|FILE|WORDS", "web page viewer in a window: http:// pages, HTML files, or a search; Tab/Enter/click follow links"),

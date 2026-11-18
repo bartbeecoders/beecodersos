@@ -1,4 +1,4 @@
-//! The picture viewer (`view FILE`): a window that shows a BMP or PPM
+//! The picture viewer (`view FILE`): a window that shows a PNG, BMP or PPM
 //! picture from the disk, as large as fits. `q` leaves.
 
 use crate::input::{self, Key};
