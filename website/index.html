@@ -44,7 +44,7 @@
   <div class="hive-bg" aria-hidden="true"></div>
   <div class="wrap hero-grid">
     <div class="hero-text">
-      <p class="pill"><span class="dot"></span> v0.0.3 · build 113 · running on real hardware</p>
+      <p class="pill"><span class="dot"></span> v0.0.3 · build 125 · running on real hardware</p>
       <h1>The operating system that <span class="honey">improves itself</span>.</h1>
       <p class="lead">BeeCodersOs is a 64-bit OS written from scratch in Rust. It notices what goes
         wrong and what people miss, and an AI turns that into small, tested changes that a person
@@ -82,9 +82,9 @@ clover
 
 <!-- ======================================================== numbers -->
 <section class="wrap numbers" aria-label="In numbers">
-  <div><strong data-count="28500">28.5k</strong><span>lines of Rust, from boot code to TCP</span></div>
-  <div><strong data-count="283">283</strong><span>automated tests, run on every change</span></div>
-  <div><strong data-count="113">113</strong><span>builds in the first five days</span></div>
+  <div><strong data-count="29400">29.4k</strong><span>lines of Rust, from boot code to TCP</span></div>
+  <div><strong data-count="298">298</strong><span>automated tests, run on every change</span></div>
+  <div><strong data-count="125">125</strong><span>builds in the first five days</span></div>
   <div><strong>1</strong><span>outside crate in the kernel, for its heap. Everything else is written here</span></div>
 </section>
 
@@ -191,6 +191,13 @@ clover
     </article>
 
     <article class="card">
+      <span class="tag">Time</span>
+      <h3>A clock that knows the season</h3>
+      <p>The desktop shows the local date and time. <code>timezone CET</code> follows Europe's summer time by
+        itself; <code>date</code> shows local time with UTC beside it.</p>
+    </article>
+
+    <article class="card">
       <span class="tag">Multi-core</span>
       <h3>Every core at work</h3>
       <p>All processors start at boot, and work is split across them. Hashing 64 MiB takes
@@ -204,6 +211,17 @@ clover
       <p>From the host you can run commands, read the screen and deploy a new kernel over the network. The machine
         reports whether the new kernel is healthy.</p>
     </article>
+
+    <article class="card span2 shot-card">
+      <div class="card-text">
+        <span class="tag">Pictures</span>
+        <h3>Pictures and wallpaper</h3>
+        <p><code>screenshot</code> saves the screen, <code>view</code> shows a picture in a window and
+          <code>desktop wallpaper</code> puts one behind everything, scaled on every core. Saving a 3.8 MB picture
+          takes under a second: <b>15× faster</b> since the file system stopped rewriting its bookkeeping for every block.</p>
+      </div>
+      <img src="img/viewer.webp" width="664" height="448" loading="lazy" alt="The BeeCodersOs picture viewer showing a screenshot of its own desktop: the honeycomb wallpaper, the clock and the web viewer.">
+    </article>
   </div>
 </section>
 
@@ -213,7 +231,7 @@ clover
     <div class="gallery">
       <figure><img src="img/web-viewer.webp" width="700" height="480" loading="lazy" alt="The first web site ever, info.cern.ch, in the BeeCodersOs web viewer."><figcaption>The first web site ever, info.cern.ch, in its own browser.</figcaption></figure>
       <figure><img src="img/monitor.webp" width="664" height="448" loading="lazy" alt="The BeeCodersOs system monitor: four processors, memory, network traffic and nine kernel threads."><figcaption>The system monitor: every core, memory, network and threads, live.</figcaption></figure>
-      <figure><img src="img/desktop.webp" width="1280" height="1024" loading="lazy" alt="The full BeeCodersOs desktop at 1280×1024 on the HP: a light blue background, buttons for Terminal, Files, Notes and Web, and windows."><figcaption>The whole desktop at 1280×1024 on the HP.</figcaption></figure>
+      <figure><img src="img/desktop.webp" width="1280" height="1024" loading="lazy" alt="The full BeeCodersOs desktop at 1280×1024 on the HP: a honeycomb wallpaper, buttons for Terminal, Files, Notes and Web, a clock at the top right, and the system monitor and web viewer in windows."><figcaption>The whole desktop at 1280×1024 on the HP, with its wallpaper and clock.</figcaption></figure>
     </div>
   </div>
 </section>
@@ -236,7 +254,7 @@ clover
   <h2>From the first instruction to the AI, written here.</h2>
   <div class="stack">
     <div class="layer l5"><b>beehive</b><span>on the host: AI bridge, backlog, deploys</span></div>
-    <div class="layer l4"><b>BeeShell &amp; desktop</b><span>58 commands, windows, editor, browser</span></div>
+    <div class="layer l4"><b>BeeShell &amp; desktop</b><span>61 commands, windows, editor, browser, pictures</span></div>
     <div class="layer l3"><b>beenet · BeeFS</b><span>network stack and file system, unit-tested on the host</span></div>
     <div class="layer l2"><b>Kernel</b><span>threads, SMP, drivers (SATA, e1000, xHCI USB, framebuffer, ACPI)</span></div>
     <div class="layer l1"><b>Boot</b><span>Limine, BIOS and UEFI, A/B slots</span></div>
@@ -254,9 +272,9 @@ clover
       <li class="done"><time>Nov 15</time><b>Onto real hardware</b><span>HTTP, time and file transfer; threads; a status page and a remote shell; SATA disks and the Intel network card on the HP; the first desktop</span></li>
       <li class="done"><time>Nov 16</time><b>Installed on the HP</b><span>graphics through the firmware's framebuffer, USB keyboard and mouse, beehive over the network, an installer for the hard disk</span></li>
       <li class="done"><time>Nov 17</time><b>A desktop worth using</b><span>several windows, a text editor, a file manager, fast drawing, restarting by itself after a crash, driven from the host</span></li>
-      <li class="done"><time>Nov 18</time><b>Every core, and the web</b><span>all four processors at work, a web browser, <code>do</code>, <code>grep</code> and friends, a system monitor</span></li>
-      <li class="next"><time>Next</time><b>Apps in a sandbox</b><span>AI-written apps in WebAssembly, so new commands don't need a kernel change</span></li>
-      <li class="next"><time>Later</time><b>And then</b><span>encrypted web (TLS), sound, paging, user programs</span></li>
+      <li class="done"><time>Nov 18</time><b>Every core, and the web</b><span>all four processors at work, a web browser, <code>do</code>, <code>grep</code> and friends, a system monitor, a clock with time zones, pictures and wallpaper, and disk writes 15× faster</span></li>
+      <li class="next"><time>Next</time><b>Asked for by its user</b><span>a remote desktop to reach it from another computer, users and permissions, a USB camera</span></li>
+      <li class="next"><time>Later</time><b>And then</b><span>AI-written apps in a WebAssembly sandbox, encrypted web (TLS), sound, paging, user programs</span></li>
     </ol>
   </div>
 </section>
