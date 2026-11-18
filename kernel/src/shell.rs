@@ -225,6 +225,40 @@ impl Shell {
         }
     }
 
+    /// `cpu test`: the same work (hashing 64 MiB) on one processor and
+    /// on all that are in use, with the time each took.
+    fn cpu_test(&mut self) {
+        use core::sync::atomic::{AtomicU64, Ordering};
+        const PIECES: usize = 64;
+        let data: Vec<u8> = (0..1024 * 1024u32).map(|i| (i.wrapping_mul(2654435761) >> 24) as u8).collect();
+        // Each piece hashes the megabyte with its own number in front; the
+        // result of the job is all those hashes folded together.
+        let piece = |n: usize| {
+            let mut hash = beenet::sha256::Sha256::new();
+            hash.update(&[n as u8]);
+            hash.update(&data);
+            u64::from_le_bytes(hash.finish()[..8].try_into().unwrap_or([0; 8]))
+        };
+        let start = time::micros();
+        let alone = (0..PIECES).fold(0u64, |sum, n| sum ^ piece(n).rotate_left(n as u32));
+        let alone_ms = (time::micros() - start) / 1000;
+        let sum = AtomicU64::new(0);
+        let start = time::micros();
+        crate::smp::run(PIECES, &|n| {
+            sum.fetch_xor(piece(n).rotate_left(n as u32), Ordering::SeqCst);
+        });
+        let together_ms = (time::micros() - start) / 1000;
+        let running = crate::smp::running();
+        println!("hashing 64 MiB on 1 processor: {alone_ms} ms");
+        println!("hashing 64 MiB on {running}: {together_ms} ms");
+        if sum.load(Ordering::SeqCst) == alone {
+            let tenths = alone_ms * 10 / together_ms.max(1);
+            println!("same result; {}.{} times as fast", tenths / 10, tenths % 10);
+        } else {
+            error("cpu test: the results differ");
+        }
+    }
+
     /// Follow the desktop choice saved on disk, if any (default: on).
     pub fn load_desktop(&mut self) {
         let data = self.storage.fs().read_file(DESKTOP_FILE).ok();
@@ -416,10 +450,19 @@ impl Shell {
             ("cpu", []) => {
                 let processors = crate::cpu::processors();
                 println!("processor: {}", crate::cpu::name());
-                println!("count: {} (this OS runs on one of them so far)", processors.len());
+                match crate::smp::running() {
+                    1 if processors.len() > 1 => println!("count: {}, 1 in use ('cpu start' starts the others)", processors.len()),
+                    running => println!("count: {}, {running} in use", processors.len()),
+                }
                 println!("clock: {} MHz", time::tsc_mhz());
                 println!("can do: {}", crate::cpu::features(crate::cpu::raw()).join(" "));
             }
+            ("cpu", ["start"]) => match crate::smp::start() {
+                Ok(running) => println!("{running} of {} processors in use", crate::cpu::processors().len()),
+                Err(why) => error(&format!("cpu start: {why}")),
+            },
+            ("cpu", ["test"]) => self.cpu_test(),
+            ("cpu", _) => error("usage: cpu [start | test]"),
             ("about" | "version", []) => {
                 println!("BeeCodersOs {} b{} - x86_64 kernel in Rust", crate::OS_VERSION, crate::OS_BUILD);
                 println!("filesystem: BeeFS on {}", if self.storage.persistent { "ATA disk" } else { "RAM disk" });
@@ -1814,7 +1857,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("display [mode WxH]", "screen: driver, resolution; 'display font 1|2|auto'; 'display test'; 'display speed'"),
     ("edit FILE", "text editor in a window on the desktop (Ctrl+S saves, Ctrl+Q leaves)"),
     ("files [FOLDER]", "file manager in a window: browse, open in the editor, new folder, rename, delete"),
-    ("cpu", "the processor: name, how many, clock speed, what it can do"),
+    ("cpu [start|test]", "the processor: name, how many, clock, features; start the others; measure them"),
     ("sleep SECONDS", "wait (Ctrl+C ends it)"),
     ("terminal", "one more terminal window on the desktop, with a shell of its own"),
     ("desktop [on|off]", "graphical desktop: the terminal in a window (on by default; saved)"),

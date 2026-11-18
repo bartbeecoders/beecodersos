@@ -1226,22 +1226,38 @@ desktop.
   `desktop-launch.scn` uses the buttons and clicks in windows. Through
   `beectl.py text` the host sees the text of every window.
 
-## Processors: `cpu` (one in use so far)
+## Processors: `cpu`, `cpu start`, `cpu test`
 
 ```
 bee:/$ cpu
 processor: Intel(R) Core(TM) i5-4590 CPU @ 3.30GHz
-count: 4 (this OS runs on one of them so far)
+count: 4, 1 in use ('cpu start' starts the others)
 clock: 3292 MHz
 can do: sse2 sse3 ssse3 sse4.1 sse4.2 avx avx2 aes rdrand
+bee:/$ cpu start
+4 of 4 processors in use
+bee:/$ cpu test
+hashing 64 MiB on 1 processor: ... ms
+hashing 64 MiB on 4: ... ms
+same result; 3.9 times as fast
 ```
 
 `kernel/src/cpu.rs` asks the processor what it is (CPUID) and counts the
 machine's processors (cores and hardware threads) in the ACPI table "APIC".
 The table is firmware data: every length is checked, a table that is cut off
-gives the entries that are whole. The OS still runs on one processor; starting
-the others is the next step. Tests: a self-test (names, features, tables cut
-off anywhere) and `cpu.scn`.
+gives the entries that are whole.
+
+`kernel/src/smp.rs` starts the other processors on `cpu start` (INIT and
+STARTUP through the local APIC; a small trampoline at 0x8000 takes each one
+from 16-bit to 64-bit mode with the kernel's page tables, descriptor tables
+and memory types). The kernel itself (threads, drivers, files) still runs on
+the first processor; the others only do `smp::run(count, job)`: the pieces of
+a job, handed out to every processor, for work on memory only. Waiting
+processors sleep in MONITOR/MWAIT (or spin in a VM) and take no interrupts.
+`cpu test` hashes the same 64 MiB on one processor and on all, checks the
+results match and shows the speed-up. Tests: self-tests (names, features,
+tables cut off anywhere; every piece of a job runs exactly once), `cpu.scn`
+and `cpu-many.scn` (a 4-processor VM: `@cpus 4`).
 
 ## USB: keyboard and mouse (xHCI) ✅ in QEMU, not yet tried on the HP
 

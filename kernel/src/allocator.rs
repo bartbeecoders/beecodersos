@@ -16,6 +16,15 @@ const MAPPED_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
 
 static mut HEAP_SIZE: usize = 0;
 
+/// The page below 1 MiB that smp.rs copies its start-up code to.
+pub const LOW_PAGE: u64 = 0x8000;
+static LOW_PAGE_FREE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Did the bootloader's memory map list `LOW_PAGE` as free memory?
+pub fn low_page_free() -> bool {
+    LOW_PAGE_FREE.load(core::sync::atomic::Ordering::SeqCst)
+}
+
 extern "C" {
     static __kernel_end: u8;
 }
@@ -29,6 +38,9 @@ pub fn init(multiboot_info: u32) -> Result<(u64, usize), &'static str> {
     let keep = crate::bootmods::span();
     let mut best: Option<(u64, u64)> = None;
     for_each_free_region(multiboot_info, |base, len| {
+        if base <= LOW_PAGE && base.saturating_add(len) >= LOW_PAGE + 4096 {
+            LOW_PAGE_FREE.store(true, core::sync::atomic::Ordering::SeqCst);
+        }
         let start = align_up(base.max(kernel_end), 4096);
         let end = (base + len).min(MAPPED_LIMIT) & !4095;
         for (start, end) in without(start, end, keep) {

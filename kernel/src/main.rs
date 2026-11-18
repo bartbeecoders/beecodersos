@@ -21,6 +21,7 @@ mod bootmods;
 #[macro_use]
 mod console;
 mod cpu;
+mod smp;
 mod desk;
 mod filemgr;
 mod textedit;

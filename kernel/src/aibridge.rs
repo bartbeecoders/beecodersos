@@ -709,8 +709,10 @@ fn session(settings: &Settings, generation: u32) -> (bool, String) {
         if let Some(problem) = problem {
             break problem;
         }
-        let tick = time::uptime_ms();
-        thread::wait_until(|| time::uptime_ms() != tick || !LINK.get().outgoing.is_empty());
+        // Until there is something to send, something arrived, or the next
+        // timer tick: an answer is handed on as soon as it is there.
+        let (tick, frames) = (time::uptime_ms(), crate::net::frames_received());
+        thread::wait_until(|| time::uptime_ms() != tick || !LINK.get().outgoing.is_empty() || crate::net::frames_received() != frames);
     };
     (true, String::from(ended))
 }

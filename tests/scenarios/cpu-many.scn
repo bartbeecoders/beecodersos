@@ -1,0 +1,28 @@
+# A machine with four processors: `cpu start` starts the other three, and
+# work can then be spread over all of them.
+@cpus 4
+$ cpu
+count: 4, 1 in use ('cpu start' starts the others)
+$ cpu test
+~ ^hashing 64 MiB on 1 processor: \d+ ms$
+~ ^hashing 64 MiB on 1: \d+ ms$
+~ ^same result; \d+\.\d times as fast$
+$ cpu start
+4 of 4 processors in use
+$ cpu
+count: 4, 4 in use
+$ cpu start
+4 of 4 processors in use
+$ cpu test
+~ ^hashing 64 MiB on 4: \d+ ms$
+~ ^same result; \d+\.\d times as fast$
+# Everything else still works with the others running: the self-tests
+# (which spread a job over all four), files, a second window.
+$ selftest
+~ ^  ok    processors: every piece of a job runs exactly once$
+~ ^selftest: \d+ passed, 0 failed$
+$ echo still here > /x.txt
+$ cat /x.txt
+still here
+$ cpu sideways
+usage: cpu [start | test]

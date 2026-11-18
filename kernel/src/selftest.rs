@@ -56,6 +56,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("file manager: order, choosing, questions, what the window shows", file_manager),
     ("mouse: clicks inside windows, desktop buttons", mouse_clicks),
     ("cpu: name, features, the list of processors", cpu_facts),
+    ("processors: every piece of a job runs exactly once", smp_jobs),
     ("heap: alloc and free", heap_alloc_free),
     ("heap: 1 MiB buffer", heap_large_buffer),
     ("ring: order and overflow", ring_buffer),
@@ -2553,5 +2554,27 @@ fn cpu_facts() -> TestResult {
     }
     check_eq!(madt_processors(&many).len(), MAX_PROCESSORS);
     check!(!crate::cpu::processors().is_empty());
+    Ok(())
+}
+
+fn smp_jobs() -> TestResult {
+    use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering::SeqCst};
+    // On however many processors are in use (one, unless `cpu start` was given).
+    check!(crate::smp::running() >= 1);
+    let counts: Vec<AtomicU32> = (0..1000).map(|_| AtomicU32::new(0)).collect();
+    let sum = AtomicUsize::new(0);
+    for round in 0..20 {
+        crate::smp::run(counts.len(), &|n| {
+            counts[n].fetch_add(1, SeqCst);
+            sum.fetch_add(n, SeqCst);
+        });
+        check!(counts.iter().all(|c| c.load(SeqCst) == round + 1));
+    }
+    check_eq!(sum.load(SeqCst), 20 * (999 * 1000 / 2));
+    // No pieces: nothing runs. One piece: it gets number 0.
+    crate::smp::run(0, &|_| panic!("a job without pieces ran"));
+    let only = AtomicUsize::new(usize::MAX);
+    crate::smp::run(1, &|n| only.store(n, SeqCst));
+    check_eq!(only.load(SeqCst), 0);
     Ok(())
 }
