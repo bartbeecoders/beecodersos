@@ -1139,7 +1139,7 @@ video memory: write-combining
   of one by one. On real hardware that makes drawing many times faster; in a
   VM it changes nothing. `display` shows `video memory: write-combining`, or
   `plain` and why. The boot flag `wc=off` switches it off.
-- **Measuring:** `display test` and `display speed` print how long drawing the whole screen takes.
+- **Measuring:** `display test` and `display speed` print how long drawing the whole screen takes; `display speed` also shows the part spent copying to video memory.
 - **The screen in memory:** everything is drawn on a copy of the screen in
   normal memory, and only the parts that changed are copied to the video
   memory (`console.rs`). A prompt, typed text or a word without a line end
@@ -1255,9 +1255,16 @@ the first processor; the others only do `smp::run(count, job)`: the pieces of
 a job, handed out to every processor, for work on memory only. Waiting
 processors sleep in MONITOR/MWAIT (or spin in a VM) and take no interrupts.
 `cpu test` hashes the same 64 MiB on one processor and on all, checks the
-results match and shows the speed-up. Tests: self-tests (names, features,
+results match and shows the speed-up. The screen uses them too: redrawing
+the console spreads its lines over every processor in use, and the copy to
+video memory goes in bands of 32 lines (on the HP, a full redraw at
+1280x1024 takes 7.0 ms on four instead of 12.7 ms on one; `display speed`
+shows how much of it is the copy). `smp::run` may be called from anywhere:
+while one job is handed out, another (from the timer interrupt, or from a
+piece) runs on its own processor alone. `smp::Disjoint` wraps what pieces
+share when each touches only a part of its own. Tests: self-tests (names, features,
 tables cut off anywhere; every piece of a job runs exactly once), `cpu.scn`
-and `cpu-many.scn` (a 4-processor VM: `@cpus 4`).
+`cpu-many.scn` and `display-many.scn` (a 4-processor VM: `@cpus 4`).
 
 ## USB: keyboard and mouse (xHCI) ✅ in QEMU, not yet tried on the HP
 

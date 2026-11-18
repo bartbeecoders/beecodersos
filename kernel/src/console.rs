@@ -775,8 +775,9 @@ pub fn show_color_bars() {
     show(true);
 }
 
-/// Draw the whole screen again; returns how long it took in microseconds.
-pub fn redraw() -> u64 {
+/// Draw the whole screen again; returns how long it took in microseconds:
+/// in all, and the part spent copying to video memory.
+pub fn redraw() -> (u64, u64) {
     let start = crate::time::micros();
     if let Screen::Graphics(screen) = SCREEN.get() {
         screen.redraw();
@@ -790,8 +791,10 @@ pub fn redraw() -> u64 {
             _ => damage(screen.canvas().bounds()),
         }
     }
+    let copy = crate::time::micros();
     show(true);
-    crate::time::micros() - start
+    let end = crate::time::micros();
+    (end - start, end - copy)
 }
 
 pub fn clear() {

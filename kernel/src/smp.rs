@@ -348,13 +348,37 @@ fn work() {
     BUSY.fetch_sub(1, SeqCst);
 }
 
+/// Something the pieces of a job share although the compiler cannot see
+/// that it is safe: a canvas whose pieces each draw on lines of their own.
+/// Whoever wraps a value promises that the pieces touch disjoint parts.
+pub struct Disjoint<T>(pub T);
+
+// SAFETY: see above; the promise is the wrapper's user's.
+unsafe impl<T> Sync for Disjoint<T> {}
+
+impl<T: Copy> Disjoint<T> {
+    /// The value (a method, so that a closure takes the whole wrapper).
+    pub fn get(&self) -> T {
+        self.0
+    }
+}
+
+/// A job is being handed out: a second one (from an interrupt, or from a
+/// piece) runs on its own processor instead.
+static ACTIVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 /// Run `job(0)`, `job(1)`, ... `job(count - 1)`, spread over all running
 /// processors (this one too), and return when all are done. The order is
 /// not fixed, and pieces run at the same time: they share only what is
-/// safe to share. One job at a time: only call this from the kernel's
-/// threads (which take turns), never from a job.
+/// safe to share. It may be called from anywhere (an interrupt, a piece):
+/// while one job is being handed out, another runs on the calling
+/// processor alone.
 pub fn run(count: usize, job: &(dyn Fn(usize) + Sync)) {
     if count == 0 {
+        return;
+    }
+    if count == 1 || running() == 1 || ACTIVE.swap(true, SeqCst) {
+        (0..count).for_each(job);
         return;
     }
     let words: [usize; 2] = unsafe { core::mem::transmute(job) };
@@ -373,4 +397,5 @@ pub fn run(count: usize, job: &(dyn Fn(usize) + Sync)) {
     while BUSY.load(SeqCst) != 0 {
         core::hint::spin_loop();
     }
+    ACTIVE.store(false, SeqCst);
 }

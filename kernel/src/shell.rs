@@ -613,7 +613,7 @@ impl Shell {
                 // Ctrl+D is also what a closed remote session gives: never wait for more.
                 use crate::input::Key;
                 while !matches!(crate::input::read_key(), Key::Enter | Key::Ctrl('c' | 'd')) {}
-                let micros = console::redraw();
+                let (micros, _) = console::redraw();
                 println!("drawing the whole screen again took {}.{} ms", micros / 1000, micros % 1000 / 100);
             }
             ("display", ["speed"]) if display::current().is_none() => {
@@ -621,8 +621,9 @@ impl Shell {
             }
             ("display", ["speed"]) => {
                 // Unlike `display test` this waits for no key: it can be asked from afar.
-                let best = (0..5).map(|_| console::redraw()).min().unwrap_or(0);
+                let (best, copy) = (0..5).map(|_| console::redraw()).min().unwrap_or((0, 0));
                 println!("drawing the whole screen again takes {}.{} ms (best of 5)", best / 1000, best % 1000 / 100);
+                println!("of which copying to video memory: {}.{} ms", copy / 1000, copy % 1000 / 100);
             }
             ("display", ["font", size]) => match display::parse_font(size) {
                 Some(_) if display::current().is_none() => error("display font: needs a graphics mode, and this is the text screen"),

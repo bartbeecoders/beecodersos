@@ -108,11 +108,18 @@ impl Canvas {
         if r.is_empty() {
             return;
         }
-        let bytes = self.mode.format.bytes();
-        for y in r.y..r.y + r.height {
-            let at = y * self.mode.pitch as usize + r.x * bytes;
-            unsafe { core::ptr::copy_nonoverlapping(other.framebuffer.add(at), self.framebuffer.add(at), r.width * bytes) };
-        }
+        let (bytes, pitch) = (self.mode.format.bytes(), self.mode.pitch as usize);
+        // In bands of lines, on every processor in use (a whole screen
+        // after a redraw is megabytes); each band has lines of its own.
+        const BAND: usize = 32;
+        let (from, to) = (crate::smp::Disjoint(other.framebuffer), crate::smp::Disjoint(self.framebuffer));
+        crate::smp::run(r.height.div_ceil(BAND), &|band| {
+            let first = r.y + band * BAND;
+            for y in first..(first + BAND).min(r.y + r.height) {
+                let at = y * pitch + r.x * bytes;
+                unsafe { core::ptr::copy_nonoverlapping(from.get().add(at), to.get().add(at), r.width * bytes) };
+            }
+        });
     }
 
     /// Copy the whole picture of another canvas (a window's content) onto

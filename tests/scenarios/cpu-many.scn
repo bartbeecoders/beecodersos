@@ -19,7 +19,7 @@ $ cpu test
 # Everything else still works with the others running: the self-tests
 # (which spread a job over all four), files, a second window.
 $ selftest
-~ ^  ok    processors: every piece of a job runs exactly once$
+~ ^  ok    processors: every piece of a job runs exactly once, also nested$
 ~ ^selftest: \d+ passed, 0 failed$
 $ echo still here > /x.txt
 $ cat /x.txt

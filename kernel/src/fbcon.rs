@@ -238,9 +238,15 @@ impl<'a> FbCon<'a> {
         }
         self.canvas.fill_rect(self.area, PALETTE[(self.attr >> 4) as usize]);
         self.touch(self.area);
-        for index in 0..self.cols * self.rows {
-            self.draw_cell(index);
-        }
+        // A line of cells per piece, on every processor in use: each piece
+        // draws only within its own line, and nothing else changes meanwhile.
+        let this = crate::smp::Disjoint(&*self);
+        crate::smp::run(self.rows, &|row| {
+            let con = this.get();
+            for index in row * con.cols..(row + 1) * con.cols {
+                con.paint_cell(index);
+            }
+        });
         if let Some(cursor) = self.cursor {
             self.set_cursor(cursor);
         }
@@ -292,10 +298,16 @@ impl<'a> FbCon<'a> {
     }
 
     fn draw_cell(&mut self, index: usize) {
+        self.paint_cell(index);
+        let (x, y) = self.origin(index);
+        self.touch(Rect::new(x, y, GLYPH_WIDTH * self.scale, GLYPH_HEIGHT * self.scale));
+    }
+
+    /// Draw a cell without noting it as drawn (the caller does).
+    fn paint_cell(&self, index: usize) {
         let cell = self.cells[index];
         let (fg, bg) = (PALETTE[(cell >> 8) as usize & 0x0F], PALETTE[(cell >> 12) as usize]);
         let (x, y) = self.origin(index);
         self.canvas.glyph(x, y, cell as u8, fg, bg, self.scale);
-        self.touch(Rect::new(x, y, GLYPH_WIDTH * self.scale, GLYPH_HEIGHT * self.scale));
     }
 }

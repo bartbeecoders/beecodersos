@@ -40,6 +40,7 @@ $ display mode 1280x720x32
 ~ not a usable size
 $ display speed
 ~ ^drawing the whole screen again takes \d+\.\d ms \(best of 5\)$
+~ ^of which copying to video memory: \d+\.\d ms$
 $ display mode
 usage: display [mode WIDTHxHEIGHT | font 1|2|auto | test | speed]
 $ display

@@ -56,7 +56,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("file manager: order, choosing, questions, what the window shows", file_manager),
     ("mouse: clicks inside windows, desktop buttons", mouse_clicks),
     ("cpu: name, features, the list of processors", cpu_facts),
-    ("processors: every piece of a job runs exactly once", smp_jobs),
+    ("processors: every piece of a job runs exactly once, also nested", smp_jobs),
     ("heap: alloc and free", heap_alloc_free),
     ("heap: 1 MiB buffer", heap_large_buffer),
     ("ring: order and overflow", ring_buffer),
@@ -2576,5 +2576,10 @@ fn smp_jobs() -> TestResult {
     let only = AtomicUsize::new(usize::MAX);
     crate::smp::run(1, &|n| only.store(n, SeqCst));
     check_eq!(only.load(SeqCst), 0);
+    // A job inside a piece (as a copy from the timer interrupt may be)
+    // runs on that processor alone, and every piece of both runs once.
+    let inner = AtomicUsize::new(0);
+    crate::smp::run(8, &|_| crate::smp::run(10, &|n| { inner.fetch_add(n + 1, SeqCst); }));
+    check_eq!(inner.load(SeqCst), 8 * 55);
     Ok(())
 }
