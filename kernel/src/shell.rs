@@ -736,19 +736,24 @@ impl Shell {
                 }
             }
             ("files", _) => error("usage: files [FOLDER]"),
-            ("browse", [address]) => {
-                // A file that is there is shown from the disk; anything else is a web address.
+            ("browse", [address]) if { let path = self.abs(address); self.storage.fs().exists(&path) } => {
+                // A file that is there is shown from the disk.
                 let path = self.abs(address);
-                let web = address.contains("://") || !self.storage.fs().exists(&path);
-                let url = if address.contains("://") { String::from(*address) } else { format!("http://{address}") };
-                let target = if web { crate::web::resolve("/", &url) } else { Ok(path) };
-                match target.map(|t| (crate::desk::open_web(&t), t)) {
-                    Ok((Ok(_), t)) => println!("{t} in a new window: Tab picks a link, Enter follows it, q leaves"),
-                    Ok((Err(why), t)) => error(&format!("browse {t}: {why}")),
-                    Err(why) => error(&format!("browse {address}: {why}")),
+                match crate::desk::open_web(&path) {
+                    Ok(_) => println!("{path} in a new window: Tab picks a link, Enter follows it, q leaves"),
+                    Err(why) => error(&format!("browse {path}: {why}")),
                 }
             }
-            ("browse", _) => error("usage: browse URL|FILE"),
+            ("browse", words @ [_, ..]) => {
+                // A web address, or words to search for.
+                let typed = words.join(" ");
+                match crate::web::typed_address(&typed).map(|t| (crate::desk::open_web(&t), t)) {
+                    Ok((Ok(_), t)) => println!("{t} in a new window: Tab picks a link, Enter follows it, q leaves"),
+                    Ok((Err(why), t)) => error(&format!("browse {t}: {why}")),
+                    Err(why) => error(&format!("browse {typed}: {why}")),
+                }
+            }
+            ("browse", _) => error("usage: browse URL|FILE|WORDS   (words: a search on FrogFind)"),
             ("terminal", []) => match crate::desk::open_terminal() {
                 Ok(_) => println!("a new terminal window ({} open): Alt+Tab or a click changes window, 'exit' or its close box ends it", crate::desk::count()),
                 Err(why) => error(&format!("terminal: {why}")),
@@ -2017,7 +2022,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("threads", "what runs side by side inside the kernel"),
     ("display [mode WxH]", "screen: driver, resolution; 'display font 1|2|auto'; 'display test'; 'display speed'"),
     ("edit FILE", "text editor in a window on the desktop (Ctrl+S saves, Ctrl+Q leaves)"),
-    ("browse URL|FILE", "web page viewer in a window: http:// pages or HTML files; Tab/Enter/click follow links"),
+    ("browse URL|FILE|WORDS", "web page viewer in a window: http:// pages, HTML files, or a search; Tab/Enter/click follow links"),
     ("files [FOLDER]", "file manager in a window: browse, open in the editor, new folder, rename, delete"),
     ("cpu [start|test|auto on|off]", "the processor: name, how many, clock, features; start the others; measure; at boot or not (saved)"),
     ("sleep SECONDS", "wait (Ctrl+C ends it)"),

@@ -1219,7 +1219,7 @@ desktop.
   deletes after a `y` (a folder only when it is empty), **u** reads the
   folder again, **q** leaves. A **click** on an entry puts the bar there, a
   second click opens it. It is a list of text for now: no icons.
-- **Web page viewer:** `browse URL|FILE` shows a page in a window of its
+- **Web page viewer:** `browse URL|FILE|WORDS` shows a page in a window of its
   own (`kernel/src/web.rs`): an `http://` page from the web (the `http://`
   may be left out) or an HTML or text file from the disk. The page is shown
   as text, laid out for the window's width by `beenet/src/html.rs`
@@ -1229,7 +1229,15 @@ desktop.
   into view), **Enter** or a **click** follows it, **Backspace** goes back,
   **g** asks for an address, **r** loads the page again, **q** leaves. Links
   of a page on the disk lead to files on the disk. `https://` pages cannot
-  be opened yet (no TLS); pages are at most 1 MiB. A page is untrusted data:
+  be opened directly yet (no TLS); pages are at most 1 MiB.
+  **Searching:** words instead of an address (`browse honey bees`, or
+  after **g**: with a space, or without a dot) search on FrogFind
+  (frogfind.com), a search engine for simple browsers. Choosing an
+  `https://` link says it cannot be opened; **f** then reads it through
+  FrogFind's reader, which hands the page out as plain HTML over http (a
+  typed `https://` address goes there too). Both are the user's choice:
+  FrogFind sees what is searched for and which pages are read through it.
+  On the HP this finds things and shows Wikipedia articles. A page is untrusted data:
   the layout is bounded (20,000 lines, 2,000 links) and has host tests with
   input cut off anywhere. Tests: `html` unit tests in `beenet`, a self-test
   for keys, links, history and addresses, and `browse.scn` (files, links,

@@ -2614,6 +2614,16 @@ fn web_viewer() -> TestResult {
     check!(resolve("http://h/", "https://secure.org/").is_err());
     check!(resolve("http://h/", "mailto:someone@example.org").is_err());
     check!(resolve("/a.html", "javascript:void(0)").is_err());
+    // What is typed: a path, an address, or words to search for.
+    let typed = crate::web::typed_address;
+    check_eq!(typed("/site/a.html"), Ok("/site/a.html".to_string()));
+    check_eq!(typed("example.org/x"), Ok("http://example.org/x".to_string()));
+    check_eq!(typed("10.0.2.2:8080"), Ok("http://10.0.2.2:8080/".to_string()));
+    check_eq!(typed("localhost"), Ok("http://localhost/".to_string()));
+    check_eq!(typed("honey bees"), Ok("http://frogfind.com/?q=honey%20bees".to_string()));
+    check_eq!(typed("rust"), Ok("http://frogfind.com/?q=rust".to_string()));
+    check_eq!(typed("what is 2+2? "), Ok("http://frogfind.com/?q=what%20is%202%2B2%3F".to_string()));
+    check_eq!(typed("https://en.wikipedia.org/wiki/Bee"), Ok("http://frogfind.com/read?a=https%3A%2F%2Fen.wikipedia.org%2Fwiki%2FBee".to_string()));
     check!(crate::web::looks_like_html("http://h/", "<!DOCTYPE html><p>x"));
     check!(!crate::web::looks_like_html("http://h/", "just text, 1 < 2"));
     check!(!crate::web::looks_like_html("/notes.txt", "<p>shown as it is</p>"));
@@ -2641,7 +2651,10 @@ fn web_viewer() -> TestResult {
     check_eq!(v.key(Key::Enter, w, h), Action::None);
     let (cells, _) = v.render(w, h);
     let status: String = cells[0].iter().map(|c| (*c & 0xFF) as u8 as char).collect();
-    check!(status.contains("https:// pages cannot be opened"));
+    check!(status.starts_with(" an https:// page: this OS has no TLS"));
+    // `f` reads it through the reader; only right after it was chosen.
+    check_eq!(v.key(Key::Char('f'), w, h), Action::Open("http://frogfind.com/read?a=https%3A%2F%2Fx%2F".to_string()));
+    check_eq!(v.key(Key::Char('f'), w, h), Action::None);
     // The third link is far down: Tab scrolls to it.
     check_eq!(v.key(Key::Tab, w, h), Action::None);
     let (cells, _) = v.render(w, h);

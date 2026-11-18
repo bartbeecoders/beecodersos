@@ -2,7 +2,8 @@
 //! shows a page from the web (http://) or an HTML or text file from the
 //! disk, as text (beenet::html lays it out). Arrows and Page Up/Down
 //! scroll, Tab picks the next link, Enter or a click follows it,
-//! Backspace goes back, `g` asks for an address, `r` loads again, `q`
+//! Backspace goes back, `g` asks for an address or words to search for,
+//! `f` reads an https:// link through FrogFind, `r` loads again, `q`
 //! leaves.
 //!
 //! `Viewer` is the page, the scrolling and the choice of link, and knows
@@ -32,6 +33,45 @@ Tab picks a link, Enter or a click follows it, Backspace goes back, g asks for a
 <li><a href=\"http://neverssl.com/\">NeverSSL</a>\n</ul>\n\
 <h2>On this machine</h2>\n<ul>\n<li><a href=\"notes.txt\">notes.txt</a>\n</ul>\n\
 <p>Pages with https:// cannot be opened yet: the OS has no TLS.\n";
+
+/// Searching, and reading https:// pages, goes through FrogFind: a search
+/// engine for simple browsers that also hands out other sites as plain
+/// HTML over http. The user chooses it (words typed, or `f`): it sees what
+/// is searched for and which pages are read through it.
+const SEARCH: &str = "http://frogfind.com/?q=";
+const READER: &str = "http://frogfind.com/read?a=";
+
+/// The address that searches for these words.
+pub fn search_address(words: &str) -> String {
+    format!("{SEARCH}{}", beenet::http::percent_encode(words.trim()))
+}
+
+/// The address that shows an https:// page through the reader.
+pub fn reader_address(url: &str) -> String {
+    format!("{READER}{}", beenet::http::percent_encode(url.trim()))
+}
+
+/// What was typed (after `g`, or with `browse`): a path on the disk, a web
+/// address (`http://` may be left out; `https://` is read through the
+/// reader), or words to search for (with a space, or without a dot).
+pub fn typed_address(typed: &str) -> Result<String, String> {
+    let typed = typed.trim();
+    let lower = typed.to_ascii_lowercase();
+    if typed.starts_with('/') {
+        return resolve("/", typed);
+    }
+    if lower.starts_with("https://") {
+        return Ok(reader_address(typed));
+    }
+    if lower.starts_with("http://") {
+        return resolve("/", typed);
+    }
+    let host = typed.split(['/', '?']).next().unwrap_or("");
+    if typed.contains(char::is_whitespace) || !(host.contains('.') || host.contains(':') || host.eq_ignore_ascii_case("localhost")) {
+        return Ok(search_address(typed));
+    }
+    resolve("/", &format!("http://{typed}"))
+}
 
 /// Pages larger than this are not shown.
 pub const MAX_PAGE: u64 = 1024 * 1024;
@@ -87,6 +127,8 @@ pub struct Viewer {
     mode: Mode,
     message: String,
     warning: bool,
+    /// The https:// link just chosen, which `f` reads through the reader.
+    https: Option<String>,
 }
 
 /// Does this look like HTML (rather than plain text)?
@@ -176,6 +218,7 @@ impl Viewer {
             mode: Mode::View,
             message: String::new(),
             warning: false,
+            https: None,
         }
     }
 
@@ -240,6 +283,11 @@ impl Viewer {
 
     fn follow(&mut self, n: usize) -> Action {
         let Some(href) = self.page.links.get(n) else { return Action::None };
+        if href.trim().to_ascii_lowercase().starts_with("https://") {
+            self.https = Some(String::from(href.trim()));
+            self.say("an https:// page: this OS has no TLS yet. f reads it through FrogFind", true);
+            return Action::None;
+        }
         match resolve(&self.address, href) {
             Ok(to) => Action::Open(to),
             Err(why) => {
@@ -273,6 +321,7 @@ impl Viewer {
     pub fn key(&mut self, key: Key, width: usize, rows: usize) -> Action {
         self.lay_out(width);
         self.message.clear();
+        let https = self.https.take();
         let page_rows = rows.saturating_sub(2).max(1);
         let last_top = self.page.lines.len().saturating_sub(page_rows);
         if let Mode::Address(text) = &mut self.mode {
@@ -287,14 +336,7 @@ impl Viewer {
                     if typed.is_empty() {
                         return Action::None;
                     }
-                    // An address typed without http:// is a web address,
-                    // unless it is a path on the disk.
-                    let to = if typed.starts_with('/') || typed.to_ascii_lowercase().starts_with("http") {
-                        resolve("/", &typed)
-                    } else {
-                        resolve("/", &format!("http://{typed}"))
-                    };
-                    return match to {
+                    return match typed_address(&typed) {
                         Ok(to) => Action::Open(to),
                         Err(why) => {
                             self.say(&why, true);
@@ -344,6 +386,10 @@ impl Viewer {
             },
             Key::Char('g') => self.mode = Mode::Address(String::new()),
             Key::Char('r') => return Action::Reload(self.address.clone()),
+            Key::Char('f') => match https {
+                Some(url) => return Action::Open(reader_address(&url)),
+                None => self.say("f reads an https:// link through FrogFind: pick one first", false),
+            },
             _ => {}
         }
         Action::None

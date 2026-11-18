@@ -32,7 +32,7 @@ $ threads
 # A secure page cannot be opened: the viewer says so and stays.
 @ctl keys {machine} "{tab}{tab}{enter}"
 @ctl text {machine}
-~ ^ https:// pages cannot be opened yet \(no TLS\)$
+~ ^ an https:// page: this OS has no TLS yet\. f reads it through FrogFind$
 ~ ^Welcome$
 
 # `g` asks for an address: here a file on the disk.
@@ -58,6 +58,4 @@ $ sleep 1
 @ctl text {machine}
 ~ ^ http://10\.0\.2\.2:\d+/nothing-here: \S
 $ browse
-usage: browse URL|FILE
-$ browse https://example.org/
-browse https://example.org/: https:// pages cannot be opened yet (no TLS)
+usage: browse URL|FILE|WORDS   (words: a search on FrogFind)
