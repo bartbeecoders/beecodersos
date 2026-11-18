@@ -1,0 +1,35 @@
+# The remote desktop (VNC): off by default, a password made up by the OS,
+# switched only on the console. The test reaches the OS's port 23, so the
+# server runs there; a connection is greeted in the RFB protocol (the full
+# protocol is tested in beenet/src/rfb.rs, a viewer on the HP).
+@net
+@forward
+@disk
+$ net dhcp
+~ ^address 10\.0\.2\.15/24 \(DHCP\)
+$ vnc
+remote desktop (VNC): off (vnc on [PORT] starts it)
+@remote
+(no answer)
+$ vnc on 23
+remote desktop (VNC) on, port 23 (saved)
+~ ^password: [a-hjkmnp-z2-9]{8}   \(shown only now; 'vnc password' makes a new one\)$
+~ ^not encrypted: the screen and all that is typed can be seen on the network
+@remote
+RFB 003.008
+$ vnc
+remote desktop (VNC): on, connect a VNC viewer to 10.0.2.15::23
+since boot: 0 logins, 0 wrong passwords; no viewer is connected
+$ cat /system/vnc
+on 23
+$ vnc password
+~ ^password: [a-hjkmnp-z2-9]{8}   \(shown only now
+# It comes back after a reboot, with the same password.
+@reboot
+~ \[vnc\]  remote desktop on port 23, not encrypted
+$ vnc off
+remote desktop (VNC) off (saved)
+@remote
+(no answer)
+$ vnc sideways
+usage: vnc [on [PORT] | off | password]

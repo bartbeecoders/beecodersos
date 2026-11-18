@@ -460,6 +460,31 @@ fn refit_wallpaper() {
     }
 }
 
+/// Where the mouse pointer is on the desktop, if it has one.
+pub fn pointer_at() -> Option<(usize, usize)> {
+    DESKTOP.get().as_ref()?.pointer().map(|p| (p.x, p.y))
+}
+
+/// Copy the screen (as drawn in memory) into `into`, line by line, each
+/// pixel 0xRRGGBB; the lines are read on every processor in use. Returns
+/// the size, or `None` without a graphics screen kept in memory.
+pub fn capture_rgb(into: &mut Vec<u32>) -> Option<(usize, usize)> {
+    show(true);
+    let back = SHADOW.get().as_ref()?.back;
+    let (w, h) = (back.width(), back.height());
+    into.clear();
+    into.resize(w * h, 0);
+    let (source, target) = (crate::smp::Disjoint(back), crate::smp::Disjoint(into.as_mut_ptr()));
+    crate::smp::run(h, &|y| {
+        let back = source.get();
+        for x in 0..w {
+            // SAFETY: each piece writes its own line of a buffer of w * h.
+            unsafe { *target.get().add(y * w + x) = back.pixel(x, y) };
+        }
+    });
+    Some((w, h))
+}
+
 /// The whole screen as it is drawn in memory: width, height and a function
 /// that gives each pixel as 0xRRGGBB (`screenshot`). `None` without a
 /// graphics screen kept in memory.

@@ -22,6 +22,7 @@ mod dns;
 pub mod base64;
 pub mod hive;
 pub mod html;
+pub mod rfb;
 pub mod http;
 pub mod sha256;
 pub mod sntp;

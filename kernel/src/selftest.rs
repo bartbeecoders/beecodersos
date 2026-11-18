@@ -65,6 +65,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("time zones: UTC, offsets, CET with summer time, the desktop clock", time_zones),
     ("pictures: BMP and PPM in and out, damaged files, fitting", pictures),
     ("wallpaper: covering the screen, behind the windows", wallpaper),
+    ("remote desktop: a viewer's keys, the tiles that changed", vnc_parts),
     ("heap: alloc and free", heap_alloc_free),
     ("heap: 1 MiB buffer", heap_large_buffer),
     ("ring: order and overflow", ring_buffer),
@@ -2896,5 +2897,37 @@ fn wallpaper() -> TestResult {
     check!(screen.canvas().pixel(150, 150) != 0x336699); // the window covers it
     desk.draw_with(&screen.canvas(), None, |_, _| {});
     check_eq!(screen.canvas().pixel(5, 5), crate::wm::BACKGROUND);
+    Ok(())
+}
+
+fn vnc_parts() -> TestResult {
+    use crate::vnc::{changed_tiles, Keys, TILE};
+    let mut keys = Keys::default();
+    check_eq!(keys.event(true, b'a' as u32), Some(Key::Char('a')));
+    check_eq!(keys.event(false, b'a' as u32), None); // letting go types nothing
+    check_eq!(keys.event(true, 0xE9), Some(Key::Char('é'))); // no layout applies
+    check_eq!(keys.event(true, 0xFF0D), Some(Key::Enter));
+    // Control held: letters become Ctrl+letter, until it is let go.
+    check_eq!(keys.event(true, 0xFFE3), None);
+    check_eq!(keys.event(true, b'C' as u32), Some(Key::Ctrl('c')));
+    check_eq!(keys.event(true, b'1' as u32), Some(Key::Char('1')));
+    check_eq!(keys.event(false, 0xFFE3), None);
+    check_eq!(keys.event(true, b'c' as u32), Some(Key::Char('c')));
+    // Alt+Tab: the next window.
+    check_eq!(keys.event(true, 0xFFE9), None);
+    check_eq!(keys.event(true, 0xFF09), Some(Key::NextWindow));
+    check_eq!(keys.event(false, 0xFFE9), None);
+    check_eq!(keys.event(true, 0xFF09), Some(Key::Tab));
+    check_eq!(keys.event(true, 0xFFBE), None); // F1: nothing yet
+    // Tiles: everything the first time, then only what changed.
+    let (w, h) = (150, 70); // 3 x 2 tiles, the last ones narrower
+    let old = alloc::vec![0u32; w * h];
+    check_eq!(changed_tiles(&[], &old, w, h).len(), 6);
+    check!(changed_tiles(&old, &old, w, h).is_empty());
+    let mut new = old.clone();
+    new[66 * w + 149] = 0xFFFFFF; // bottom right corner
+    check_eq!(changed_tiles(&old, &new, w, h), alloc::vec![(2 * TILE, TILE, w - 2 * TILE, h - TILE)]);
+    new[0] = 1;
+    check_eq!(changed_tiles(&old, &new, w, h).len(), 2);
     Ok(())
 }

@@ -31,6 +31,7 @@ mod monitor;
 mod clock;
 mod image;
 mod view;
+mod vnc;
 mod web;
 // After `console`: uses println!.
 mod bootslots;
@@ -169,6 +170,9 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info: u32) -> ! {
     }
     if let Some(port) = httpd::load() {
         println!("[httpd] status page on port {port} ('httpd' for details)");
+    }
+    if let Some(port) = vnc::load() {
+        println!("[vnc]  remote desktop on port {port}, not encrypted ('vnc' for details)");
     }
     if let Some(port) = remote::load() {
         println!("[remote] remote shell on port {port}, not encrypted ('remote' for details)");

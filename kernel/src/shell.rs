@@ -677,6 +677,15 @@ impl Shell {
             ("remote", ["off"]) => self.remote_command(Some(None)),
             ("remote", ["password"]) => self.remote_command(None),
             ("remote", _) => error("usage: remote [on [PORT] | off | password]"),
+            ("vnc", []) => self.vnc_status(),
+            ("vnc", ["on"]) => self.vnc_command(Some(Some(crate::vnc::DEFAULT_PORT))),
+            ("vnc", ["on", port]) => match port.parse::<u16>() {
+                Ok(p) if p != 0 => self.vnc_command(Some(Some(p))),
+                _ => error("usage: vnc [on [PORT] | off | password]"),
+            },
+            ("vnc", ["off"]) => self.vnc_command(Some(None)),
+            ("vnc", ["password"]) => self.vnc_command(None),
+            ("vnc", _) => error("usage: vnc [on [PORT] | off | password]"),
             ("wget", [url]) => self.wget(url, None),
             ("wget", [url, file]) => self.wget(url, Some(file)),
             ("wget", _) => error("usage: wget URL [FILE]   (or: wget URL > FILE)"),
@@ -1210,6 +1219,56 @@ impl Shell {
             "since boot: {logins} logins, {failures} wrong passwords; {}",
             if connected { "someone is connected now" } else { "nobody is connected" }
         );
+    }
+
+    fn vnc_status(&self) {
+        let Some(port) = crate::vnc::port() else {
+            return println!("remote desktop (VNC): off (vnc on [PORT] starts it)");
+        };
+        let (logins, failures, connected) = crate::vnc::counters();
+        let how = match net::address() {
+            // VNC viewers take "host::port", or "host:display" for port 5900 + display.
+            Some(ip) if port == crate::vnc::DEFAULT_PORT => format!("connect a VNC viewer to {ip}"),
+            Some(ip) => format!("connect a VNC viewer to {ip}::{port}"),
+            None => format!("port {port}, but the network has no address yet (see net)"),
+        };
+        println!("remote desktop (VNC): on, {how}");
+        println!(
+            "since boot: {logins} logins, {failures} wrong passwords; {}",
+            if connected { "a viewer is connected now" } else { "no viewer is connected" }
+        );
+    }
+
+    /// `vnc on [PORT]` / `vnc off` (Some) or `vnc password` (None); like
+    /// `remote`, only from the machine's own console.
+    fn vnc_command(&mut self, switch: Option<Option<u16>>) {
+        if session::current().is_some() {
+            return error("vnc: this can only be changed on the machine's own console");
+        }
+        let saved = if self.storage.persistent { " (saved)" } else { " (not saved: RAM disk)" };
+        let password = match switch {
+            Some(port) => match crate::vnc::set(port) {
+                Ok(password) => {
+                    match port {
+                        Some(port) => println!("remote desktop (VNC) on, port {port}{saved}"),
+                        None => return println!("remote desktop (VNC) off{saved}"),
+                    }
+                    password
+                }
+                Err(e) => return error(&format!("vnc: {e}")),
+            },
+            None => match crate::vnc::change_password() {
+                Ok(password) => Some(password),
+                Err(e) => return error(&format!("vnc: {e}")),
+            },
+        };
+        match password {
+            Some(p) => println!("password: {p}   (shown only now; 'vnc password' makes a new one)"),
+            None => println!("password: as before ('vnc password' makes a new one)"),
+        }
+        if switch.is_some() {
+            println!("not encrypted: the screen and all that is typed can be seen on the network; use it on your own network only");
+        }
     }
 
     /// `remote on [PORT]` / `remote off` (Some) or `remote password` (None).
@@ -2178,6 +2237,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("nslookup NAME", "look up the address of a host name"),
     ("nc HOST PORT [TEXT]", "open a TCP connection: type lines, see the answers"),
     ("httpd [on [PORT]|off]", "status page for the local network (off by default)"),
+    ("vnc [on|off|password]", "remote desktop: see and use this screen from a VNC viewer (off by default; not encrypted)"),
     ("remote [on|off]", "remote shell with a password, not encrypted (off by default)"),
     ("wget URL [FILE]", "fetch a web address (http://): show it or save it"),
     ("ntp [SERVER]", "set the clock from a time server"),

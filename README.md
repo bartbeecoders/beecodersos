@@ -331,7 +331,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `head`, `tail`, `wc`, `grep`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `timezone`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `do`, `ai`,
-`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `cpu`, `monitor`, `view`, `screenshot`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `cpu`, `monitor`, `view`, `screenshot`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `vnc`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Text tools** (`kernel/src/textops.rs`, self-tested; `text-tools.scn`):
 `head` / `tail [-n N | -N] FILE` show the first or last lines (10 unless N
@@ -1025,6 +1025,41 @@ do over the serial port. Plan: `Docs/beehive-network-plan.html`.
 - **Not done:** the link's state on the status page (that page is protected);
   a new kernel over the link (H4). On the HP the key is lost at every restart
   until BeeFS lives on a disk there (it runs from a RAM disk).
+
+## Remote desktop: `vnc` ✅ in QEMU
+
+```
+bee:/$ vnc on
+remote desktop (VNC) on, port 5900 (saved)
+password: 4fqfqhgu   (shown only now; 'vnc password' makes a new one)
+not encrypted: the screen and all that is typed can be seen on the network; use it on your own network only
+```
+
+A VNC server (`kernel/src/vnc.rs`, protocol in `beenet/src/rfb.rs`): any
+VNC viewer (TigerVNC, Remmina, `gvncviewer`, macOS Screen Sharing) shows
+the screen and works the keyboard and mouse. Off by default; `vnc on
+[PORT]`, `vnc off` and `vnc password` work only on the machine's own
+console (a remote session or the AI host can't switch it on), like the
+remote shell. The password is made up by the OS (8 characters, the most
+VNC Authentication uses) and never crosses the network: VNC Authentication
+answers a random challenge with DES (checked against openssl's answers).
+One viewer at a time, a 2 s pause after a wrong password, 30 s to log in,
+30 minutes without input ends a session; logins are counted (`vnc`),
+addresses never logged. **Not encrypted**: what is on the screen and what
+is typed can be seen on the network.
+
+The viewer gets the screen as drawn in memory, read on every processor,
+in Raw rectangles of the 64x64 tiles that changed since its last update
+(at most 20 updates a second), in any true-color format of 8, 16 or 32
+bits it asks for. Its keys are typed as on this machine's keyboard
+(`keyboard::push_key`; no layout applies, the viewer sends characters;
+Control+letter, Alt+Tab), its mouse moves the desktop's pointer. Protocol
+versions 3.3, 3.7 and 3.8. Tests: `rfb` unit tests (DES known answers,
+messages in pieces, a 4 GB clipboard and 65,535 encodings bounded,
+pixel formats, keysyms), a self-test (keys, changed tiles) and `vnc.scn`
+(switching, saving, the RFB greeting on a real connection). End to end, a
+viewer logged in to a QEMU VM, got the 1920x1080 screen, and typed a
+command that the console ran.
 
 ## Driven from the host: kernels over the link, remote control ✅ in QEMU
 
