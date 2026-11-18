@@ -58,6 +58,11 @@ pub fn open_web(address: &str) -> Result<usize, &'static str> {
     open("Web", "browse", false, move |window| web::run(window, address, storage))
 }
 
+/// Open the system monitor in a window.
+pub fn open_monitor() -> Result<usize, &'static str> {
+    open("Monitor", "monitor", false, crate::monitor::run)
+}
+
 /// The folder new windows start in: the data partition if there is one.
 fn home() -> &'static str {
     if storage::has_data() { storage::DATA_DIR } else { "/" }

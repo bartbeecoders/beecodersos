@@ -27,6 +27,7 @@ mod filemgr;
 mod textedit;
 mod textops;
 mod doplan;
+mod monitor;
 mod web;
 // After `console`: uses println!.
 mod bootslots;

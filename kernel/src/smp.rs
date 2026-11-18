@@ -217,6 +217,15 @@ pub fn choice(cmdline: &str, saved: Option<&str>) -> bool {
     saved.map(str::trim) != Some("auto off")
 }
 
+/// TSC cycles each started processor spent on jobs (index 1 and up; the
+/// first processor runs the kernel itself and is not counted here).
+static BUSY_CYCLES: [AtomicU64; MAX_PROCESSORS] = [const { AtomicU64::new(0) }; MAX_PROCESSORS];
+
+/// Cycles spent on jobs by each processor in use, from the second one on.
+pub fn busy_cycles() -> Vec<u64> {
+    (1..running()).map(|i| BUSY_CYCLES[i].load(SeqCst)).collect()
+}
+
 /// How many processors run this OS now (1 until `start`).
 pub fn running() -> usize {
     1 + ONLINE.load(SeqCst)
@@ -306,7 +315,7 @@ extern "C" fn ap_entry() -> ! {
         }
     }
     let mwait = setup.mwait;
-    ONLINE.fetch_add(1, SeqCst);
+    let me = ONLINE.fetch_add(1, SeqCst) + 1;
     let mut seen = 0;
     loop {
         // Sleep until a job is announced.
@@ -323,7 +332,11 @@ extern "C" fn ap_entry() -> ! {
             }
         }
         seen = JOBS.load(SeqCst);
+        let start = crate::time::rdtsc();
         work();
+        if let Some(busy) = BUSY_CYCLES.get(me) {
+            busy.fetch_add(crate::time::rdtsc().wrapping_sub(start), SeqCst);
+        }
     }
 }
 

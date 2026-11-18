@@ -1,0 +1,29 @@
+# The system monitor: a window that shows every second what each processor,
+# the memory, the network and the threads are doing.
+@cpus 4
+@ai
+$ ai control on
+$ monitor
+the system monitor in a new window: q leaves
+$ sleep 2
+@ctl text {machine}
+~ ^--- window 1 ---$
+~ ^ System monitor   up \d
+~ ^ Processors: 4 in use$
+~ ^  cpu 0  runs the kernel
+~ ^  cpu 1  \[[#.]+\] +\d+% on jobs$
+~ ^  cpu 3  \[[#.]+\] +\d+% on jobs$
+~ ^  heap   \[[#.]+\] [\d.]+ [KM]iB of [\d.]+ MiB$
+~ ^  in  [\d.]+ [KM]?i?B/s
+~ ^ Threads: \d+$
+~ ^  monitor +(running|ready|waiting)
+~ q leave
+# Work on all processors shows up as work on the others.
+$ cpu test
+~ ^same result; \d+\.\d times as fast$
+@ctl keys {machine} "q"
+$ sleep 1
+$ threads
+!~ monitor
+$ monitor now
+usage: monitor

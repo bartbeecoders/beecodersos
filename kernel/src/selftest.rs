@@ -61,6 +61,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("web viewer: links, scrolling, back, addresses", web_viewer),
     ("text tools: head, tail, wc, grep", text_tools),
     ("do: the plan in an answer, commands it may not run", do_plan),
+    ("monitor: bars, sizes, what the window shows", monitor_render),
     ("heap: alloc and free", heap_alloc_free),
     ("heap: 1 MiB buffer", heap_large_buffer),
     ("ring: order and overflow", ring_buffer),
@@ -2740,5 +2741,41 @@ fn do_plan() -> TestResult {
     for cmd in ["mkdir /a", "echo hi > /a/b.txt", "ls", "cpu", "cpu test", "desktop", "rm /a/b.txt", "grep -i x /"] {
         check!(refused(cmd).is_none());
     }
+    Ok(())
+}
+
+fn monitor_render() -> TestResult {
+    use crate::monitor::{bar, bytes, render, Sample};
+    check_eq!(bar(0, 100, 10), "[..........]");
+    check_eq!(bar(50, 100, 10), "[#####.....]");
+    check_eq!(bar(100, 100, 10), "[##########]");
+    check_eq!(bar(500, 100, 10), "[##########]");
+    check_eq!(bar(5, 0, 4), "[....]");
+    check_eq!(bytes(512), "512 B");
+    check_eq!(bytes(1536), "1.5 KiB");
+    check_eq!(bytes(3 << 20), "3.0 MiB");
+    let before = Sample { micros: 1_000_000, tsc: 1000, busy: alloc::vec![0, 100], heap_size: 1 << 20, ..Sample::default() };
+    let now = Sample {
+        micros: 2_000_000,
+        tsc: 2000,
+        busy: alloc::vec![1000, 350],
+        heap_used: 256 << 10,
+        heap_size: 1 << 20,
+        rx_bytes: 2048,
+        tx_bytes: 0,
+        threads: alloc::vec![(String::from("main"), String::from("running")), (String::from("net"), String::from("waiting"))],
+        ..Sample::default()
+    };
+    let lines: Vec<String> = render(&before, &now, 60).into_iter().map(|(text, _)| text).collect();
+    check!(lines.iter().all(|l| l.chars().count() <= 60));
+    check!(lines.iter().any(|l| l == " Processors: 3 in use"));
+    check!(lines.iter().any(|l| l.starts_with("  cpu 1  [") && l.ends_with("100% on jobs")));
+    check!(lines.iter().any(|l| l.starts_with("  cpu 2  [") && l.ends_with(" 25% on jobs")));
+    check!(lines.iter().any(|l| l.contains("256.0 KiB of 1.0 MiB")));
+    check!(lines.iter().any(|l| l.starts_with("  in  2.0 KiB/s  (2.0 KiB so far)   out 0 B/s")));
+    check!(lines.iter().any(|l| l == " Threads: 2"));
+    check!(lines.iter().any(|l| l.starts_with("  net ") && l.ends_with("waiting")));
+    // A narrow window: nothing wider than it.
+    check!(render(&before, &now, 20).iter().all(|(l, _)| l.chars().count() <= 30));
     Ok(())
 }

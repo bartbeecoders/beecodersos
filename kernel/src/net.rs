@@ -206,6 +206,11 @@ pub fn take_notice() -> Option<(&'static str, String)> {
     NET.get().as_mut()?.notices.pop_front()
 }
 
+/// Bytes received and sent so far (0 without a network card).
+pub fn traffic() -> (u64, u64) {
+    NET.get().as_ref().map_or((0, 0), |net| (net.counters.rx_bytes, net.counters.tx_bytes))
+}
+
 /// How many frames arrived so far: a thread that waits for the network
 /// can wake up when this changes instead of at the next timer tick.
 pub fn frames_received() -> u64 {

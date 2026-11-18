@@ -756,6 +756,11 @@ impl Shell {
                 }
             }
             ("browse", _) => error("usage: browse URL|FILE|WORDS   (words: a search on FrogFind)"),
+            ("monitor", []) => match crate::desk::open_monitor() {
+                Ok(_) => println!("the system monitor in a new window: q leaves"),
+                Err(why) => error(&format!("monitor: {why}")),
+            },
+            ("monitor", _) => error("usage: monitor"),
             ("terminal", []) => match crate::desk::open_terminal() {
                 Ok(_) => println!("a new terminal window ({} open): Alt+Tab or a click changes window, 'exit' or its close box ends it", crate::desk::count()),
                 Err(why) => error(&format!("terminal: {why}")),
@@ -2088,6 +2093,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("install [DISK]", "put the OS on a disk, or upgrade it (alone: list the disks)"),
     ("lsusb", "USB controller and devices"),
     ("threads", "what runs side by side inside the kernel"),
+    ("monitor", "system monitor in a window: work per processor, memory, network, threads"),
     ("display [mode WxH]", "screen: driver, resolution; 'display font 1|2|auto'; 'display test'; 'display speed'"),
     ("edit FILE", "text editor in a window on the desktop (Ctrl+S saves, Ctrl+Q leaves)"),
     ("browse URL|FILE|WORDS", "web page viewer in a window: http:// pages, HTML files, or a search; Tab/Enter/click follow links"),
