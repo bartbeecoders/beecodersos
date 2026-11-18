@@ -602,6 +602,11 @@ pub(crate) struct TcpLayer {
     connections: Vec<Connection>,
     listeners: Vec<u16>,
     next_id: u32,
+    /// The local port the next connection tries first (`None`: pick one at
+    /// random). Ports are handed out in order, so one comes back only after
+    /// about 16,000 connections: the other side may still remember an old
+    /// connection on it (TIME-WAIT) and refuse a new one there.
+    next_port: Option<u16>,
 }
 
 impl Stack {
@@ -642,12 +647,17 @@ impl Stack {
         if self.tcp.connections.len() >= MAX_CONNECTIONS {
             return Err(Error::NoSockets);
         }
-        let local_port = loop {
-            let p = 49152 + (self.random() % 16384) as u16;
-            if !self.tcp.connections.iter().any(|c| c.local_port == p) {
-                break p;
-            }
+        let following = |p: u16| if p == u16::MAX { 49152 } else { p + 1 };
+        let mut p = match self.tcp.next_port {
+            Some(p) => p,
+            None => 49152 + (self.random() % 16384) as u16,
         };
+        // At most MAX_CONNECTIONS ports are in use: this ends quickly.
+        while self.tcp.connections.iter().any(|c| c.local_port == p) {
+            p = following(p);
+        }
+        let local_port = p;
+        self.tcp.next_port = Some(following(p));
         let (id, iss) = (self.tcp_new_id(), self.random());
         self.tcp.connections.push(Connection::new(id, (local_ip, local_port), (dst, port), State::SynSent, iss));
         let index = self.tcp.connections.len() - 1;
@@ -1011,6 +1021,32 @@ mod tests {
 
     fn pattern(len: usize, salt: u32) -> Vec<u8> {
         (0..len as u32).map(|i| (i.wrapping_mul(2654435761).wrapping_add(salt) >> 13) as u8).collect()
+    }
+
+    #[test]
+    fn local_ports_are_not_reused_soon() {
+        // One connection after the other, each given up at once: every one
+        // gets a port of its own, in the range for such ports.
+        let mut l = Link::new();
+        let mut ports = Vec::new();
+        for _ in 0..200 {
+            let c = l.a.tcp_connect(IP_B, 81, l.now).unwrap();
+            let port = l.a.tcp.connections.iter().find(|x| x.id == c.0).unwrap().local_port;
+            assert!(port >= 49152);
+            ports.push(port);
+            l.a.tcp_abort(c, l.now).unwrap();
+            l.a.tcp_release(c, l.now);
+        }
+        let mut distinct = ports.clone();
+        distinct.sort();
+        distinct.dedup();
+        assert_eq!(distinct.len(), ports.len());
+        // At the top of the range it goes round to the bottom.
+        l.a.tcp.next_port = Some(u16::MAX);
+        let c = l.a.tcp_connect(IP_B, 81, l.now).unwrap();
+        let d = l.a.tcp_connect(IP_B, 81, l.now).unwrap();
+        let port = |h: TcpHandle| l.a.tcp.connections.iter().find(|x| x.id == h.0).unwrap().local_port;
+        assert_eq!((port(c), port(d)), (u16::MAX, 49152));
     }
 
     #[test]
