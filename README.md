@@ -322,7 +322,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `head`, `tail`, `wc`, `grep`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `timezone`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `do`, `ai`,
-`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `cpu`, `monitor`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `cpu`, `monitor`, `view`, `screenshot`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Text tools** (`kernel/src/textops.rs`, self-tested; `text-tools.scn`):
 `head` / `tail [-n N | -N] FILE` show the first or last lines (10 unless N
@@ -1257,6 +1257,16 @@ desktop.
   for keys, links, history and addresses, and `browse.scn` (files, links,
   back, a page from the test web server). On the HP it shows
   http://info.cern.ch, the first web site, and follows its links.
+- **Pictures:** `screenshot FILE` saves the screen (as drawn in memory)
+  as a 24-bit BMP; `view FILE` shows a BMP (uncompressed, 24 or 32 bits)
+  or binary PPM (P6) picture in a window (`kernel/src/view.rs`), as large
+  as fits and at most twice its size, in the middle on a dark background.
+  The lines are scaled on every processor in use (`console::pane_picture`);
+  a window that shows a picture is not covered again by its text. Files
+  are untrusted: `kernel/src/image.rs` checks every size, refuses
+  pictures over 4096 x 4096 pixels, and has a self-test with files cut
+  off at every byte. `pictures.scn` saves the screen at 800x600, views it
+  on a 4-processor VM and checks the pixels of the window.
 - **Clock and time zone:** the desktop shows the local date and time at
   the right end of its row of buttons ("Wed 18 Nov 20:13"); a small thread
   (`kernel/src/clock.rs`) changes it when the minute does. `timezone

@@ -241,6 +241,18 @@ impl Canvas {
         self.mode.format.decode(u32::from_le_bytes(value))
     }
 
+    /// A line of 0xRRGGBB pixels from (x, y) to the right; what falls
+    /// outside the canvas (or its clip) is left out.
+    pub fn put_row(&self, x: usize, y: usize, row: &[u32]) {
+        let line = Rect::new(x, y, row.len(), 1).clip(&self.clip);
+        if line.is_empty() {
+            return;
+        }
+        for (i, rgb) in row[line.x - x..line.x - x + line.width].iter().enumerate() {
+            self.put(line.x + i, y, self.mode.format.encode(*rgb));
+        }
+    }
+
     /// Callers have checked: x < width and y < height.
     fn put(&self, x: usize, y: usize, value: u32) {
         let bytes = self.mode.format.bytes();

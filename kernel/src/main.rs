@@ -29,6 +29,8 @@ mod textops;
 mod doplan;
 mod monitor;
 mod clock;
+mod image;
+mod view;
 mod web;
 // After `console`: uses println!.
 mod bootslots;

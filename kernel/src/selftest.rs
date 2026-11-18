@@ -63,6 +63,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("do: the plan in an answer, commands it may not run", do_plan),
     ("monitor: bars, sizes, what the window shows", monitor_render),
     ("time zones: UTC, offsets, CET with summer time, the desktop clock", time_zones),
+    ("pictures: BMP and PPM in and out, damaged files, fitting", pictures),
     ("heap: alloc and free", heap_alloc_free),
     ("heap: 1 MiB buffer", heap_large_buffer),
     ("ring: order and overflow", ring_buffer),
@@ -2821,5 +2822,44 @@ fn time_zones() -> TestResult {
     let mut narrow = crate::wm::Desktop::new();
     narrow.set_buttons(&["Terminal", "Files"], 300);
     check_eq!(narrow.set_clock("Wed 18 Nov 20:05"), None); // does not fit
+    Ok(())
+}
+
+fn pictures() -> TestResult {
+    use crate::image::{decode, encode_bmp, fit, Image};
+    // A BMP written here comes back the same (3 pixels wide: the lines need padding).
+    let colors = [0xFF0000, 0x00FF00, 0x0000FF, 0x123456, 0xFFFFFF, 0x000000];
+    let bmp = encode_bmp(3, 2, |x, y| colors[y * 3 + x]);
+    check_eq!(bmp.len(), 54 + 12 * 2);
+    check_eq!(decode(&bmp), Ok(Image { width: 3, height: 2, pixels: colors.to_vec() }));
+    // Stored from the bottom (positive height), as most programs write it.
+    let mut bottom_up = bmp.clone();
+    bottom_up[22..26].copy_from_slice(&2i32.to_le_bytes());
+    check_eq!(decode(&bottom_up).map(|i| i.pixels), Ok(alloc::vec![0x123456, 0xFFFFFF, 0x000000, 0xFF0000, 0x00FF00, 0x0000FF]));
+    // PPM with a comment.
+    let ppm = b"P6\n# made by hand\n2 1\n255\n\xff\x00\x00\x00\x00\xff";
+    check_eq!(decode(ppm), Ok(Image { width: 2, height: 1, pixels: alloc::vec![0xFF0000, 0x0000FF] }));
+    // Damaged or cut off anywhere: an error, never a crash.
+    for end in 0..bmp.len() {
+        check!(decode(&bmp[..end]).is_err());
+    }
+    for end in 0..ppm.len() {
+        check!(decode(&ppm[..end]).is_err());
+    }
+    check!(decode(b"GIF89a").is_err());
+    check!(decode(b"P6 5000 5000 255 ").is_err()); // too large
+    check!(decode(b"P6 2 1 65535 ").is_err());
+    let mut huge = bmp.clone();
+    huge[18..22].copy_from_slice(&100_000i32.to_le_bytes());
+    check!(decode(&huge).is_err());
+    let mut negative = bmp.clone();
+    negative[18..22].copy_from_slice(&(-3i32).to_le_bytes());
+    check!(decode(&negative).is_err());
+    // Fitting: as large as fits, at most twice the size.
+    check_eq!(fit(1920, 1080, 640, 480), (640, 360, 33));
+    check_eq!(fit(100, 50, 640, 480), (200, 100, 200));
+    check_eq!(fit(640, 480, 640, 480), (640, 480, 100));
+    check_eq!(fit(10_000, 1, 100, 100), (100, 1, 1));
+    check_eq!(fit(0, 5, 100, 100), (0, 0, 0));
     Ok(())
 }

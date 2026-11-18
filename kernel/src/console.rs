@@ -288,6 +288,9 @@ struct Pane {
     _cells: Vec<u16>,
     con: FbCon<'static>,
     surface: Surface,
+    /// The window shows a picture (`pane_picture`), not its text: a redraw
+    /// of the text would cover it.
+    picture: bool,
 }
 
 static PANES: Global<Vec<Pane>> = Global::new(Vec::new());
@@ -336,7 +339,7 @@ pub fn open_pane(title: &str) -> Result<usize, &'static str> {
     let _rebuilding = Rebuilding::start();
     let Some(desk) = DESKTOP.get().as_mut() else { return Err("windows need the desktop (see desktop)") };
     let window = desk.open(title, frame);
-    PANES.get().push(Pane { window, _cells: cells, con, surface });
+    PANES.get().push(Pane { window, _cells: cells, con, surface, picture: false });
     compose(bounds);
     show(true);
     Ok(window)
@@ -374,6 +377,41 @@ pub fn pane_show(window: usize, lines: &[Vec<u16>], cursor: (usize, usize)) {
     }
     pane.con.set_cursor(cursor.0 * pane.con.width() + cursor.1);
     show(true);
+}
+
+/// Show a picture in a window instead of text: as large as fits (at most
+/// twice its size), in the middle, on a dark background; the lines are
+/// scaled on every processor in use. Returns the size it is shown at, in
+/// percent.
+pub fn pane_picture(window: usize, image: &crate::image::Image) -> Option<usize> {
+    let pane = PANES.get().iter_mut().find(|p| p.window == window)?;
+    let canvas = pane.surface.canvas();
+    let (room_w, room_h) = (canvas.width(), canvas.height());
+    let (w, h, percent) = crate::image::fit(image.width, image.height, room_w, room_h);
+    canvas.fill_rect(canvas.bounds(), 0x202020);
+    let (left, top) = ((room_w - w) / 2, (room_h - h) / 2);
+    let shared = crate::smp::Disjoint(canvas);
+    crate::smp::run(h, &|y| {
+        // Nearest neighbour: each shown pixel takes the picture's pixel under it.
+        let from = y * image.height / h;
+        let row: Vec<u32> = (0..w).map(|x| image.pixels[from * image.width + x * image.width / w]).collect();
+        shared.get().put_row(left, top + y, &row);
+    });
+    pane.picture = true;
+    let id = pane.window;
+    window_changed(id, canvas.bounds());
+    show(true);
+    Some(percent)
+}
+
+/// The whole screen as it is drawn in memory: width, height and a function
+/// that gives each pixel as 0xRRGGBB (`screenshot`). `None` without a
+/// graphics screen kept in memory.
+pub fn with_screen<R>(f: impl FnOnce(usize, usize, &dyn Fn(usize, usize) -> u32) -> R) -> Option<R> {
+    show(true);
+    let shadow = SHADOW.get().as_ref()?;
+    let back = shadow.back;
+    Some(f(back.width(), back.height(), &|x, y| back.pixel(x, y)))
 }
 
 pub fn pane_exists(window: usize) -> bool {
@@ -795,7 +833,7 @@ pub fn redraw() -> (u64, u64) {
         screen.redraw();
         match SHADOW.get() {
             Some(shadow) if DESKTOP.get().is_some() => {
-                for pane in PANES.get().iter_mut() {
+                for pane in PANES.get().iter_mut().filter(|p| !p.picture) {
                     pane.con.redraw();
                 }
                 compose(shadow.back.bounds());

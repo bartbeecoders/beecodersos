@@ -1,0 +1,31 @@
+# Pictures: `screenshot` saves the screen as a BMP, `view` shows a picture
+# in a window, scaled on all processors. At 800x600 the viewer's window is
+# the first extra one: content 640x400 at 38,62; the 800x600 screen fits as
+# 533x400 (66%) with dark bands of 53 pixels left and right.
+@cpus 4
+@ai
+$ ai control on
+$ display mode 800x600
+~ ^mode: 800x600
+$ screenshot /screen.bmp
+saved the screen (800 x 600) to /screen.bmp (1406 KiB)
+$ view /screen.bmp
+/screen.bmp (800 x 600 pixels) in a new window: q leaves
+$ sleep 1
+@screenshot 800x600 pixels 60,200=202020 660,200=202020 95,66=a8d0f0
+$ threads
+~ view +(waiting|ready)
+@ctl keys {machine} "q"
+$ sleep 1
+$ threads
+!~ view
+# What is no picture opens no window.
+$ echo hello > /note.txt
+$ view /note.txt
+view /note.txt: not a picture this OS can show (BMP or PPM)
+$ view /missing.bmp
+view /missing.bmp: no such file or directory
+$ view
+usage: view FILE   (a BMP or PPM picture)
+$ screenshot
+usage: screenshot FILE   (saves the screen as a BMP picture)
