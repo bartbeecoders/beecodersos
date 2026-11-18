@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: beecodersos-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: beecodersos-web }
+  template:
+    metadata:
+      labels: { app: beecodersos-web }
+    spec:
+      imagePullSecrets:
+        - name: acr-secret
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+      containers:
+        - name: web
+          image: beecodersos-web
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { containerPort: 8080, name: http }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { memory: 64Mi }

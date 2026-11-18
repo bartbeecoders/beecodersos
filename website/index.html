@@ -3,137 +3,283 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BeeCodersOs — an operating system that helps improve itself</title>
-<meta name="description" content="BeeCodersOs is a from-scratch x86_64 operating system in Rust that records what goes wrong and what people miss, and improves itself with AI: small tested changes, tried in a spare kernel slot and rolled back automatically if they fail.">
-<meta property="og:title" content="BeeCodersOs — an operating system that helps improve itself">
-<meta property="og:description" content="A from-scratch x86_64 OS in Rust, improved by AI in small, tested, reversible steps.">
-<meta property="og:image" content="img/do-command.webp">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cpolygon points='50,5 90,27 90,73 50,95 10,73 10,27' fill='%23f5b301'/%3E%3C/svg%3E">
+<title>BeeCodersOs — the operating system that improves itself</title>
+<meta name="description" content="BeeCodersOs is a from-scratch x86_64 operating system in Rust that notices what goes wrong and what people miss, and improves itself with AI: small, tested changes a person approves, tried in a spare kernel slot and rolled back automatically if they fail.">
+<meta name="theme-color" content="#0d0b07">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://os.beecoders.com/">
+<meta property="og:title" content="BeeCodersOs — the operating system that improves itself">
+<meta property="og:description" content="A from-scratch x86_64 OS in Rust, improved by AI in small, tested, reversible steps. Running on real hardware.">
+<meta property="og:image" content="https://os.beecoders.com/img/do-command.webp">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cpolygon points='50,4 92,27 92,73 50,96 8,73 8,27' fill='%23f5b301'/%3E%3Cpolygon points='50,30 70,41 70,63 50,74 30,63 30,41' fill='%230d0b07'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
+<script src="site.js" defer></script>
 </head>
 <body>
 
+<a class="skip" href="#main">Skip to content</a>
+
 <header class="top">
-  <a class="brand" href="#"><span class="hex" aria-hidden="true"></span>BeeCodersOs</a>
-  <nav>
-    <a href="#how">How it works</a>
+  <a class="brand" href="#"><span class="logo" aria-hidden="true"></span>BeeCoders<b>Os</b></a>
+  <nav aria-label="Main">
+    <a href="#mission">Mission</a>
+    <a href="#loop">The loop</a>
     <a href="#features">Features</a>
     <a href="#progress">Progress</a>
-    <a class="button small" href="https://github.com/bartbeecoders/beecodersos">GitHub</a>
+    <a class="gh" href="https://github.com/bartbeecoders/beecodersos">
+      <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      GitHub
+    </a>
   </nav>
 </header>
 
-<main>
+<main id="main">
 
+<!-- ======================================================== hero -->
 <section class="hero">
-  <div class="hero-text">
-    <p class="eyebrow">x86_64 · Rust · from scratch</p>
-    <h1>An operating system that <em>helps improve itself</em>.</h1>
-    <p class="lead">BeeCodersOs records what goes wrong and what people miss. An AI turns that
-      into small, tested changes that a person approves. Every new kernel is tried in a spare
-      slot on the real machine and rolled back automatically if it fails.</p>
-    <div class="actions">
-      <a class="button" href="https://github.com/bartbeecoders/beecodersos">See the code on GitHub</a>
-      <a class="button ghost" href="#how">How it works</a>
+  <div class="hive-bg" aria-hidden="true"></div>
+  <div class="wrap hero-grid">
+    <div class="hero-text">
+      <p class="pill"><span class="dot"></span> v0.0.3 · build 113 · running on real hardware</p>
+      <h1>The operating system that <span class="honey">improves itself</span>.</h1>
+      <p class="lead">BeeCodersOs is a 64-bit OS written from scratch in Rust. It notices what goes
+        wrong and what people miss, and an AI turns that into small, tested changes that a person
+        approves. Every new kernel boots on trial and rolls back by itself if it fails.</p>
+      <div class="actions">
+        <a class="btn" href="https://github.com/bartbeecoders/beecodersos">Explore the code <span aria-hidden="true">→</span></a>
+        <a class="btn ghost" href="#loop">How it improves itself</a>
+      </div>
+    </div>
+
+    <div class="term" role="img" aria-label="A BeeCodersOs terminal: the user types 'do make a folder /garden with a file plan.txt that lists four flowers bees love'. The AI proposes the commands, the user presses y, and they run.">
+      <div class="term-bar"><i></i><i></i><i></i><span>bee — terminal</span></div>
+      <pre class="term-body" id="term"><span class="p">bee:/data$ </span>do make a folder /garden with a file plan.txt that lists four flowers bees love, then show it
+<span class="m">I will make the folder /garden, write four flowers bees love into plan.txt,
+and show the file.</span>
+  1. mkdir /garden
+  2. echo lavender &gt; /garden/plan.txt
+  3. echo sunflower &gt;&gt; /garden/plan.txt
+  4. echo borage &gt;&gt; /garden/plan.txt
+  5. echo clover &gt;&gt; /garden/plan.txt
+  6. cat /garden/plan.txt
+<span class="q">Run them? y: yes, any other key: no</span>
+<span class="d">$ mkdir /garden
+$ echo lavender &gt; /garden/plan.txt
+  …</span>
+lavender
+sunflower
+borage
+clover
+<span class="ok">done: 6 of 6 ran</span>
+<span class="p">bee:/data$ </span><span class="cursor"></span></pre>
     </div>
   </div>
-  <figure class="hero-shot">
-    <img src="img/do-command.webp" width="700" height="480" alt="The BeeCodersOs desktop: in a terminal window, 'do make a folder /garden with a file plan.txt that lists four flowers bees love' — the AI proposes six commands, the user presses y, and they run.">
-    <figcaption>Real hardware, not a mock-up: <code>do</code> asks the AI for a plan in plain words; nothing runs until you press <kbd>y</kbd>.</figcaption>
-  </figure>
 </section>
 
-<section class="stats" aria-label="In numbers">
-  <div><strong>28k</strong><span>lines of Rust, kernel to network stack</span></div>
-  <div><strong>68</strong><span>boot tests, plus 67 in-kernel self-tests</span></div>
-  <div><strong>4×</strong><span>faster on 4 cores: work is spread over every processor</span></div>
-  <div><strong>A/B</strong><span>kernel slots: a new kernel that fails goes back by itself</span></div>
+<!-- ======================================================== numbers -->
+<section class="wrap numbers" aria-label="In numbers">
+  <div><strong data-count="28500">28.5k</strong><span>lines of Rust, from boot code to TCP</span></div>
+  <div><strong data-count="283">283</strong><span>automated tests, run on every change</span></div>
+  <div><strong data-count="113">113</strong><span>builds in the first five days</span></div>
+  <div><strong>1</strong><span>outside crate in the kernel, for its heap. Everything else is written here</span></div>
 </section>
 
-<section id="how" class="how">
-  <h2>The improvement loop</h2>
-  <p class="section-lead">Most systems get better when someone files a bug. BeeCodersOs notices for
-    itself, and every step is small enough to check and to undo.</p>
-  <ol class="loop">
-    <li><span class="step">1</span><h3>It observes</h3><p>Crashes, commands that don't exist, failed commands and
-      <code>wish</code>es are recorded on the machine — command names only, never what you typed after them.</p></li>
-    <li><span class="step">2</span><h3>It collects</h3><p><b>beehive</b>, a small daemon on a host computer, gathers
-      those signals from every machine and turns them into a backlog.</p></li>
-    <li><span class="step">3</span><h3>An AI proposes</h3><p>A coding agent takes one backlog item, writes the change
-      <em>and a test for it</em>, and must pass the whole test suite.</p></li>
-    <li><span class="step">4</span><h3>A person approves</h3><p>Nothing lands on its own: a human reviews the change
-      before it is merged.</p></li>
-    <li><span class="step">5</span><h3>It tries, safely</h3><p>The new kernel goes into the spare of two boot slots and
-      boots on trial. If it doesn't pass its health check, the machine goes back to the old one by itself.</p></li>
-  </ol>
-</section>
-
-<section id="features" class="features">
-  <h2>What it can do today</h2>
-  <div class="grid">
-    <article><h3>Talk to it</h3><p><code>ask</code> answers questions about the system,
-      <code>explain</code> explains the last error or crash, and <code>do</code> turns a task in plain words into
-      shell commands that run only after you agree. Some commands a plan may never run, whatever you answer.</p></article>
-    <article><h3>A desktop</h3><p>Windows you can drag, a mouse, buttons to start programs, several terminals side by
-      side, a text editor and a file manager — drawn by all processors at once.</p></article>
-    <article><h3>A web browser</h3><p><code>browse</code> shows web pages as clean text: headings, lists, links you
-      follow with Tab or a click. Type words instead of an address to search the web.</p></article>
-    <article><h3>Its own network stack</h3><p>Ethernet drivers, ARP, IPv4, DHCP, DNS, TCP, HTTP, time and file
-      transfer — written from scratch, every received byte treated as untrusted.</p></article>
-    <article><h3>Its own file system</h3><p>BeeFS, on RAM, IDE or SATA disks; an installer that puts the OS on a
-      disk, and A/B kernel slots for updates over the network.</p></article>
-    <article><h3>Every core</h3><p>All processors start at boot. Work is split into pieces that run on every core:
-      hashing 64 MiB takes 130 ms instead of 521 ms on a four-core machine.</p></article>
+<!-- ======================================================== mission -->
+<section id="mission" class="wrap mission">
+  <p class="kicker">Mission</p>
+  <h2>Software that gets better because it's <em>used</em>, not because someone files a bug.</h2>
+  <div class="mission-cols">
+    <p>Today, an operating system improves only when a person notices a problem, writes it down,
+      and someone else finds the time to fix it. Most of what goes wrong is never reported.</p>
+    <p>BeeCodersOs closes that gap. The system keeps track of its own crashes, the commands people
+      reach for that don't exist, and the wishes they type in. That becomes a backlog, and the backlog becomes code.</p>
+    <p>AI does the legwork, but the system stays <b>careful</b>: every change is small, tested and
+      approved by a person, and the system can always go back to the version that worked.</p>
   </div>
-  <figure class="wide-shot">
-    <img src="img/web-viewer.webp" width="700" height="480" loading="lazy" alt="The BeeCodersOs web page viewer showing the first web site ever, at CERN, with yellow headings and cyan links.">
-    <figcaption>The first web site ever, info.cern.ch, in BeeCodersOs's own browser.</figcaption>
-  </figure>
 </section>
 
-<section class="safety">
-  <h2>Careful by design</h2>
-  <ul>
-    <li><b>Tests before anything ships.</b> One command, <code>make check</code>, boots the system dozens of times
-      in virtual machines — BIOS and UEFI, disks, network, desktop, crashes and rollbacks — with no internet and no AI needed.</li>
-    <li><b>Privacy.</b> The event log keeps command names, never their arguments. Host names and addresses are never logged.
-      API keys live on the host, never on the machine.</li>
-    <li><b>An off switch.</b> <code>ai off</code> stops every AI feature, and the system works fine without it.</li>
-    <li><b>Closed by default.</b> The machine listens on the network only for a service you switched on yourself.</li>
-  </ul>
+<!-- ======================================================== loop -->
+<section id="loop" class="loop-section">
+  <div class="wrap">
+    <p class="kicker">The improvement loop</p>
+    <h2>Five steps, each one small enough to check and to undo.</h2>
+    <div class="loop-grid">
+      <svg class="loop-svg" viewBox="0 0 400 400" aria-hidden="true">
+        <defs>
+          <linearGradient id="g" x1="0" x2="1" y1="0" y2="1">
+            <stop offset="0" stop-color="#ffd24a"/><stop offset="1" stop-color="#f08c00"/>
+          </linearGradient>
+        </defs>
+        <circle cx="200" cy="200" r="150" class="ring"/>
+        <circle cx="200" cy="200" r="150" class="ring-run"/>
+        <g class="nodes">
+          <g transform="translate(200 50)"><polygon points="0,-30 26,-15 26,15 0,30 -26,15 -26,-15"/><text y="6">1</text></g>
+          <g transform="translate(343 154)"><polygon points="0,-30 26,-15 26,15 0,30 -26,15 -26,-15"/><text y="6">2</text></g>
+          <g transform="translate(288 321)"><polygon points="0,-30 26,-15 26,15 0,30 -26,15 -26,-15"/><text y="6">3</text></g>
+          <g transform="translate(112 321)"><polygon points="0,-30 26,-15 26,15 0,30 -26,15 -26,-15"/><text y="6">4</text></g>
+          <g transform="translate(57 154)"><polygon points="0,-30 26,-15 26,15 0,30 -26,15 -26,-15"/><text y="6">5</text></g>
+        </g>
+        <text x="200" y="192" class="center-t">a better</text>
+        <text x="200" y="220" class="center-t">kernel</text>
+      </svg>
+      <ol class="steps">
+        <li><h3>It observes</h3><p>Crashes, failed commands, commands that don't exist and <code>wish</code>es are recorded on the
+          machine. It records command names only, never what you typed after them.</p></li>
+        <li><h3>It collects</h3><p><b>beehive</b>, a small daemon on a host computer, gathers those signals from every
+          machine and turns them into a backlog.</p></li>
+        <li><h3>An AI writes the change</h3><p>A coding agent takes one backlog item, writes the change
+          <em>and a test for it</em>, and has to pass the whole test suite.</p></li>
+        <li><h3>A person approves</h3><p>Nothing lands on its own. A human reviews every change before it is merged.</p></li>
+        <li><h3>It tries it safely</h3><p>The new kernel goes into the spare of two boot slots and boots on trial. If it fails
+          its health check, the machine goes back to the old kernel by itself.</p></li>
+      </ol>
+    </div>
+  </div>
 </section>
 
-<section id="progress" class="progress">
-  <h2>Progress</h2>
-  <p class="section-lead">Started in November 2026. Version 0.0.3 — early, honest, and moving fast.</p>
-  <ul class="timeline">
-    <li class="done"><b>Boot</b> 64-bit kernel, BIOS and UEFI</li>
-    <li class="done"><b>BeeFS</b> its own file system</li>
-    <li class="done"><b>BeeShell</b> terminal, keyboard layouts, power</li>
-    <li class="done"><b>Self-observation</b> clock, event log, crash reports, wishes</li>
-    <li class="done"><b>AI bridge</b> ask, explain, do</li>
-    <li class="done"><b>Improvement loop</b> signals → backlog → agent → review</li>
-    <li class="done"><b>A/B slots</b> trial boots with automatic rollback</li>
-    <li class="done"><b>Networking</b> drivers up to HTTP</li>
-    <li class="done"><b>Desktop</b> windows, mouse, editor, file manager, browser</li>
-    <li class="done"><b>Multi-core</b> every processor at work</li>
-    <li class="next"><b>Next</b> encrypted web (TLS), sound, apps in a sandbox</li>
-  </ul>
+<!-- ======================================================== features -->
+<section id="features" class="wrap features">
+  <p class="kicker">What it can do today</p>
+  <h2>A real system, on a real machine.</h2>
+  <p class="sub">Everything below runs on an HP EliteDesk with four cores, booted from its own SATA disk. These screenshots are real; none of them are mock-ups.</p>
+
+  <div class="bento">
+    <article class="card span2 shot-card">
+      <div class="card-text">
+        <span class="tag">AI</span>
+        <h3>Talk to it</h3>
+        <p><code>ask</code> answers questions about the system, <code>explain</code> explains the last error or
+          crash, and <code>do</code> turns a task in plain words into shell commands that run only after you agree.</p>
+      </div>
+      <img src="img/do-command.webp" width="700" height="480" loading="lazy" alt="The do command: the AI proposes six commands, the user presses y, and they run.">
+    </article>
+
+    <article class="card">
+      <span class="tag">Network</span>
+      <h3>Its own network stack</h3>
+      <p>Ethernet drivers, ARP, IPv4, DHCP, DNS, TCP, HTTP, time and file transfer, all written from scratch.
+        Every byte it receives is treated as untrusted.</p>
+      <ul class="chips"><li>e1000</li><li>I217</li><li>DHCP</li><li>DNS</li><li>TCP</li><li>HTTP</li><li>NTP</li><li>TFTP</li></ul>
+    </article>
+
+    <article class="card">
+      <span class="tag">Storage</span>
+      <h3>Its own file system</h3>
+      <p>BeeFS works on RAM, IDE and SATA disks. There's an installer that puts the OS on a disk, and kernel updates
+        arrive over the network.</p>
+    </article>
+
+    <article class="card span2 shot-card reverse">
+      <div class="card-text">
+        <span class="tag">Desktop</span>
+        <h3>Windows, mouse, editor</h3>
+        <p>Windows you can drag, a USB mouse, buttons that start programs, several terminals side by side, a text
+          editor and a file manager. The screen is drawn by every processor at once.</p>
+      </div>
+      <img src="img/editor.webp" width="664" height="448" loading="lazy" alt="The BeeCodersOs text editor in a window on the desktop.">
+    </article>
+
+    <article class="card">
+      <span class="tag">Web</span>
+      <h3>A web browser</h3>
+      <p><code>browse</code> shows web pages as clean text: headings, lists, and links you follow with Tab or a click.
+        Type words instead of an address and it searches the web.</p>
+    </article>
+
+    <article class="card">
+      <span class="tag">Multi-core</span>
+      <h3>Every core at work</h3>
+      <p>All processors start at boot, and work is split across them. Hashing 64 MiB takes
+        <b>130 ms</b> instead of 521 ms on four cores.</p>
+      <div class="bars" aria-hidden="true"><span class="w100">1 core · 521 ms</span><span class="w25">4 cores · 130 ms</span></div>
+    </article>
+
+    <article class="card">
+      <span class="tag">Remote</span>
+      <h3>Driven from afar</h3>
+      <p>From the host you can run commands, read the screen and deploy a new kernel over the network. The machine
+        reports whether the new kernel is healthy.</p>
+    </article>
+  </div>
 </section>
 
-<section class="cta">
-  <h2>Follow along</h2>
-  <p>The code, the plans and every change are on GitHub.</p>
-  <a class="button" href="https://github.com/bartbeecoders/beecodersos">github.com/bartbeecoders/beecodersos</a>
+<!-- ======================================================== gallery -->
+<section class="gallery-section">
+  <div class="wrap">
+    <div class="gallery">
+      <figure><img src="img/web-viewer.webp" width="700" height="480" loading="lazy" alt="The first web site ever, info.cern.ch, in the BeeCodersOs web viewer."><figcaption>The first web site ever, info.cern.ch, in its own browser.</figcaption></figure>
+      <figure><img src="img/monitor.webp" width="664" height="448" loading="lazy" alt="The BeeCodersOs system monitor: four processors, memory, network traffic and nine kernel threads."><figcaption>The system monitor: every core, memory, network and threads, live.</figcaption></figure>
+      <figure><img src="img/desktop.webp" width="1280" height="1024" loading="lazy" alt="The full BeeCodersOs desktop at 1280×1024 on the HP: a light blue background, buttons for Terminal, Files, Notes and Web, and windows."><figcaption>The whole desktop at 1280×1024 on the HP.</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================== safety -->
+<section class="wrap safety">
+  <p class="kicker">Careful by design</p>
+  <h2>An AI may write the code. It can't break your machine.</h2>
+  <div class="safe-grid">
+    <div><span class="ico" aria-hidden="true">⟲</span><h3>A/B kernel slots</h3><p>A new kernel boots on trial. If it doesn't pass its health check, the machine goes back to the last good one without anyone touching it.</p></div>
+    <div><span class="ico" aria-hidden="true">✓</span><h3>Tests before anything ships</h3><p><code>make check</code> boots the system dozens of times in virtual machines (BIOS and UEFI, disks, network, desktop, crashes and rollbacks), with no internet and no AI.</p></div>
+    <div><span class="ico" aria-hidden="true">◉</span><h3>Privacy first</h3><p>The event log keeps command names, never what you typed after them. Host names and addresses are never logged. API keys stay on the host.</p></div>
+    <div><span class="ico" aria-hidden="true">⏻</span><h3>An off switch</h3><p><code>ai off</code> stops every AI feature, and the system works fine without them. Nothing listens on the network unless you switch it on.</p></div>
+  </div>
+</section>
+
+<!-- ======================================================== architecture -->
+<section class="wrap arch">
+  <p class="kicker">Under the hood</p>
+  <h2>From the first instruction to the AI, written here.</h2>
+  <div class="stack">
+    <div class="layer l5"><b>beehive</b><span>on the host: AI bridge, backlog, deploys</span></div>
+    <div class="layer l4"><b>BeeShell &amp; desktop</b><span>58 commands, windows, editor, browser</span></div>
+    <div class="layer l3"><b>beenet · BeeFS</b><span>network stack and file system, unit-tested on the host</span></div>
+    <div class="layer l2"><b>Kernel</b><span>threads, SMP, drivers (SATA, e1000, xHCI USB, framebuffer, ACPI)</span></div>
+    <div class="layer l1"><b>Boot</b><span>Limine, BIOS and UEFI, A/B slots</span></div>
+  </div>
+</section>
+
+<!-- ======================================================== progress -->
+<section id="progress" class="progress-section">
+  <div class="wrap">
+    <p class="kicker">Progress</p>
+    <h2>Started on 14 November 2026. Moving fast.</h2>
+    <p class="sub">Version 0.0.3: early, but it runs every day on a real computer.</p>
+    <ol class="timeline">
+      <li class="done"><time>Nov 14</time><b>From nothing to TCP in a day</b><span>a 64-bit kernel on BIOS and UEFI, BeeFS, BeeShell, <code>make check</code>, the event log and <code>wish</code>, the AI bridge, the first change written by the improvement loop, A/B slots with rollback, and a network stack up to TCP</span></li>
+      <li class="done"><time>Nov 15</time><b>Onto real hardware</b><span>HTTP, time and file transfer; threads; a status page and a remote shell; SATA disks and the Intel network card on the HP; the first desktop</span></li>
+      <li class="done"><time>Nov 16</time><b>Installed on the HP</b><span>graphics through the firmware's framebuffer, USB keyboard and mouse, beehive over the network, an installer for the hard disk</span></li>
+      <li class="done"><time>Nov 17</time><b>A desktop worth using</b><span>several windows, a text editor, a file manager, fast drawing, restarting by itself after a crash, driven from the host</span></li>
+      <li class="done"><time>Nov 18</time><b>Every core, and the web</b><span>all four processors at work, a web browser, <code>do</code>, <code>grep</code> and friends, a system monitor</span></li>
+      <li class="next"><time>Next</time><b>Apps in a sandbox</b><span>AI-written apps in WebAssembly, so new commands don't need a kernel change</span></li>
+      <li class="next"><time>Later</time><b>And then</b><span>encrypted web (TLS), sound, paging, user programs</span></li>
+    </ol>
+  </div>
+</section>
+
+<!-- ======================================================== cta -->
+<section class="wrap cta">
+  <div class="cta-box">
+    <div class="hive-bg" aria-hidden="true"></div>
+    <h2>Follow along as it builds itself.</h2>
+    <p>The code, the plans and every change, along with the tests that checked them, are on GitHub.</p>
+    <div class="actions center">
+      <a class="btn" href="https://github.com/bartbeecoders/beecodersos">★ Star on GitHub</a>
+      <a class="btn ghost" href="https://github.com/bartbeecoders/beecodersos#quick-start">Boot it in QEMU</a>
+    </div>
+  </div>
 </section>
 
 </main>
 
-<footer>
-  <p>BeeCodersOs is a BeeCoders project, written with AI and reviewed by people.</p>
+<footer class="wrap foot">
+  <span class="brand small"><span class="logo" aria-hidden="true"></span>BeeCoders<b>Os</b></span>
+  <p>A <a href="https://beecoders.com">BeeCoders</a> project. Written with AI, reviewed by people.</p>
+  <a href="https://github.com/bartbeecoders/beecodersos">GitHub</a>
 </footer>
 
 </body>

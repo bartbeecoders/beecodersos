@@ -1,0 +1,19 @@
+# os.beecoders.com on K3s, namespace beecodersos-web. scripts/deploy-k3s.sh streams
+# this directory to the VPS and runs `kubectl apply -k` there.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: beecodersos-web
+
+resources:
+  - namespace.yaml
+  - deployment.yaml
+  - service.yaml
+
+images:
+  - name: beecodersos-web
+    newName: beecodersregistry.azurecr.io/beecodersos-web
+    newTag: latest   # scripts/deploy-k3s.sh replaces this with the deployed version
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: beecodersos-web

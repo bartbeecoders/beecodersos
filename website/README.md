@@ -1,14 +1,29 @@
 # os.beecoders.com
 
 The project's public web site: one static page (`index.html`, `style.css`,
-screenshots in `img/`). No build step and no scripts; the only outside
-resource is the Inter / JetBrains Mono fonts from Google Fonts.
+`site.js`, screenshots in `img/`). No build step. The only outside resource is
+the Space Grotesk / Inter / JetBrains Mono fonts from Google Fonts.
 
-- **Preview:** open `index.html` in a browser, or `python3 -m http.server -d website`.
-- **Host:** copy the folder to the web server's document root for
-  os.beecoders.com (e.g. `rsync -av website/ USER@VPS:/var/www/os.beecoders.com/`).
-- **Screenshots** are taken from the real HP machine:
-  `python3 tools/beectl.py screenshot hp OUT.ppm --scale 1`, cropped to the
-  window and saved as WebP (`magick OUT.ppm -crop 700x480+20+0 +repage out.webp`).
-- Keep the numbers and features honest: they come from the README and from
-  measurements on the HP (`cpu test`, `make check`).
+- **Look:** dark by default, light when the visitor's system is light
+  (`prefers-color-scheme`). `site.js` only adds motion (the terminal replays
+  its session, the loop lights up step by step, sections fade in); the page is
+  complete without it, and with "reduce motion" nothing moves.
+- **Preview:** `python3 -m http.server -d website 8000`, then http://localhost:8000.
+- **Host:** K3s on the VPS, `website/scripts/deploy-k3s.sh` (no argument = all):
+  `check` (files and local links exist, no inline style/script) → `build`
+  (podman image: unprivileged nginx with `deploy/nginx.conf`, only the site's
+  files go in) → `push` (beecodersregistry.azurecr.io/beecodersos-web) →
+  `deploy` (`deploy/k3s/`, namespace `beecodersos-web`, NodePort 32120) →
+  `status`. Also `run` (preview on http://localhost:8120), `logs`, `tunnel`
+  (the Cloudflare Tunnel rule for https://os.beecoders.com).
+  The image's tag is `OS_VERSION`-git sha (`-dirty-…` with uncommitted changes in `website/`).
+- **Security headers:** `deploy/nginx.conf` sends a Content-Security-Policy
+  that allows only this site's own files and Google Fonts: keep styles and
+  scripts in `style.css` / `site.js`, not inline (`check` enforces this).
+- **Screenshots** come from the real HP machine:
+  `python3 tools/beectl.py screenshot hp OUT.ppm --scale 1`, cropped to a
+  window and saved as WebP (`magick OUT.ppm -crop 664x448+28+28 +repage out.webp`).
+- **Keep it honest:** numbers, dates and features come from the README, the
+  git history and measurements on the HP (`cpu test`, `make check`). The hero
+  terminal is a transcript of a real `do` run (`img/do-command.webp`). Update
+  the version/build pill and the numbers when they change.
