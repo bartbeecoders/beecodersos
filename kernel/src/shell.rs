@@ -308,6 +308,18 @@ impl Shell {
         self.host || self.user.as_ref().is_some_and(users::User::is_admin) || users::load(&mut self.storage).is_empty()
     }
 
+    /// May this shell change what is at `path`? Says whose it is if not.
+    fn may_change(&mut self, path: &str) -> bool {
+        let admin = self.is_admin();
+        match users::owner_blocking(self.user.as_ref(), admin, path) {
+            None => true,
+            Some(owner) => {
+                error(&format!("{path}: belongs to {owner} (anyone may read it, only they may change it)"));
+                false
+            }
+        }
+    }
+
     fn whoami(&mut self) {
         match &self.user {
             Some(user) => println!("{} ({})", user.name, if user.groups.is_empty() { String::from("no groups") } else { user.groups.join(", ") }),
@@ -663,6 +675,9 @@ impl Shell {
             let mut text = a.join(" ");
             text.push('\n');
             let path = self.abs(&file);
+            if !self.may_change(&path) {
+                return;
+            }
             let mut fs = self.storage.fs();
             let r = if append { fs.append(&path, text.as_bytes()) } else { fs.write_file(&path, text.as_bytes()) };
             return report(r);
@@ -726,18 +741,24 @@ impl Shell {
             ("touch", [file]) => self.touch(file),
             ("mkdir", [dir]) => {
                 let dir = self.abs(dir);
-                let r = self.storage.fs().mkdir_all(&dir);
-                report(r)
+                if self.may_change(&dir) {
+                    let r = self.storage.fs().mkdir_all(&dir);
+                    report(r)
+                }
             }
             ("rm" | "del" | "rmdir", [path]) => {
                 let path = self.abs(path);
-                let r = self.storage.fs().remove(&path);
-                report(r)
+                if self.may_change(&path) {
+                    let r = self.storage.fs().remove(&path);
+                    report(r)
+                }
             }
             ("mv" | "move", [from, to]) => {
                 let (from, to) = (self.abs(from), self.abs_target(from, to));
-                let r = self.storage.fs().rename(&from, &to);
-                report(r)
+                if self.may_change(&from) && self.may_change(&to) {
+                    let r = self.storage.fs().rename(&from, &to);
+                    report(r)
+                }
             }
             ("cp" | "copy", [from, to]) => self.cp(from, to),
             ("df", []) => self.df(),
@@ -1038,6 +1059,9 @@ impl Shell {
             ("view", _) => error("usage: view FILE   (a BMP or PPM picture)"),
             ("screenshot", [file]) => {
                 let path = self.abs(file);
+                if !self.may_change(&path) {
+                    return;
+                }
                 let picture = console::with_screen(|w, h, pixel| (w, h, crate::image::encode_bmp(w, h, pixel)));
                 match picture {
                     Some((w, h, bmp)) => {
@@ -1546,6 +1570,9 @@ impl Shell {
             };
         };
         let path = self.abs_target(url.split(['?', '#']).next().unwrap_or(""), file);
+        if !self.may_change(&path) {
+            return;
+        }
         let mut download = Download::start(&mut self.storage, &path);
         let result = net::http_get(url, beefs::MAX_FILE_SIZE, &mut |data| download.write(data));
         match result.and_then(|r| download.finish().map(|()| r)) {
@@ -1600,6 +1627,9 @@ impl Shell {
             Some(l) => self.abs_target(name, l),
             None => self.abs(name),
         };
+        if !self.may_change(&path) {
+            return;
+        }
         let started = time::uptime_ms();
         let mut download = Download::start(&mut self.storage, &path);
         let result = net::tftp_get(ip, port, remote, beefs::MAX_FILE_SIZE, &mut |data| download.write(data));
@@ -2353,6 +2383,9 @@ impl Shell {
 
     fn touch(&mut self, file: &str) {
         let path = self.abs(file);
+        if !self.may_change(&path) {
+            return;
+        }
         let exists = self.storage.fs().exists(&path);
         if !exists {
             let r = self.storage.fs().create(&path);
@@ -2363,6 +2396,9 @@ impl Shell {
     fn cp(&mut self, from: &str, to: &str) {
         let src = self.abs(from);
         let dst = self.abs_target(from, to);
+        if !self.may_change(&dst) {
+            return;
+        }
         let mut fs = self.storage.fs();
         let r = fs.read_file(&src).and_then(|d| fs.write_file(&dst, &d));
         drop(fs);

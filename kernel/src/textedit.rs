@@ -266,11 +266,14 @@ pub fn run(window: usize, path: String, text: String, mut storage: Storage) {
         match editor.key(key, rows.saturating_sub(1)) {
             Action::None => {}
             Action::Quit => return,
-            Action::Save => {
-                let text = editor.text();
-                let result = storage.fs().write_file(&path, text.as_bytes());
-                editor.saved(result.map(|_| text.len()).map_err(|_| "the file could not be written"));
-            }
+            Action::Save => match crate::users::console_may_change(&mut storage, &path) {
+                Ok(()) => {
+                    let text = editor.text();
+                    let result = storage.fs().write_file(&path, text.as_bytes());
+                    editor.saved(result.map(|_| text.len()).map_err(|_| "the file could not be written"));
+                }
+                Err(whose) => editor.saved(Err(&whose)),
+            },
         }
     }
 }

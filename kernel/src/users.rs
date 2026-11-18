@@ -10,8 +10,11 @@
 //! after `logout`), and commands that change the system itself need the
 //! group `admin` (`needs_admin`). The AI host's control shell keeps admin
 //! rights (it is switched on with `ai control on` at the console); the
-//! remote shell keeps its own password. Files have no owners yet: that is
-//! the next step (it needs room in BeeFS's inodes).
+//! remote shell keeps its own password and has no admin rights.
+//!
+//! What may be changed follows the folder (`owner_blocking`): your home
+//! folder is yours, /system is the admins', the rest is shared; reading is
+//! open to all. (Owners per file would need room in BeeFS's inodes.)
 
 use crate::storage::Storage;
 use alloc::format;
@@ -147,6 +150,39 @@ pub fn needs_admin(cmd: &str, args: &[&str]) -> bool {
         // Someone else's password.
         "passwd" => !args.is_empty(),
         _ => false,
+    }
+}
+
+/// Who may change what is at `path` (an absolute, normalized path), once
+/// the machine has accounts: `None` if `user` may, otherwise who it belongs
+/// to. Ownership follows the folder: `/home/NAME` and everything in it
+/// belongs to NAME, `/system` to the admins, the rest is shared. Admins may
+/// change everything. Reading is open to all.
+pub fn owner_blocking(user: Option<&User>, admin: bool, path: &str) -> Option<String> {
+    if admin {
+        return None;
+    }
+    let mut parts = path.split('/').filter(|p| !p.is_empty());
+    match (parts.next(), parts.next()) {
+        (Some("system"), _) => Some(String::from("the admins")),
+        (Some("home"), Some(name)) if user.is_none_or(|u| u.name != name) => Some(String::from(name)),
+        // `/home` itself: making or removing someone's home is for admins.
+        (Some("home"), None) => Some(String::from("the admins")),
+        _ => None,
+    }
+}
+
+/// For the programs in windows (editor, file manager): may whoever is
+/// logged in at the console change `path`? `Err` says whose it is.
+pub fn console_may_change(storage: &mut Storage, path: &str) -> Result<(), String> {
+    if load(storage).is_empty() {
+        return Ok(());
+    }
+    let user = console_user();
+    let admin = user.as_ref().is_some_and(User::is_admin);
+    match owner_blocking(user.as_ref(), admin, path) {
+        None => Ok(()),
+        Some(owner) => Err(format!("belongs to {owner}")),
     }
 }
 

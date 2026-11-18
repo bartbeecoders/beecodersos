@@ -2956,5 +2956,19 @@ fn accounts() -> TestResult {
     for (cmd, args) in [("vnc", &[][..]), ("net", &[]), ("ls", &["/"]), ("passwd", &[]), ("cpu", &["test"]), ("display", &["speed"]), ("whoami", &[]), ("timezone", &[])] {
         check!(!needs_admin(cmd, args));
     }
+    // Who may change what: your home, the shared rest; /system and others'
+    // homes only for admins; reading is not checked here at all.
+    use crate::users::owner_blocking;
+    let some = |u: &User| Some(u.clone());
+    check_eq!(owner_blocking(some(&bob).as_ref(), false, "/home/bob/notes.txt"), None);
+    check_eq!(owner_blocking(some(&bob).as_ref(), false, "/home/bob"), None);
+    check_eq!(owner_blocking(some(&bob).as_ref(), false, "/data/shared.txt"), None);
+    check_eq!(owner_blocking(some(&bob).as_ref(), false, "/home/alice/x"), Some(String::from("alice")));
+    check_eq!(owner_blocking(some(&bob).as_ref(), false, "/home/bobby/x"), Some(String::from("bobby")));
+    check_eq!(owner_blocking(some(&bob).as_ref(), false, "/system/users"), Some(String::from("the admins")));
+    check_eq!(owner_blocking(some(&bob).as_ref(), false, "/home"), Some(String::from("the admins")));
+    check_eq!(owner_blocking(None, false, "/home/bob/x"), Some(String::from("bob")));
+    check_eq!(owner_blocking(some(&alice).as_ref(), true, "/home/bob/x"), None);
+    check_eq!(owner_blocking(some(&alice).as_ref(), true, "/system/users"), None);
     Ok(())
 }
