@@ -29,6 +29,8 @@ Current version: **0.0.3** (see [Versioning](#versioning)).
 | T | Cooperative kernel threads, console sessions | ✅ |
 | N6 | Networking: status page (`httpd`) ✅, remote shell (`remote`) ✅; network signals, kernel download | in progress |
 
+The project's web site (os.beecoders.com) is in `website/`.
+
 The roadmap is `Docs/self-improving-os-plan.html`, the network plan is
 `Docs/network-stack-plan.html`; each phase is described below.
 

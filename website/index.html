@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BeeCodersOs — an operating system that helps improve itself</title>
+<meta name="description" content="BeeCodersOs is a from-scratch x86_64 operating system in Rust that records what goes wrong and what people miss, and improves itself with AI: small tested changes, tried in a spare kernel slot and rolled back automatically if they fail.">
+<meta property="og:title" content="BeeCodersOs — an operating system that helps improve itself">
+<meta property="og:description" content="A from-scratch x86_64 OS in Rust, improved by AI in small, tested, reversible steps.">
+<meta property="og:image" content="img/do-command.webp">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cpolygon points='50,5 90,27 90,73 50,95 10,73 10,27' fill='%23f5b301'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <a class="brand" href="#"><span class="hex" aria-hidden="true"></span>BeeCodersOs</a>
+  <nav>
+    <a href="#how">How it works</a>
+    <a href="#features">Features</a>
+    <a href="#progress">Progress</a>
+    <a class="button small" href="https://github.com/bartbeecoders/beecodersos">GitHub</a>
+  </nav>
+</header>
+
+<main>
+
+<section class="hero">
+  <div class="hero-text">
+    <p class="eyebrow">x86_64 · Rust · from scratch</p>
+    <h1>An operating system that <em>helps improve itself</em>.</h1>
+    <p class="lead">BeeCodersOs records what goes wrong and what people miss. An AI turns that
+      into small, tested changes that a person approves. Every new kernel is tried in a spare
+      slot on the real machine and rolled back automatically if it fails.</p>
+    <div class="actions">
+      <a class="button" href="https://github.com/bartbeecoders/beecodersos">See the code on GitHub</a>
+      <a class="button ghost" href="#how">How it works</a>
+    </div>
+  </div>
+  <figure class="hero-shot">
+    <img src="img/do-command.webp" width="700" height="480" alt="The BeeCodersOs desktop: in a terminal window, 'do make a folder /garden with a file plan.txt that lists four flowers bees love' — the AI proposes six commands, the user presses y, and they run.">
+    <figcaption>Real hardware, not a mock-up: <code>do</code> asks the AI for a plan in plain words; nothing runs until you press <kbd>y</kbd>.</figcaption>
+  </figure>
+</section>
+
+<section class="stats" aria-label="In numbers">
+  <div><strong>28k</strong><span>lines of Rust, kernel to network stack</span></div>
+  <div><strong>68</strong><span>boot tests, plus 67 in-kernel self-tests</span></div>
+  <div><strong>4×</strong><span>faster on 4 cores: work is spread over every processor</span></div>
+  <div><strong>A/B</strong><span>kernel slots: a new kernel that fails goes back by itself</span></div>
+</section>
+
+<section id="how" class="how">
+  <h2>The improvement loop</h2>
+  <p class="section-lead">Most systems get better when someone files a bug. BeeCodersOs notices for
+    itself, and every step is small enough to check and to undo.</p>
+  <ol class="loop">
+    <li><span class="step">1</span><h3>It observes</h3><p>Crashes, commands that don't exist, failed commands and
+      <code>wish</code>es are recorded on the machine — command names only, never what you typed after them.</p></li>
+    <li><span class="step">2</span><h3>It collects</h3><p><b>beehive</b>, a small daemon on a host computer, gathers
+      those signals from every machine and turns them into a backlog.</p></li>
+    <li><span class="step">3</span><h3>An AI proposes</h3><p>A coding agent takes one backlog item, writes the change
+      <em>and a test for it</em>, and must pass the whole test suite.</p></li>
+    <li><span class="step">4</span><h3>A person approves</h3><p>Nothing lands on its own: a human reviews the change
+      before it is merged.</p></li>
+    <li><span class="step">5</span><h3>It tries, safely</h3><p>The new kernel goes into the spare of two boot slots and
+      boots on trial. If it doesn't pass its health check, the machine goes back to the old one by itself.</p></li>
+  </ol>
+</section>
+
+<section id="features" class="features">
+  <h2>What it can do today</h2>
+  <div class="grid">
+    <article><h3>Talk to it</h3><p><code>ask</code> answers questions about the system,
+      <code>explain</code> explains the last error or crash, and <code>do</code> turns a task in plain words into
+      shell commands that run only after you agree. Some commands a plan may never run, whatever you answer.</p></article>
+    <article><h3>A desktop</h3><p>Windows you can drag, a mouse, buttons to start programs, several terminals side by
+      side, a text editor and a file manager — drawn by all processors at once.</p></article>
+    <article><h3>A web browser</h3><p><code>browse</code> shows web pages as clean text: headings, lists, links you
+      follow with Tab or a click. Type words instead of an address to search the web.</p></article>
+    <article><h3>Its own network stack</h3><p>Ethernet drivers, ARP, IPv4, DHCP, DNS, TCP, HTTP, time and file
+      transfer — written from scratch, every received byte treated as untrusted.</p></article>
+    <article><h3>Its own file system</h3><p>BeeFS, on RAM, IDE or SATA disks; an installer that puts the OS on a
+      disk, and A/B kernel slots for updates over the network.</p></article>
+    <article><h3>Every core</h3><p>All processors start at boot. Work is split into pieces that run on every core:
+      hashing 64 MiB takes 130 ms instead of 521 ms on a four-core machine.</p></article>
+  </div>
+  <figure class="wide-shot">
+    <img src="img/web-viewer.webp" width="700" height="480" loading="lazy" alt="The BeeCodersOs web page viewer showing the first web site ever, at CERN, with yellow headings and cyan links.">
+    <figcaption>The first web site ever, info.cern.ch, in BeeCodersOs's own browser.</figcaption>
+  </figure>
+</section>
+
+<section class="safety">
+  <h2>Careful by design</h2>
+  <ul>
+    <li><b>Tests before anything ships.</b> One command, <code>make check</code>, boots the system dozens of times
+      in virtual machines — BIOS and UEFI, disks, network, desktop, crashes and rollbacks — with no internet and no AI needed.</li>
+    <li><b>Privacy.</b> The event log keeps command names, never their arguments. Host names and addresses are never logged.
+      API keys live on the host, never on the machine.</li>
+    <li><b>An off switch.</b> <code>ai off</code> stops every AI feature, and the system works fine without it.</li>
+    <li><b>Closed by default.</b> The machine listens on the network only for a service you switched on yourself.</li>
+  </ul>
+</section>
+
+<section id="progress" class="progress">
+  <h2>Progress</h2>
+  <p class="section-lead">Started in November 2026. Version 0.0.3 — early, honest, and moving fast.</p>
+  <ul class="timeline">
+    <li class="done"><b>Boot</b> 64-bit kernel, BIOS and UEFI</li>
+    <li class="done"><b>BeeFS</b> its own file system</li>
+    <li class="done"><b>BeeShell</b> terminal, keyboard layouts, power</li>
+    <li class="done"><b>Self-observation</b> clock, event log, crash reports, wishes</li>
+    <li class="done"><b>AI bridge</b> ask, explain, do</li>
+    <li class="done"><b>Improvement loop</b> signals → backlog → agent → review</li>
+    <li class="done"><b>A/B slots</b> trial boots with automatic rollback</li>
+    <li class="done"><b>Networking</b> drivers up to HTTP</li>
+    <li class="done"><b>Desktop</b> windows, mouse, editor, file manager, browser</li>
+    <li class="done"><b>Multi-core</b> every processor at work</li>
+    <li class="next"><b>Next</b> encrypted web (TLS), sound, apps in a sandbox</li>
+  </ul>
+</section>
+
+<section class="cta">
+  <h2>Follow along</h2>
+  <p>The code, the plans and every change are on GitHub.</p>
+  <a class="button" href="https://github.com/bartbeecoders/beecodersos">github.com/bartbeecoders/beecodersos</a>
+</section>
+
+</main>
+
+<footer>
+  <p>BeeCodersOs is a BeeCoders project, written with AI and reviewed by people.</p>
+</footer>
+
+</body>
+</html>
