@@ -1624,7 +1624,7 @@ sources; when you raise `OS_VERSION`, reset `BUILD_NUMBER` to 1. Both show on
 the boot banner and with `version`, e.g. `BeeCodersOs 0.0.3 b6`. A/B slots and
 backlog items record the build they shipped in.
 
-## Networking — phase N7: HTTPS (TLS 1.3) 🚧 certificates not checked yet
+## Networking — phase N7: HTTPS (TLS 1.3) 🚧 RSA certificates checked, ECDSA next
 
 The goal is HTTPS (TLS 1.3) for `wget` and `browse`: almost every site is
 HTTPS-only now. The first part is the cryptography for the cipher suite
@@ -1654,11 +1654,35 @@ redirects to https and `browse` all work. Keys come from
 `rand::secret32` (RDRAND and timestamp-counter jitter through SHA-256). On
 the HP the 854 KB Wikipedia page on honey bees arrives in 0.7 s.
 
-**The server's certificate is not checked yet**: the connection is private
-from anyone who only listens, but someone who can change the traffic could
-pretend to be the server. `wget` and `browse` say so after every HTTPS
-transfer. Next: X.509 parsing, RSA and ECDSA signature checks, and a set of
-root certificates.
+**Certificates (third part).** `beenet/src/x509.rs` reads X.509
+certificates (DER: names, validity, public key, subjectAltName,
+basicConstraints) and follows the server's chain to one of the 118 root
+certificates in `beenet/certs/roots.der` (the Mozilla set as the host's
+`/etc/ssl/certs` has it, one DER certificate after the other; a root's
+cross-signed twin counts as the root). It checks the host name (one `*.`
+label at most), the validity dates against the clock, that only CAs sign,
+and every RSA signature: `beenet/src/rsa.rs` (PKCS#1 v1.5 and PSS over
+SHA-256/384/512; big numbers in 64-bit limbs) and `beenet/src/sha512.rs`
+(SHA-384/512, constants computed from the primes). The TLS client then
+checks the server's CertificateVerify signature with its key. A wrong name,
+a date out of range, a forged signature or a non-CA signer refuses the
+connection. A chain that needs ECDSA, or ends at an unknown root, is
+**not checked** (still encrypted), and `wget` and `browse` say so:
+
+    (HTTPS: the certificate checks out (signed up to Sectigo Public Server Authentication Root R46))
+    (HTTPS: encrypted, but the certificate was not checked: ECDSA signatures are not checked yet)
+
+Until ECDSA is checked, the client first offers only RSA signatures, so
+servers with both kinds of certificate send the RSA one; one that has only
+ECDSA refuses that handshake (alert 40), and the client tries once more
+with ECDSA. Host tests: OpenSSL-made PKCS#1 and PSS signatures (and
+damaged ones), the FIPS SHA-384/512 examples, real chains of example.com,
+github.com and www.google.com saved with their time
+(`beenet/testdata/certs`), checked at that time; wrong names, ten years
+later and twenty years before, a forged byte, an empty root set; and RFC
+8448's CertificateVerify (RSA-PSS) checked in the handshake trace. The
+self-test `certificates` runs a chain in the kernel. On the HP, github.com
+(4096-bit RSA) checks out in a 0.7 s download. Next: ECDSA (P-256, P-384).
 
 ## Next phases
 

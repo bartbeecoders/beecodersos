@@ -1709,8 +1709,11 @@ impl Shell {
                 println!();
             }
             return match result {
-                Ok(r) if r.secure => println!("{}", net::UNCHECKED_NOTE),
-                Ok(_) => {}
+                Ok(r) => {
+                    if let Some(note) = r.trust_note() {
+                        println!("({note})");
+                    }
+                }
                 Err(e) if e == "too large" => {
                     error(&format!("{url}: too large to show ({} KiB at most): save it with wget URL FILE", MAX_SHOWN / 1024))
                 }
@@ -1725,12 +1728,12 @@ impl Shell {
         let result = net::http_get(url, beefs::MAX_FILE_SIZE, &mut |data| download.write(data));
         match result.and_then(|r| download.finish().map(|()| r)) {
             Ok(r) => {
-                if let Some(to) = r.redirected_to {
+                if let Some(to) = &r.redirected_to {
                     println!("(redirected to {to})");
                 }
                 println!("saved {} bytes to {path}", r.bytes);
-                if r.secure {
-                    println!("{}", net::UNCHECKED_NOTE);
+                if let Some(note) = r.trust_note() {
+                    println!("({note})");
                 }
             }
             Err(e) if e == "too large" => {

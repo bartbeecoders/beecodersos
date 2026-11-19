@@ -7,12 +7,18 @@
 //! certificates. The handshake and the key schedule are checked against
 //! the trace in RFC 8448 byte for byte.
 //!
-//! The server's certificate chain is kept (`certificates`) but NOT checked
-//! yet: the connection is private from anyone who only listens, but not
-//! from someone who can pretend to be the server. Callers say so.
+//! The server's certificate chain is checked against the trusted roots
+//! (x509.rs) for the host name and the time given to `Client::new`, and
+//! its CertificateVerify signature with the server's key: a certificate
+//! that is wrong ends the handshake (`TlsError::Certificate`). Chains that
+//! need ECDSA, or that lead to an unknown root, are not checked yet:
+//! `trust` says so, and callers tell the user.
 
 use crate::crypto::{hkdf_expand_label, hkdf_extract, hmac_sha256, x25519, x25519_public, Gcm};
+use crate::rsa::Hash;
+use crate::x509::{self, Certificate, PublicKey, Trust};
 use crate::sha256::sha256;
+use alloc::string::String;
 use alloc::vec::Vec;
 
 const HANDSHAKE: u8 = 22;
@@ -36,6 +42,10 @@ pub enum TlsError {
     Unsupported(&'static str),
     /// A record that does not decrypt: changed on the way, or wrong keys.
     BadRecord,
+    /// The server's certificate is wrong (x509.rs says why).
+    Certificate(x509::CertError),
+    /// The server's handshake signature does not match its certificate.
+    BadServerSignature,
 }
 
 impl TlsError {
@@ -47,6 +57,8 @@ impl TlsError {
             TlsError::Protocol(why) => alloc::format!("TLS error: {why}"),
             TlsError::Unsupported(what) => alloc::format!("not supported yet: {what}"),
             TlsError::BadRecord => "a record did not decrypt (changed on the way?)".into(),
+            TlsError::Certificate(e) => alloc::format!("refused: {}", e.message()),
+            TlsError::BadServerSignature => "refused: the server's signature does not match its certificate".into(),
         }
     }
 }
@@ -124,6 +136,11 @@ pub struct Client {
     pub certificates: Vec<Vec<u8>>,
     /// The CertificateVerify signature: (scheme, signature, transcript hash it signs).
     pub signature: Option<(u16, Vec<u8>, [u8; 32])>,
+    /// What to check the certificate against: the host name and the time
+    /// (Unix seconds); None: not checked (`trust` says why).
+    check: Option<(String, i64)>,
+    /// How far the server's identity was checked (after the handshake).
+    pub trust: Option<Trust>,
 }
 
 fn u16_at(d: &[u8], at: usize) -> Result<usize, TlsError> {
@@ -140,7 +157,9 @@ fn bytes<'a>(d: &'a [u8], at: usize, len: usize) -> Result<&'a [u8], TlsError> {
 }
 
 /// A ClientHello for `host` (server name), with this random and key share.
-pub fn client_hello(host: &str, random: &[u8; 32], public: &[u8; 32]) -> Vec<u8> {
+/// `ecdsa`: also accept ECDSA certificates (which are not checked yet); a
+/// server with both kinds then may choose either.
+pub fn client_hello(host: &str, random: &[u8; 32], public: &[u8; 32], ecdsa: bool) -> Vec<u8> {
     let mut body = alloc::vec![3, 3];
     body.extend_from_slice(random);
     body.push(32); // a session id, as middleboxes expect
@@ -162,8 +181,12 @@ pub fn client_hello(host: &str, random: &[u8; 32], public: &[u8; 32]) -> Vec<u8>
         add(0, &sni);
     }
     add(10, &[0, 2, 0, 0x1D]); // groups: x25519
-    // Signatures: ECDSA P-256/384, RSA-PSS and PKCS#1 with SHA-256/384/512.
-    add(13, &[0, 16, 4, 3, 5, 3, 8, 4, 8, 5, 8, 6, 4, 1, 5, 1, 6, 1]);
+    // Signatures: RSA-PSS and PKCS#1 with SHA-256/384/512 (and ECDSA P-256/384).
+    if ecdsa {
+        add(13, &[0, 16, 8, 4, 8, 5, 8, 6, 4, 1, 5, 1, 6, 1, 4, 3, 5, 3]);
+    } else {
+        add(13, &[0, 12, 8, 4, 8, 5, 8, 6, 4, 1, 5, 1, 6, 1]);
+    }
     let mut share = alloc::vec![0, 36, 0, 0x1D, 0, 32];
     share.extend_from_slice(public);
     add(51, &share);
@@ -177,10 +200,14 @@ pub fn client_hello(host: &str, random: &[u8; 32], public: &[u8; 32]) -> Vec<u8>
 
 impl Client {
     /// Start a handshake with `host`: `random` and `private` must be fresh
-    /// random bytes. The ClientHello is waiting in `take_outgoing`.
-    pub fn new(host: &str, random: [u8; 32], private: [u8; 32]) -> Client {
-        let hello = client_hello(host, &random, &x25519_public(&private));
-        Client::with_hello(&hello, private)
+    /// random bytes; `now` (Unix seconds) is the time the certificate must
+    /// be valid at (None: the clock is not known, so it is not checked).
+    /// The ClientHello is waiting in `take_outgoing`.
+    pub fn new(host: &str, random: [u8; 32], private: [u8; 32], now: Option<i64>, ecdsa: bool) -> Client {
+        let hello = client_hello(host, &random, &x25519_public(&private), ecdsa);
+        let mut client = Client::with_hello(&hello, private);
+        client.check = now.map(|t| (String::from(host), t));
+        client
     }
 
     /// Start with a ready-made ClientHello message (tests use RFC 8448's).
@@ -203,6 +230,8 @@ impl Client {
             closed: false,
             certificates: Vec::new(),
             signature: None,
+            check: None,
+            trust: None,
         }
     }
 
@@ -344,7 +373,9 @@ impl Client {
                 let scheme = u16_at(body, 0)? as u16;
                 let len = u16_at(body, 2)?;
                 let signature = bytes(body, 4, len)?.to_vec();
-                self.signature = Some((scheme, signature, self.transcript_hash()));
+                let hash = self.transcript_hash();
+                self.check_server(scheme, &signature, &hash)?;
+                self.signature = Some((scheme, signature, hash));
                 self.transcript.extend_from_slice(msg);
                 self.state = State::Finished;
             }
@@ -362,6 +393,35 @@ impl Client {
             (State::Connected, 24) => return Err(TlsError::Unsupported("key updates")),
             _ => return Err(TlsError::Protocol("a handshake message out of order")),
         }
+        Ok(())
+    }
+
+    /// The certificate chain, then the server's signature over the
+    /// handshake so far (RFC 8446 section 4.4.3) with its key.
+    fn check_server(&mut self, scheme: u16, signature: &[u8], hash: &[u8; 32]) -> Result<(), TlsError> {
+        let mut trust = match &self.check {
+            Some((host, now)) => x509::verify(&self.certificates, host, *now, x509::ROOTS).map_err(TlsError::Certificate)?,
+            None => Trust::Unchecked("the clock is not set"),
+        };
+        let leaf = Certificate::parse(&self.certificates[0]).map_err(TlsError::Certificate)?;
+        let mut signed = alloc::vec![0x20u8; 64];
+        signed.extend_from_slice(b"TLS 1.3, server CertificateVerify\0");
+        signed.extend_from_slice(hash);
+        let rsa_hash = match scheme {
+            0x0804 => Some(Hash::Sha256),
+            0x0805 => Some(Hash::Sha384),
+            0x0806 => Some(Hash::Sha512),
+            _ => None,
+        };
+        match (&leaf.key, rsa_hash) {
+            (PublicKey::Rsa(key), Some(h)) => {
+                if !key.verify_pss(h, &h.digest(&signed), signature) {
+                    return Err(TlsError::BadServerSignature);
+                }
+            }
+            _ => trust = Trust::Unchecked("ECDSA signatures are not checked yet"),
+        }
+        self.trust = Some(trust);
         Ok(())
     }
 
@@ -483,7 +543,8 @@ mod tests {
         c.receive(&trace("server_flight_record")).unwrap();
         assert!(c.is_connected());
         assert_eq!(c.certificates.len(), 1);
-        assert_eq!(c.signature.as_ref().map(|s| s.0), Some(0x0804)); // RSA-PSS with SHA-256
+        assert_eq!(c.signature.as_ref().map(|s| s.0), Some(0x0804)); // RSA-PSS with SHA-256, checked
+        assert_eq!(c.trust, Some(Trust::Unchecked("the clock is not set")));
         assert_eq!(c.take_outgoing(), trace("client_finished_record"));
         // The ticket is read and set aside; then data both ways.
         c.receive(&trace("ticket_record")).unwrap();
@@ -532,6 +593,19 @@ mod tests {
             bad[i] ^= 0x41;
             let _ = c.receive(&bad);
         }
+        // The server's handshake signature, changed: refused. (Its last byte
+        // sits just before the 16-byte tag and the Finished message.)
+        let mut c = client();
+        c.receive(&trace("server_hello_record")).unwrap();
+        let keys = c.read.as_mut().unwrap();
+        let (header, body) = flight.split_at(5);
+        let (_, mut plain) = keys.open(header, body).unwrap();
+        let cv = plain.windows(4).position(|w| w == [15, 0, 0, 0x84]).unwrap();
+        plain[cv + 8] ^= 1;
+        let mut c = client();
+        c.receive(&trace("server_hello_record")).unwrap();
+        c.handshake.extend_from_slice(&plain);
+        assert_eq!(c.messages(), Err(TlsError::BadServerSignature));
         // A plain alert before the keys.
         let mut c = client();
         assert_eq!(c.receive(&[21, 3, 3, 0, 2, 2, 40]), Err(TlsError::Alert(40)));
@@ -539,7 +613,7 @@ mod tests {
 
     #[test]
     fn hello_has_what_servers_need() {
-        let hello = client_hello("example.com", &[7; 32], &[9; 32]);
+        let hello = client_hello("example.com", &[7; 32], &[9; 32], true);
         assert_eq!(hello[0], 1);
         assert_eq!(u24_at(&hello, 1).unwrap(), hello.len() - 4);
         let has = |needle: &[u8]| hello.windows(needle.len()).any(|w| w == needle);
@@ -547,6 +621,9 @@ mod tests {
         assert!(has(&[0, 43, 0, 3, 2, 3, 4])); // TLS 1.3
         assert!(has(&[0, 51, 0, 38, 0, 36, 0, 0x1D, 0, 32, 9, 9])); // the key share
         // No server name for an address.
-        assert!(!client_hello("10.0.2.2", &[7; 32], &[9; 32]).windows(8).any(|w| w == b"10.0.2.2"));
+        assert!(!client_hello("10.0.2.2", &[7; 32], &[9; 32], true).windows(8).any(|w| w == b"10.0.2.2"));
+        // Without ECDSA: RSA schemes only.
+        let rsa_only = client_hello("example.com", &[7; 32], &[9; 32], false);
+        assert!(!rsa_only.windows(2).any(|w| w == [4, 3]) && rsa_only.windows(2).any(|w| w == [8, 4]));
     }
 }

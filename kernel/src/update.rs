@@ -80,13 +80,21 @@ pub fn fetch(mut step: impl FnMut(&str)) -> Result<Found, String> {
     }
     step(&format!("fetching kernel b{build} ({} KiB)", size / 1024));
     let mut kernel: Vec<u8> = Vec::with_capacity(size);
+    // The host sends pieces of one size (learnt from the first one); then
+    // BATCH pieces are asked for at once.
+    const BATCH: usize = 8;
+    let mut chunk = 0usize;
     while kernel.len() < size {
-        let part = aibridge::call("update-chunk", Obj::new().num("offset", kernel.len() as i64), "update-data", 10_000)?;
-        let data = part.str("data").and_then(base64::decode).unwrap_or_default();
-        if part.num("offset") != Some(kernel.len() as i64) || data.is_empty() || kernel.len() + data.len() > size {
-            return Err(String::from("the download went wrong (a piece was missing or too long)"));
+        let wanted = if chunk == 0 { 1 } else { (size - kernel.len()).div_ceil(chunk).min(BATCH) };
+        let asks = (0..wanted).map(|i| Obj::new().num("offset", (kernel.len() + i * chunk) as i64)).collect();
+        for part in aibridge::call_many("update-chunk", asks, "update-data", 10_000)? {
+            let data = part.str("data").and_then(base64::decode).unwrap_or_default();
+            if part.num("offset") != Some(kernel.len() as i64) || data.is_empty() || kernel.len() + data.len() > size {
+                return Err(String::from("the download went wrong (a piece was missing or too long)"));
+            }
+            chunk = chunk.max(data.len());
+            kernel.extend_from_slice(&data);
         }
-        kernel.extend_from_slice(&data);
     }
     if !hive::same(hive::hex(&sha256::sha256(&kernel)).as_bytes(), digest.as_bytes()) {
         return Err(String::from("what arrived is not the kernel that was offered (the check sum differs)"));

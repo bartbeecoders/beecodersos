@@ -877,12 +877,19 @@ pub struct HttpResult {
     /// The address the content came from, if the server sent us elsewhere.
     pub redirected_to: Option<String>,
     pub bytes: u64,
-    /// It came over HTTPS (encrypted; the certificate is not checked yet).
-    pub secure: bool,
+    /// It came over HTTPS: how far the server's certificate was checked.
+    pub trust: Option<beenet::x509::Trust>,
 }
 
-/// What `wget` and `browse` say after an HTTPS transfer.
-pub const UNCHECKED_NOTE: &str = "(HTTPS: encrypted, but the server's certificate is not checked yet)";
+impl HttpResult {
+    /// What `wget` and `browse` say after an HTTPS transfer.
+    pub fn trust_note(&self) -> Option<String> {
+        Some(match self.trust.as_ref()? {
+            beenet::x509::Trust::Verified { root } => format!("HTTPS: the certificate checks out (signed up to {root})"),
+            beenet::x509::Trust::Unchecked(why) => format!("HTTPS: encrypted, but the certificate was not checked: {why}"),
+        })
+    }
+}
 
 /// A connection for HTTP: plain TCP, or TLS over TCP for `https://`.
 pub enum Conn {
@@ -896,32 +903,50 @@ const TLS_HANDSHAKE_MS: u64 = 15_000;
 impl Conn {
     /// Connect to `host` (already resolved to `ip`); `secure`: with a TLS 1.3 handshake.
     pub fn open(host: &str, ip: Ipv4, port: u16, secure: bool) -> Result<Conn, String> {
-        let stream = tcp_connect(ip, port).map_err(|e| format!("{host} port {port}: {e}"))?;
         if !secure {
+            let stream = tcp_connect(ip, port).map_err(|e| format!("{host} port {port}: {e}"))?;
             return Ok(Conn::Plain(stream));
         }
+        // RSA certificates first: they can be checked. A server that only has
+        // an ECDSA one refuses that handshake (alert 40); then once more with ECDSA.
+        match Self::handshake(host, ip, port, false) {
+            Err((e, true)) => Err(e),
+            Err((_, false)) => Self::handshake(host, ip, port, true).map_err(|(e, _)| e),
+            ok => ok.map_err(|(e, _)| e),
+        }
+    }
+
+    /// One TLS handshake; on failure the reason, and whether it is final
+    /// (false: the server refused the handshake itself, try with ECDSA).
+    fn handshake(host: &str, ip: Ipv4, port: u16, ecdsa: bool) -> Result<Conn, (String, bool)> {
+        let stream = tcp_connect(ip, port).map_err(|e| (format!("{host} port {port}: {e}"), true))?;
         let random = crate::rand::secret32();
-        let mut client = alloc::boxed::Box::new(beenet::tls::Client::new(host, random, crate::rand::secret32()));
-        stream.send(&client.take_outgoing()).map_err(String::from)?;
+        let now = time::now_unix().map(|t| t as i64);
+        let mut client = alloc::boxed::Box::new(beenet::tls::Client::new(host, random, crate::rand::secret32(), now, ecdsa));
+        let fin = |e: &str| (String::from(e), true);
+        stream.send(&client.take_outgoing()).map_err(fin)?;
         let start = time::uptime_ms();
         let mut buf = [0u8; 4096];
         while !client.is_connected() {
             match stream.receive(&mut buf) {
                 Received::Data(n) => {
-                    client.receive(&buf[..n]).map_err(|e| format!("{host}: {}", e.message()))?;
+                    if let Err(e) = client.receive(&buf[..n]) {
+                        let retry = !ecdsa && e == beenet::tls::TlsError::Alert(40);
+                        return Err((format!("{host}: {}", e.message()), !retry));
+                    }
                     let out = client.take_outgoing();
                     if !out.is_empty() {
-                        stream.send(&out).map_err(String::from)?;
+                        stream.send(&out).map_err(fin)?;
                     }
                 }
-                Received::End => return Err(format!("{host}: the server closed the connection during the TLS handshake")),
-                Received::Failed(e) => return Err(String::from(e)),
+                Received::End => return Err((format!("{host}: the server closed the connection during the TLS handshake"), true)),
+                Received::Failed(e) => return Err(fin(e)),
                 Received::Nothing => {
                     if cancelled() {
-                        return Err(String::from("cancelled"));
+                        return Err(fin("cancelled"));
                     }
                     if time::uptime_ms() - start > TLS_HANDSHAKE_MS {
-                        return Err(format!("{host}: the TLS handshake took too long"));
+                        return Err((format!("{host}: the TLS handshake took too long"), true));
                     }
                     transfer_wait(start);
                 }
@@ -953,6 +978,7 @@ impl Conn {
                                 beenet::tls::TlsError::Protocol(why) | beenet::tls::TlsError::Unsupported(why) => why,
                                 beenet::tls::TlsError::Alert(_) => "the server ended the connection with a TLS alert",
                                 beenet::tls::TlsError::BadRecord => "a TLS record did not decrypt (changed on the way?)",
+                                beenet::tls::TlsError::Certificate(_) | beenet::tls::TlsError::BadServerSignature => "the server's certificate was refused",
                             });
                         }
                         let out = c.take_outgoing();
@@ -1041,7 +1067,11 @@ pub fn http_get(address: &str, limit: u64, sink: Sink) -> Result<HttpResult, Str
             }
         }
         let Some(location) = response.redirect() else {
-            return Ok(HttpResult { redirected_to, bytes, secure: url.secure });
+            let trust = match &stream {
+                Conn::Tls(_, c) => c.trust.clone(),
+                Conn::Plain(_) => None,
+            };
+            return Ok(HttpResult { redirected_to, bytes, trust });
         };
         url = url.join(location).map_err(|e| format!("bad redirect: {}", e.message()))?;
         redirected_to = Some(format!("{url}"));
