@@ -106,6 +106,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("install: memory kept for the bootloader's files; paths on / and /data", install_memory_and_paths),
     ("remote work: which kernel to fetch, where a command's output ends, reading the screen", remote_work),
     ("usb: what devices say about themselves, also cut short", usb_descriptors),
+    ("camera: pictures to pixels, the mirror, saved JPEGs", camera_pictures),
     ("usb: keyboard reports become key presses, mouse reports movement", usb_reports),
     ("usb: xHCI rings and requests", xhci_rings),
     ("desktop: mouse pointer, dragging a window, repairing the screen", wm_mouse),
@@ -1460,6 +1461,39 @@ fn display_g3() -> TestResult {
     check_eq!(paging::entry_with_wc(0xFD00_109B), 0xFD00_008B); // other caching bits go
     check_eq!(paging::entry_with_wc(0xFD00_0082), 0xFD00_0082); // not present: untouched
     check_eq!(paging::entry_with_wc(0x0010_0003), 0x0010_0003); // points to a page table: untouched
+    Ok(())
+}
+
+fn camera_pictures() -> TestResult {
+    use crate::usb::Picture;
+    use crate::webcam::{as_jpeg, mirror, pixels};
+    use beenet::uvc::Kind;
+    // YUY2: two pixels in four bytes; too few bytes is a damaged picture.
+    let yuy = Picture { seq: 1, kind: Kind::Yuy2, width: 2, height: 1, data: vec![16, 128, 235, 128] };
+    let mut img = pixels(&yuy).ok_or("no pixels")?;
+    check_eq!(img.pixels, vec![0x000000, 0xFFFFFF]);
+    mirror(&mut img);
+    check_eq!(img.pixels, vec![0xFFFFFF, 0x000000]);
+    check!(pixels(&Picture { data: vec![1, 2], ..yuy.clone() }).is_none());
+    // Motion JPEG without Huffman tables (as cameras send it): shown, and
+    // saved with the standard tables written in.
+    let whole = beenet::jpeg::encode(16, 8, 90, |x, _| if x < 8 { 0xFF0000 } else { 0x0000FF });
+    let mut bare = whole[..2].to_vec();
+    let mut at = 2;
+    while whole[at + 1] != 0xDA {
+        let len = u16::from_be_bytes([whole[at + 2], whole[at + 3]]) as usize;
+        if whole[at + 1] != 0xC4 {
+            bare.extend_from_slice(&whole[at..at + 2 + len]);
+        }
+        at += 2 + len;
+    }
+    bare.extend_from_slice(&whole[at..]);
+    let mjpeg = Picture { seq: 2, kind: Kind::Mjpeg, width: 16, height: 8, data: bare };
+    let img = pixels(&mjpeg).ok_or("the camera JPEG did not decode")?;
+    check_eq!((img.width, img.height), (16, 8));
+    check!(img.pixels[0] >> 16 > 0xC0 && img.pixels[15] & 0xFF > 0xC0); // red left, blue right
+    check_eq!(as_jpeg(&mjpeg, &img), whole);
+    check!(pixels(&Picture { data: vec![0xFF, 0xD8, 0xFF], ..mjpeg }).is_none());
     Ok(())
 }
 

@@ -32,6 +32,7 @@ mod clock;
 mod image;
 mod view;
 mod video;
+mod webcam;
 mod icons;
 mod sound;
 mod hda;
