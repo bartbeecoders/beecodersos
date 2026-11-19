@@ -69,6 +69,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("sound: the way from a speaker to a converter", sound_routes),
     ("file manager icons: grid, moving, clicks, thumbnails", file_icons),
     ("crypto for TLS: X25519, HKDF, AES-128-GCM (published vectors)", tls_crypto),
+    ("certificates: a real chain to a trusted root, wrong names and dates refused", certificates),
     ("remote desktop: a viewer's keys, the tiles that changed", vnc_parts),
     ("accounts: the file, passwords, what needs an admin", accounts),
     ("heap: alloc and free", heap_alloc_free),
@@ -3203,6 +3204,19 @@ fn tls_crypto() -> TestResult {
     let mut bad = sealed.clone();
     bad[3] ^= 1;
     check_eq!(gcm.open(&[0; 12], &[], &bad), None);
+    Ok(())
+}
+
+fn certificates() -> TestResult {
+    use beenet::x509::{split, verify, CertError, Trust, ROOTS};
+    let chain: Vec<Vec<u8>> = split(include_bytes!("../../beenet/testdata/certs/www.google.com.der")).into_iter().map(|c| c.to_vec()).collect();
+    let at: i64 = include_str!("../../beenet/testdata/certs/saved-at.txt").trim().parse().unwrap_or(0);
+    let start = crate::time::micros();
+    check_eq!(verify(&chain, "www.google.com", at, ROOTS), Ok(Trust::Verified { root: "GTS Root R1".into() }));
+    let ms = (crate::time::micros() - start) / 1000;
+    check!(ms < 2000); // the RSA checks of a chain are quick
+    check!(matches!(verify(&chain, "www.g00gle.com", at, ROOTS), Err(CertError::WrongName(_))));
+    check_eq!(verify(&chain, "www.google.com", at + 3 * 365 * 86400, ROOTS), Err(CertError::Expired));
     Ok(())
 }
 

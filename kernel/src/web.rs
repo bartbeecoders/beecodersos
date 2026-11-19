@@ -447,14 +447,15 @@ impl Viewer {
 }
 
 /// Fetch a page: a file from the disk (`/...`) or an http:// URL. Returns
-/// the text and the address it really came from (after redirects).
-pub fn fetch(storage: &mut Storage, address: &str) -> Result<(String, String), String> {
+/// the text, the address it really came from (after redirects), and for
+/// HTTPS how far the certificate was checked.
+pub fn fetch(storage: &mut Storage, address: &str) -> Result<(String, String, Option<String>), String> {
     if address.starts_with('/') {
         let data = storage.fs().read_file(address).map_err(|e| format!("{e}"))?;
         if data.len() as u64 > MAX_PAGE {
             return Err(format!("too large to show ({} KiB at most)", MAX_PAGE / 1024));
         }
-        return Ok((String::from_utf8_lossy(&data).into_owned(), String::from(address)));
+        return Ok((String::from_utf8_lossy(&data).into_owned(), String::from(address), None));
     }
     let mut body = Vec::new();
     let result = net::http_get(address, MAX_PAGE, &mut |data| {
@@ -463,8 +464,9 @@ pub fn fetch(storage: &mut Storage, address: &str) -> Result<(String, String), S
     });
     match result {
         Ok(r) => {
+            let note = r.trust_note();
             let at = r.redirected_to.map_or_else(|| String::from(address), |to| resolve(address, &to).unwrap_or(to));
-            Ok((String::from_utf8_lossy(&body).into_owned(), at))
+            Ok((String::from_utf8_lossy(&body).into_owned(), at, note))
         }
         Err(e) if e == "too large" => Err(format!("too large to show ({} KiB at most)", MAX_PAGE / 1024)),
         Err(e) => Err(e),
@@ -484,10 +486,9 @@ pub fn run(window: usize, start: String, mut storage: Storage) {
                 console::pane_show(window, &lines, cursor);
             }
             match fetch(&mut storage, &address) {
-                Ok((body, at)) => {
+                Ok((body, at, note)) => {
                     viewer.show(&at, &body, back, again);
-                    let secure = at.starts_with("https://");
-                    viewer.say(if secure { "HTTPS: encrypted; the certificate is not checked yet" } else { "" }, false);
+                    viewer.say(note.as_deref().unwrap_or(""), false);
                 }
                 Err(why) => {
                     if back {

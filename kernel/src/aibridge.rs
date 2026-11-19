@@ -273,6 +273,63 @@ pub fn call(kind: &str, fields: Obj, answer: &str, timeout_ms: u64) -> Result<Ob
     }
 }
 
+/// Several requests of one kind at once, the answers in the same order:
+/// over the network they are all sent before the first answer is awaited
+/// (a download in pieces then waits once per batch, not once per piece).
+pub fn call_many(kind: &str, requests: Vec<Obj>, answer: &str, timeout_ms: u64) -> Result<Vec<Object>, &'static str> {
+    if !present() {
+        return Err("no link to the AI host");
+    }
+    let over_network = LINK.get().settings.is_some();
+    if !over_network {
+        // The serial link's buffers hold one answer at a time.
+        return requests.into_iter().map(|r| call(kind, r, answer, timeout_ms)).collect();
+    }
+    if REQUEST_RUNNING.swap(true, Ordering::SeqCst) {
+        return Err("the link to the AI host is busy with another request");
+    }
+    struct Running;
+    impl Drop for Running {
+        fn drop(&mut self) {
+            REQUEST_RUNNING.store(false, Ordering::SeqCst);
+        }
+    }
+    let _running = Running;
+    if !LINK.get().connected {
+        return Err("the AI host is not connected");
+    }
+    let mut ids = Vec::with_capacity(requests.len());
+    for fields in requests {
+        let st = STATE.get();
+        let id = st.next_id;
+        st.next_id += 1;
+        send(&fields.str("type", kind).num("id", id).finish());
+        ids.push(id);
+    }
+    let deadline = time::uptime_ms() + timeout_ms;
+    let mut got: Vec<Option<Object>> = ids.iter().map(|_| None).collect();
+    while got.iter().any(Option::is_none) {
+        pump();
+        for (slot, &id) in got.iter_mut().zip(&ids) {
+            if slot.is_none() {
+                if let Some(at) = ANSWERS.get().iter().position(|m| m.num("id") == Some(id) && m.str("type") == Some(answer)) {
+                    *slot = ANSWERS.get().remove(at);
+                }
+            }
+        }
+        if !LINK.get().connected {
+            return Err("the connection to the AI host was lost");
+        }
+        if time::uptime_ms() > deadline {
+            return Err("the AI host did not answer");
+        }
+        if got.iter().any(Option::is_none) {
+            thread::pause(pending);
+        }
+    }
+    Ok(got.into_iter().flatten().collect())
+}
+
 /// Handle anything the host sent while we were not listening.
 pub fn drain() {
     while poll_message().is_some() {}
