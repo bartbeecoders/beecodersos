@@ -1,0 +1,14 @@
+# The "Camera" button on the desktop (after Terminal, Files, Notes, Web: at
+# 364..428, 6..). QEMU has no camera: the window opens and says so, and
+# q closes it.
+@usb kbd mouse
+$ layout us
+@screenshot 1920x1080 pixels 366,8=3a6ea5 426,8=3a6ea5
+# The pointer starts in the middle (960,540).
+@mouse -564 -524
+@button left down
+@button left up
+$ threads
+~ camera     (waiting|ready)
+$ camera view
+camera: no camera plugged in ('lsusb' lists the devices)

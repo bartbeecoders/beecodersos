@@ -304,7 +304,7 @@ static LAUNCHES: Global<Vec<usize>> = Global::new(Vec::new());
 
 /// The buttons on the desktop, left to right: what a click on each starts
 /// is up to desk.rs.
-pub const BUTTONS: [&str; 4] = ["Terminal", "Files", "Notes", "Web"];
+pub const BUTTONS: [&str; 5] = ["Terminal", "Files", "Notes", "Web", "Camera"];
 
 pub const MAX_PANES: usize = 4;
 /// The size of a new terminal window, in characters.

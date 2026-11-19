@@ -1547,7 +1547,9 @@ desktop.
   editor on `notes.txt` there) and Web (the web page viewer on
   `start.html` there: written the first time with links to the first web
   site, FrogFind, 68k.news and NeverSSL, sites that still work without
-  https; after that it is the user's page and is left alone). A click **inside a window** goes to its
+  https; after that it is the user's page and is left alone) and Camera
+  (the USB camera live, `camera view`; without a camera the window says
+  so: `desktop-camera.scn`). A click **inside a window** goes to its
   program as the character under the pointer: the file manager chooses and
   opens, the editor puts its cursor there.
 - **Tests:** self-tests for the layout at every screen size and for drawing on

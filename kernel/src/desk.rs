@@ -92,10 +92,9 @@ pub fn open_video(path: &str) -> Result<(usize, usize, usize, usize, bool), Stri
 
 /// Open the camera window: what the USB camera sees, live. Saved pictures
 /// go to the home folder.
+/// Without a camera the window opens anyway and says so (a desktop button
+/// has nowhere else to say it).
 pub fn open_camera() -> Result<usize, &'static str> {
-    if crate::usb::CAMERAS.get().is_empty() {
-        return Err("no camera plugged in ('lsusb' lists the devices)");
-    }
     let storage = storage::handle().ok_or("no file system is mounted")?;
     let folder = String::from(home());
     open("Camera", "camera", false, move |window| crate::webcam::run(window, folder, storage))
@@ -113,7 +112,8 @@ fn home() -> &'static str {
 
 /// What a click on a desktop button starts (`console::BUTTONS`): a
 /// terminal, the file manager on the home folder, the editor on
-/// `notes.txt` there, or the web page viewer on `start.html` there.
+/// `notes.txt` there, the web page viewer on `start.html` there, or the
+/// camera window.
 pub fn launch(button: usize) -> Result<usize, &'static str> {
     match button {
         0 => open_terminal(),
@@ -129,6 +129,7 @@ pub fn launch(button: usize) -> Result<usize, &'static str> {
             }
             open_web(&start)
         }
+        4 => open_camera(),
         _ => Err("no such button"),
     }
 }
