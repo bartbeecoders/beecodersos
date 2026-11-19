@@ -1,0 +1,24 @@
+# Sound: the test machines have no sound card, so the commands say so and
+# check what they are given. (The HD Audio driver was tried by hand on
+# QEMU's intel-hda with a WAV recording of its output, and on the HP.)
+$ sound
+sound: no sound card (HD Audio) found
+$ beep
+beep: no sound card (HD Audio) found
+$ beep a4 200
+beep: no sound card (HD Audio) found
+$ beep h4
+usage: beep [HZ|NOTE [MS]]   (e.g. beep 440 500, beep c5; 20-20000 Hz, at most 10000 ms)
+$ beep 440 0
+usage: beep [HZ|NOTE [MS]]   (e.g. beep 440 500, beep c5; 20-20000 Hz, at most 10000 ms)
+$ sound volume 101
+usage: sound volume 0-100
+$ sound volume 50
+sound: no sound card (HD Audio) found
+$ play
+usage: play FILE.wav
+$ play /missing.wav
+play /missing.wav: no such file or directory
+$ echo hello > /note.txt
+$ play /note.txt
+play /note.txt: not a WAV file

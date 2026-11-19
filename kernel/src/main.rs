@@ -31,6 +31,8 @@ mod monitor;
 mod clock;
 mod image;
 mod view;
+mod sound;
+mod hda;
 mod vnc;
 mod users;
 mod web;
