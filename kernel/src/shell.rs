@@ -1129,7 +1129,8 @@ impl Shell {
                 let name = path.to_ascii_lowercase();
                 let picture = console::with_screen(|w, h, pixel| {
                     let data = if name.ends_with(".png") {
-                        beenet::png::encode(w, h, pixel)
+                        let pixel = crate::smp::Disjoint(pixel);
+                        crate::image::encode_png(w, h, &|x, y| pixel.get()(x, y))
                     } else if name.ends_with(".gif") {
                         let mut gif = beenet::gif::Writer::new(w, h);
                         gif.frame(100, pixel);

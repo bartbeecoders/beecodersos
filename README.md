@@ -1339,7 +1339,13 @@ desktop.
   back, a page from the test web server). On the HP it shows
   http://info.cern.ch, the first web site, and follows its links.
 - **Pictures:** `screenshot FILE` saves the screen (as drawn in memory)
-  as a PNG if FILE ends in `.png` (RGB, stored DEFLATE blocks), otherwise
+  as a PNG if FILE ends in `.png` (RGB, compressed on every processor:
+  each line gets the best of the five PNG filters, and 16 pieces of lines
+  are compressed at once by `beenet/src/deflate.rs`, LZ77 with the fixed
+  Huffman codes, each piece ending on a whole byte so they join into one
+  stream; on the HP a 1280x1024 screen is 53 KiB in 30 ms, against 3.8 MB
+  and 220 ms as BMP; host tests check every way of cutting data into
+  pieces, and ImageMagick and Python's zlib read the files), otherwise
   as a 24-bit BMP; `view FILE` shows a PNG, BMP (uncompressed, 24 or 32
   bits) or binary PPM (P6) picture in a window (`kernel/src/view.rs`), as large
   as fits and at most twice its size, in the middle on a dark background.

@@ -24,6 +24,7 @@ pub mod hive;
 pub mod html;
 pub mod rfb;
 pub mod inflate;
+pub mod deflate;
 pub mod png;
 pub mod gif;
 pub mod http;
