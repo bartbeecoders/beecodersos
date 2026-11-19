@@ -1581,6 +1581,7 @@ impl Shell {
                 Ok(m @ 1..=1440) => self.camera_watch(folder, Some(m)),
                 _ => error("usage: camera watch FOLDER [MINUTES]   (1 to 1440; Ctrl+C stops)"),
             },
+            ("camera", ["view"]) if crate::usb::CAMERAS.get().is_empty() => error("camera: no camera plugged in ('lsusb' lists the devices)"),
             ("camera", ["view"]) => match crate::desk::open_camera() {
                 Ok(_) => println!("the camera in a new window: s saves a picture, m mirrors, q leaves"),
                 Err(why) => error(&format!("camera: {why}")),

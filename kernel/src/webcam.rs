@@ -43,6 +43,16 @@ pub fn as_jpeg(picture: &Picture, img: &image::Image) -> alloc::vec::Vec<u8> {
 
 /// The thread of a camera window.
 pub fn run(window: usize, folder: String, mut storage: Storage) {
+    if usb::CAMERAS.get().is_empty() {
+        console::pane_write(window, "\n No camera is plugged in.\n Plug a USB webcam in, then click Camera again.\n q closes this window.\n");
+        while console::pane_exists(window) {
+            thread::pause(|| input::pending() || !console::pane_exists(window));
+            if input::pending() && matches!(input::read_key(), Key::Char('q') | Key::Ctrl('q')) {
+                break;
+            }
+        }
+        return;
+    }
     *usb::CAMERA_STATE.get() = CameraState::Off;
     *usb::CAMERA_PICTURE.get() = None;
     *usb::CAMERA_WANT.get() = Some((640, 480));
