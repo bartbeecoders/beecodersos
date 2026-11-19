@@ -59,6 +59,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("processors: every piece of a job runs exactly once, also nested", smp_jobs),
     ("processors: started at boot or not", smp_choice),
     ("web viewer: links, scrolling, back, addresses", web_viewer),
+    ("web start page: written once, old unchanged ones brought up to date", web_start_page),
     ("text tools: head, tail, wc, grep", text_tools),
     ("do: the plan in an answer, commands it may not run", do_plan),
     ("monitor: bars, sizes, what the window shows", monitor_render),
@@ -2713,6 +2714,18 @@ fn smp_choice() -> TestResult {
     // A boot flag wins over what was saved.
     check!(choice("test smp=on", Some("auto off")) && !choice("smp=off", Some("auto on")) && !choice("smp=off", None));
     check!(choice("nosmp=off smps=off", None));
+    Ok(())
+}
+
+fn web_start_page() -> TestResult {
+    use crate::web::{start_page_update, START_PAGE};
+    check_eq!(start_page_update(None), Some(START_PAGE)); // none yet: written
+    check_eq!(start_page_update(Some(START_PAGE.as_bytes())), None); // current: kept
+    // A page its user changed (even by a word) is never replaced.
+    let edited = START_PAGE.replace("On this machine", "On this machine test");
+    check_eq!(start_page_update(Some(edited.as_bytes())), None);
+    check_eq!(start_page_update(Some(b"")), None);
+    check!(START_PAGE.contains("https://") && !START_PAGE.contains("not checked"));
     Ok(())
 }
 
