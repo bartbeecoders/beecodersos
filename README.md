@@ -1305,7 +1305,10 @@ desktop.
 - **File manager:** `files [FOLDER]` lists a folder in a window of its own
   (`kernel/src/filemgr.rs`): folders first, then files with their size.
   Arrows, Page Up/Down, Home and End move the bar; **Enter** opens a folder,
-  or a file in the text editor (a new window); **Backspace** goes up, with
+  a picture (`.png`, `.gif`, `.bmp`, `.ppm`) in the viewer, a `.wav` file on
+  the sound card (on a thread of its own, so the window goes on), and any
+  other file in the text editor (a new window); **e** opens any file in the
+  editor; **Backspace** goes up, with
   the bar on the folder just left. **n** makes a folder and **r** renames
   (the name is typed in the status line; Escape drops it), **d** or Delete
   deletes after a `y` (a folder only when it is empty), **u** reads the

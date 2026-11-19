@@ -1,6 +1,7 @@
 //! The file manager (`files [FOLDER]`): a window on the desktop that lists
-//! a folder. Arrows choose, Enter opens (a folder here, a file in the text
-//! editor), Backspace goes up; folders can be made and things renamed or
+//! a folder. Arrows choose, Enter opens (a folder here, a picture in the
+//! viewer, a WAV file on the sound card, anything else in the text editor;
+//! `e` edits any file), Backspace goes up; folders can be made and things renamed or
 //! deleted.
 //!
 //! `Browser` is the list, the choice and the questions it asks, and knows
@@ -42,7 +43,9 @@ pub enum Action {
     Quit,
     /// Show this folder.
     Go(String),
-    /// Open this file in the text editor.
+    /// Open this file with what fits it (`opener`).
+    Open(String),
+    /// Open this file in the text editor, whatever it holds.
     Edit(String),
     Delete(String),
     MakeFolder(String),
@@ -184,16 +187,19 @@ impl Browser {
                     self.chosen = at;
                 } else if let Some(entry) = self.chosen() {
                     let path = join(&self.folder, &entry.name);
-                    return if entry.folder { Action::Go(path) } else { Action::Edit(path) };
+                    return if entry.folder { Action::Go(path) } else { Action::Open(path) };
                 }
             }
             Key::Enter | Key::Right => {
                 if let Some(entry) = self.chosen() {
                     let path = join(&self.folder, &entry.name);
-                    return if entry.folder { Action::Go(path) } else { Action::Edit(path) };
+                    return if entry.folder { Action::Go(path) } else { Action::Open(path) };
                 }
             }
             Key::Backspace | Key::Left if self.folder != "/" => return Action::Go(parent(&self.folder)),
+            Key::Char('e') if self.chosen().is_some_and(|e| !e.folder) => {
+                return Action::Edit(join(&self.folder, &self.chosen().map(|e| e.name.clone()).unwrap_or_default()));
+            }
             Key::Char('n') => self.mode = Mode::Name { rename: false, text: String::new() },
             Key::Char('r') if self.chosen().is_some() => {
                 let text = self.chosen().map(|e| e.name.clone()).unwrap_or_default();
@@ -255,7 +261,7 @@ impl Browser {
                 None => line("", TEXT_ATTR),
             });
         }
-        out.push(line(" Enter open  Backspace up  n new folder  r rename  d delete  u again  q leave", HELP_ATTR));
+        out.push(line(" Enter open  e edit  Backspace up  n new folder  r rename  d delete  u again  q leave", HELP_ATTR));
         (out, cursor)
     }
 }
@@ -295,7 +301,13 @@ pub fn run(window: usize, start: String, mut storage: Storage) {
                 }
                 next = to;
             }
-            Action::Edit(path) => {
+            Action::Open(path) if opener(&path) == Opener::Picture => {
+                if let Err(why) = desk::open_picture(&path) {
+                    said = Some((format!("{}: {why}", path.rsplit('/').next().unwrap_or("")), true));
+                }
+            }
+            Action::Open(path) if opener(&path) == Opener::Sound => said = Some(play_in_background(&mut storage, &path)),
+            Action::Open(path) | Action::Edit(path) => {
                 if let Err(why) = desk::open_editor(&path) {
                     said = Some((format!("{}: {why}", path.rsplit('/').next().unwrap_or("")), true));
                 }
@@ -353,3 +365,43 @@ pub fn run(window: usize, start: String, mut storage: Storage) {
         }
     }
 }
+
+/// What opens a file: the picture viewer, the sound card, or the text editor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Opener {
+    Picture,
+    Sound,
+    Text,
+}
+
+/// By the name's ending (any case).
+pub fn opener(name: &str) -> Opener {
+    let lower = name.to_ascii_lowercase();
+    let ext = lower.rsplit_once('.').map_or("", |(_, e)| e);
+    match ext {
+        "png" | "gif" | "bmp" | "ppm" => Opener::Picture,
+        "wav" => Opener::Sound,
+        _ => Opener::Text,
+    }
+}
+
+/// Play a WAV file on a thread of its own, so the window goes on; what
+/// to say in the window.
+fn play_in_background(storage: &mut crate::storage::Storage, path: &str) -> (String, bool) {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let wav = storage.fs().read_file(path).map_err(|e| format!("{e}")).and_then(|d| crate::sound::parse_wav(&d).map_err(String::from));
+    let wav = match wav {
+        Ok(w) => w,
+        Err(why) => return (format!("{name}: {why}"), true),
+    };
+    let seconds = crate::time::format_duration(wav.duration_ms());
+    let frames = wav.to_48k();
+    let started = crate::thread::spawn("sound", None, move || {
+        let _ = crate::hda::play(&frames, || false);
+    });
+    match started {
+        Some(_) => (format!("playing {name} ({seconds})"), false),
+        None => (format!("{name}: no room for another thread"), true),
+    }
+}
+

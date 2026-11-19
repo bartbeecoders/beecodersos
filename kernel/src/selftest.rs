@@ -2365,7 +2365,7 @@ fn file_manager() -> TestResult {
     check_eq!(row_text(&lines[2]).trim_end(), "   <folder>  Beta/");
     check_eq!(row_text(&lines[3]).trim_end(), "       1234  alpha.txt");
     check_eq!(row_text(&lines[4]).trim_end(), "         10  zeta.txt");
-    check_eq!((row_text(&lines[5]).trim_end(), row_text(&lines[7]).trim_end()), ("", " Enter open  Backspace up  n new folder"));
+    check_eq!((row_text(&lines[5]).trim_end(), row_text(&lines[7]).trim_end()), ("", " Enter open  e edit  Backspace up  n new"));
     // The chosen line stands out; folders have their own color.
     check_eq!((lines[1][0] >> 8, lines[2][0] >> 8, lines[3][0] >> 8, lines[0][0] >> 8), (0x1F, 0x09, 0x07, 0x70));
 
@@ -2374,7 +2374,8 @@ fn file_manager() -> TestResult {
     check_eq!(b.key(Key::Down, 5), Action::None);
     check_eq!(b.key(Key::Down, 5), Action::None);
     check_eq!(b.chosen().map(|e| e.name.as_str()), Some("alpha.txt"));
-    check_eq!(b.key(Key::Enter, 5), Action::Edit(String::from("/data/alpha.txt")));
+    check_eq!(b.key(Key::Enter, 5), Action::Open(String::from("/data/alpha.txt")));
+    check_eq!(b.key(Key::Char('e'), 5), Action::Edit(String::from("/data/alpha.txt")));
     b.key(Key::PageDown, 5);
     b.key(Key::Down, 5);
     check_eq!(b.chosen().map(|e| e.name.as_str()), Some("zeta.txt"));
@@ -2502,7 +2503,15 @@ fn mouse_clicks() -> TestResult {
     files.render(40, 8);
     check_eq!(files.key(Key::Click(3, 3), 6), Action::None);
     check_eq!(files.chosen().map(|e| e.name.as_str()), Some("b.txt"));
-    check_eq!(files.key(Key::Click(30, 3), 6), Action::Edit(String::from("/b.txt")));
+    check_eq!(files.key(Key::Click(30, 3), 6), Action::Open(String::from("/b.txt")));
+    // What opens what: by the ending, in any case.
+    use crate::filemgr::{opener, Opener};
+    check_eq!(opener("/data/Photo.PNG"), Opener::Picture);
+    check_eq!(opener("clip.gif"), Opener::Picture);
+    check_eq!(opener("/song.wav"), Opener::Sound);
+    check_eq!(opener("/notes.txt"), Opener::Text);
+    check_eq!(opener("/wav"), Opener::Text);
+    check_eq!(opener("/a.wav.txt"), Opener::Text);
     check_eq!(files.key(Key::Click(0, 1), 6), Action::None);
     check_eq!(files.key(Key::Click(0, 1), 6), Action::Go(String::from("/docs")));
     // On the status line, below the list, or on the line of keys: nothing.
