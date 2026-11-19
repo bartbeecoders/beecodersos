@@ -117,6 +117,8 @@ pub struct Controller {
     pub pins: Vec<(u8, u8, u32, u32)>,
     /// The first output stream's register block.
     stream: usize,
+    /// VC1 was switched off to match the chipset (`match_vc1`).
+    vc1_off: bool,
     /// Where the card writes stream positions.
     posbuf: Dma,
     /// FIFORDY came at the last start.
@@ -169,6 +171,7 @@ impl Controller {
             return Err(String::from("the sound card's registers are out of reach"));
         }
         card.enable(pci::CMD_MEMORY | pci::CMD_BUS_MASTER);
+        let vc1_off = match_vc1(&card);
         // The card's interrupts stay inside it (PCI "interrupt disable"):
         // this driver polls, and the line may be another device's.
         card.config_write(0x04, card.config_read(0x04) & 0xFFFF | 1 << 10);
@@ -183,7 +186,7 @@ impl Controller {
         let corb = Dma::new(1024).ok_or("out of memory")?;
         let rirb = Dma::new(2048).ok_or("out of memory")?;
         let posbuf = Dma::new(4096).ok_or("out of memory")?;
-        let mut c = Controller { posbuf, fifo_ready: false, base: addr, pci: card, corb, rirb, rirb_read: 0, codecs: Vec::new(), outputs: Vec::new(), pins: Vec::new(), stream: 0, volume: 70 };
+        let mut c = Controller { vc1_off, posbuf, fifo_ready: false, base: addr, pci: card, corb, rirb, rirb_read: 0, codecs: Vec::new(), outputs: Vec::new(), pins: Vec::new(), stream: 0, volume: 70 };
         // Stop the rings, then reset (CRST low, then high again).
         c.w8(CORBCTL, 0);
         c.w8(RIRBCTL, 0);
@@ -455,6 +458,71 @@ impl Controller {
     }
 }
 
+/// Intel chipsets: the DMI link's VC1 control and status (RCBA + 0x2020,
+/// 0x2026), from the LPC bridge's RCBA register (00:1f.0, 0xF0).
+fn dmi_vc1() -> Option<(u32, u16)> {
+    let lpc = pci::scan().into_iter().find(|d| d.bus == 0 && d.dev == 0x1f && d.func == 0 && d.vendor == 0x8086)?;
+    let rcba = (lpc.config_read(0xF0) & !0x3FFF) as u64;
+    if rcba == 0 || lpc.config_read(0xF0) & 1 == 0 {
+        return None;
+    }
+    let ctl = unsafe { ((rcba + 0x2020) as *const u32).read_volatile() };
+    let sts = unsafe { ((rcba + 0x2026) as *const u16).read_volatile() };
+    Some((ctl, sts))
+}
+
+/// Where a device's PCI Express configuration space is (ACPI MCFG), for
+/// registers past the first 256 bytes.
+fn ext_config_base(card: &pci::Device) -> Option<u64> {
+    let mcfg = crate::acpi::table(b"MCFG")?;
+    for entry in mcfg.get(44..)?.chunks_exact(16) {
+        let base = u64::from_le_bytes(entry[0..8].try_into().ok()?);
+        let (first, last) = (entry[10], entry[11]);
+        if u16::from_le_bytes([entry[8], entry[9]]) == 0 && (first..=last).contains(&card.bus) && base < 1 << 32 {
+            return Some(base + (((card.bus - first) as u64) << 20 | (card.dev as u64) << 15 | (card.func as u64) << 12));
+        }
+    }
+    None
+}
+
+/// The card's VC1 control register (in its virtual channel capability),
+/// if it has one.
+fn vc1_control(card: &pci::Device) -> Option<*mut u32> {
+    let base = ext_config_base(card)?;
+    let read = |off: u64| unsafe { ((base + off) as *const u32).read_volatile() };
+    let mut at = 0x100u64;
+    for _ in 0..32 {
+        let header = read(at);
+        if header == 0 || header == 0xFFFF_FFFF {
+            return None;
+        }
+        if header & 0xFFFF == 0x0002 {
+            // VC0 resource control at +0x14, VC1's at +0x20 (if there is a VC1).
+            return (read(at + 4) & 7 >= 1).then_some((base + at + 0x20) as *mut u32);
+        }
+        at = (header >> 20) as u64;
+        if at < 0x100 {
+            return None;
+        }
+    }
+    None
+}
+
+/// Intel: output streams always ask for VC1 when the card has it on. If
+/// the chipset's own link has VC1 off, that traffic is never served and
+/// no sound is fetched (the HP's firmware leaves it so); switch the card's
+/// VC1 off too, so the streams use VC0 like everything else.
+fn match_vc1(card: &pci::Device) -> bool {
+    let Some(reg) = vc1_control(card) else { return false };
+    let card_on = unsafe { reg.read_volatile() } & (1 << 31) != 0;
+    let link_on = dmi_vc1().is_some_and(|(ctl, _)| ctl & (1 << 31) != 0);
+    if card.vendor == 0x8086 && card_on && !link_on {
+        unsafe { reg.write_volatile(reg.read_volatile() & !(1 << 31)) };
+        return true;
+    }
+    false
+}
+
 /// The HD Audio controllers in the machine, the ones with a codec that
 /// has analog outputs first.
 fn controllers() -> Vec<pci::Device> {
@@ -501,6 +569,9 @@ pub fn describe() -> Result<Vec<String>, String> {
         "HD Audio {:04x}:{:04x} at {:02x}:{:02x}.{}, volume {} %",
         c.pci.vendor, c.pci.device, c.pci.bus, c.pci.dev, c.pci.func, c.volume
     )];
+    if c.vc1_off {
+        lines.push(String::from("VC1 switched off on the card, as on the chipset's link"));
+    }
     for (codec, vendor) in &c.codecs {
         lines.push(format!("codec {codec}: {:04x}:{:04x}", vendor >> 16, vendor & 0xFFFF));
     }

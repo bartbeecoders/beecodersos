@@ -1385,11 +1385,15 @@ desktop.
   self-tests. Checked by hand on QEMU's `intel-hda` with its output
   written to a WAV file: `beep 440 1000` comes out as 1.000 s at 439.7 Hz,
   and the volume scales it. On the HP (8086:8c20, Realtek ALC221) the
-  codec, the speaker, the headphone jack and the line out are found and set
-  up, but the output stream does not start yet: the card never fetches the
-  sound (position and FIFO-ready stay 0 although the command rings, the
-  link and the codec all work); `beep` then reports the stream's
-  registers. `sound.scn` checks the commands on a machine without a card.
+  speaker, the headphone jack and the line out are found and play. It took
+  one more step: Intel's output streams always ask for virtual channel 1
+  when the card has it on, and the HP's firmware switches VC1 on in the
+  card but leaves it off on the chipset's own link (RCBA + 0x2020), so the
+  streams were never served (the command rings use VC0 and worked).
+  `match_vc1` reads both (the card's through the ACPI MCFG window) and
+  switches the card's VC1 off when the link's is off. If a stream still
+  does not move, `beep` reports its registers. `sound.scn` checks the
+  commands on a machine without a card.
 - **Wallpaper:** `desktop wallpaper FILE` puts a PNG, GIF, BMP or PPM picture behind
   the windows, scaled to cover the whole screen (cut off evenly where its
   shape differs; made on every processor in use, and again when the screen
