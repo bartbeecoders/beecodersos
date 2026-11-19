@@ -1,0 +1,39 @@
+# The file manager's icon view (`v`): a folder, a text file, a sound and a
+# picture with its thumbnail. At 800x600 the window's content is 640x400 at
+# 38,62: five cells of 112 pixels from x=78, from y=84; the icons are
+# 64x64 at 24,6 in their cell.
+@cpus 4
+@ai
+$ ai control on
+$ display mode 800x600
+~ ^mode: 800x600
+$ mkdir /p
+$ mkdir /p/box
+$ echo hello > /p/a.txt
+$ tune save /p/s.wav c5
+saved 1 notes to /p/s.wav (47 KiB)
+$ screenshot /p/shot.png
+~ ^saved the screen \(800 x 600\) to /p/shot\.png
+$ files /p
+/p in a new window: arrows choose, Enter opens, q leaves
+@ctl keys {machine} "v"
+$ sleep 1
+# The chosen cell, the folder, the page, the sound, the thumbnail's frame,
+# and the background below the icons.
+@screenshot 800x600 pixels 82,86=3a6ea5 132,120=f2c14e 228,95=f4f4f4 336,100=4a3a6a 437,97=d0d0d0 43,362=1c2230
+# Arrows move in the grid; Enter on the picture opens the viewer.
+@ctl keys {machine} "{right}{right}{right}{enter}"
+$ sleep 1
+$ threads
+~ view +(waiting|ready)
+@ctl keys {machine} "q"
+$ sleep 1
+# Back to the list: the bar is still on the picture.
+@ctl keys {machine} "v"
+@ctl text {machine}
+~ ^ /p  \(4 of 4\)$
+~ ^   <folder>  box/$
+@ctl keys {machine} "q"
+$ sleep 1
+$ threads
+!~ files

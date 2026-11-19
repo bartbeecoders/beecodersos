@@ -371,6 +371,13 @@ pub fn pane_size(window: usize) -> Option<(usize, usize)> {
 /// draw their whole window themselves, like the editor.
 pub fn pane_show(window: usize, lines: &[Vec<u16>], cursor: (usize, usize)) {
     let Some(pane) = PANES.get().iter_mut().find(|p| p.window == window) else { return };
+    if pane.picture {
+        // It showed pixels (`pane_draw`): all of its text is drawn again.
+        pane.picture = false;
+        pane.con.redraw();
+        let (id, bounds) = (pane.window, pane.surface.canvas().bounds());
+        window_changed(id, bounds);
+    }
     for (row, line) in lines.iter().enumerate() {
         for (col, cell) in line.iter().enumerate() {
             pane.con.put_cell(row, col, *cell);
@@ -378,6 +385,20 @@ pub fn pane_show(window: usize, lines: &[Vec<u16>], cursor: (usize, usize)) {
     }
     pane.con.set_cursor(cursor.0 * pane.con.width() + cursor.1);
     show(true);
+}
+
+/// Let a program draw its window's pixels itself (instead of text) with
+/// `draw`, which gets the window's canvas; false if there is no such window.
+/// `pane_show` goes back to text.
+pub fn pane_draw(window: usize, draw: impl FnOnce(&crate::gfx::Canvas)) -> bool {
+    let Some(pane) = PANES.get().iter_mut().find(|p| p.window == window) else { return false };
+    let canvas = pane.surface.canvas();
+    draw(&canvas);
+    pane.picture = true;
+    let id = pane.window;
+    window_changed(id, canvas.bounds());
+    show(true);
+    true
 }
 
 /// Show a picture in a window instead of text: as large as fits (at most
