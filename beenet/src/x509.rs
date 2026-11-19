@@ -4,10 +4,12 @@
 //! following the chain to one of the root certificates the OS trusts
 //! (`ROOTS`, the Mozilla set).
 //!
-//! RSA signatures are checked (rsa.rs). ECDSA ones are not yet: a chain
-//! that needs one is "not checked" rather than wrong. Everything a
-//! certificate holds is untrusted input: every length is checked.
+//! RSA signatures are checked by rsa.rs, ECDSA ones on P-256 and P-384 by
+//! ecdsa.rs; a chain that needs another kind is "not checked" rather than
+//! wrong. Everything a certificate holds is untrusted input: every length
+//! is checked.
 
+use crate::ecdsa::{Curve, CurveName};
 use crate::rsa::{self, Hash};
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -20,7 +22,20 @@ const OID_RSA_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 
 const OID_RSA_SHA384: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0c];
 const OID_RSA_SHA512: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0d];
 const OID_EC: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
-const OID_ECDSA_PREFIX: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03];
+const OID_ECDSA_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
+const OID_ECDSA_SHA384: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x03];
+const OID_ECDSA_SHA512: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x04];
+const OID_P256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
+const OID_P384: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x22];
+
+/// The curve of an elliptic-curve key, if this OS knows it.
+pub fn curve_of(oid: &[u8]) -> Option<CurveName> {
+    match oid {
+        o if o == OID_P256 => Some(CurveName::P256),
+        o if o == OID_P384 => Some(CurveName::P384),
+        _ => None,
+    }
+}
 const OID_SAN: &[u8] = &[0x55, 0x1d, 0x11];
 const OID_BASIC: &[u8] = &[0x55, 0x1d, 0x13];
 const OID_CN: &[u8] = &[0x55, 0x04, 0x03];
@@ -289,18 +304,25 @@ pub enum Checked {
 
 /// Is `cert` signed by `key`?
 pub fn signed_by(cert: &Certificate, key: &PublicKey) -> Checked {
-    let hash = match cert.sig_oid {
-        o if o == OID_RSA_SHA256 => Hash::Sha256,
-        o if o == OID_RSA_SHA384 => Hash::Sha384,
-        o if o == OID_RSA_SHA512 => Hash::Sha512,
-        o if o.starts_with(OID_ECDSA_PREFIX) => return Checked::Unsupported,
+    let (hash, ecdsa) = match cert.sig_oid {
+        o if o == OID_RSA_SHA256 => (Hash::Sha256, false),
+        o if o == OID_RSA_SHA384 => (Hash::Sha384, false),
+        o if o == OID_RSA_SHA512 => (Hash::Sha512, false),
+        o if o == OID_ECDSA_SHA256 => (Hash::Sha256, true),
+        o if o == OID_ECDSA_SHA384 => (Hash::Sha384, true),
+        o if o == OID_ECDSA_SHA512 => (Hash::Sha512, true),
         _ => return Checked::Unsupported,
     };
-    match key {
-        PublicKey::Rsa(k) if k.verify_pkcs1(hash, &hash.digest(cert.tbs), cert.signature) => Checked::Good,
-        PublicKey::Rsa(_) => Checked::Bad,
-        _ => Checked::Unsupported,
-    }
+    let good = match (key, ecdsa) {
+        (PublicKey::Rsa(k), false) => k.verify_pkcs1(hash, &hash.digest(cert.tbs), cert.signature),
+        (PublicKey::Ec { curve, point }, true) => match curve_of(curve) {
+            Some(name) => Curve::new(name).verify(point, &hash.digest(cert.tbs), cert.signature),
+            None => return Checked::Unsupported,
+        },
+        (PublicKey::Other, _) => return Checked::Unsupported,
+        _ => false, // a key of the other kind
+    };
+    if good { Checked::Good } else { Checked::Bad }
 }
 
 /// Check a server's chain (`chain[0]` its own certificate) for `host` at
@@ -342,7 +364,7 @@ pub fn verify(chain: &[Vec<u8>], host: &str, now: i64, roots: &[u8]) -> Result<T
             }
         }
         if unsupported {
-            return Ok(Trust::Unchecked("ECDSA signatures are not checked yet"));
+            return Ok(Trust::Unchecked("a kind of signature this OS cannot check yet"));
         }
         // Signed by a certificate the server sent?
         let Some(next) = certs.iter().skip(1).find(|c| c.subject == current.issuer && !core::ptr::eq(*c, current)) else {
@@ -350,7 +372,7 @@ pub fn verify(chain: &[Vec<u8>], host: &str, now: i64, roots: &[u8]) -> Result<T
         };
         match signed_by(current, &next.key) {
             Checked::Good => current = next,
-            Checked::Unsupported => return Ok(Trust::Unchecked("ECDSA signatures are not checked yet")),
+            Checked::Unsupported => return Ok(Trust::Unchecked("a kind of signature this OS cannot check yet")),
             Checked::Bad => return Err(CertError::BadSignature),
         }
     }
@@ -365,6 +387,9 @@ mod tests {
         let data: &[u8] = match name {
             "example.com" => include_bytes!("../testdata/certs/example.com.der"),
             "github.com" => include_bytes!("../testdata/certs/github.com.der"),
+            "en.wikipedia.org" => include_bytes!("../testdata/certs/en.wikipedia.org.der"),
+            "os.beecoders.com" => include_bytes!("../testdata/certs/os.beecoders.com.der"),
+            "news.ycombinator.com" => include_bytes!("../testdata/certs/news.ycombinator.com.der"),
             _ => include_bytes!("../testdata/certs/www.google.com.der"),
         };
         split(data).into_iter().map(|c| c.to_vec()).collect()
@@ -389,6 +414,16 @@ mod tests {
             let trust = verify(&chain(host), host, saved_at(), ROOTS);
             assert!(matches!(trust, Ok(Trust::Verified { .. })), "{host}: {trust:?}");
         }
+        // ECDSA chains (P-256 and P-384), saved later.
+        let ec_at: i64 = include_str!("../testdata/certs/saved-at-ec.txt").trim().parse().unwrap();
+        for host in ["en.wikipedia.org", "os.beecoders.com", "news.ycombinator.com"] {
+            let trust = verify(&chain(host), host, ec_at, ROOTS);
+            assert!(matches!(trust, Ok(Trust::Verified { .. })), "{host}: {trust:?}");
+        }
+        let mut forged = chain("en.wikipedia.org");
+        let at_name = forged[0].windows(9).position(|w| w == b"wikipedia").unwrap();
+        forged[0][at_name] = b'W';
+        assert_eq!(verify(&forged, "en.wikipedia.org", ec_at, ROOTS).map(|_| ()), Err(CertError::BadSignature));
         let leaf = chain("github.com");
         let cert = Certificate::parse(&leaf[0]).unwrap();
         assert!(cert.matches("github.com") && cert.matches("GitHub.com.") && !cert.matches("evil.com") && !cert.matches("a.github.com"));

@@ -1624,7 +1624,7 @@ sources; when you raise `OS_VERSION`, reset `BUILD_NUMBER` to 1. Both show on
 the boot banner and with `version`, e.g. `BeeCodersOs 0.0.3 b6`. A/B slots and
 backlog items record the build they shipped in.
 
-## Networking — phase N7: HTTPS (TLS 1.3) 🚧 RSA certificates checked, ECDSA next
+## Networking — phase N7: HTTPS (TLS 1.3) ✅
 
 The goal is HTTPS (TLS 1.3) for `wget` and `browse`: almost every site is
 HTTPS-only now. The first part is the cryptography for the cipher suite
@@ -1666,23 +1666,30 @@ SHA-256/384/512; big numbers in 64-bit limbs) and `beenet/src/sha512.rs`
 (SHA-384/512, constants computed from the primes). The TLS client then
 checks the server's CertificateVerify signature with its key. A wrong name,
 a date out of range, a forged signature or a non-CA signer refuses the
-connection. A chain that needs ECDSA, or ends at an unknown root, is
-**not checked** (still encrypted), and `wget` and `browse` say so:
+connection. ECDSA (fourth part): `beenet/src/ecdsa.rs` checks signatures
+on P-256 and P-384 (Montgomery arithmetic in 64-bit limbs, Jacobian points
+for a = -3, u1*G + u2*Q in one pass); the curve constants were checked
+in Python first (G on the curve, n*G the point at infinity). Certificates
+signed with ECDSA, and servers that sign the handshake with
+ecdsa_secp256r1_sha256 or ecdsa_secp384r1_sha384, are checked like RSA ones.
+A chain that ends at an unknown root, or needs another kind of signature,
+is **not checked** (still encrypted), and `wget` and `browse` say so:
 
     (HTTPS: the certificate checks out (signed up to Sectigo Public Server Authentication Root R46))
-    (HTTPS: encrypted, but the certificate was not checked: ECDSA signatures are not checked yet)
+    (HTTPS: encrypted, but the certificate was not checked: issued by a certificate authority this OS does not know)
 
-Until ECDSA is checked, the client first offers only RSA signatures, so
-servers with both kinds of certificate send the RSA one; one that has only
-ECDSA refuses that handshake (alert 40), and the client tries once more
-with ECDSA. Host tests: OpenSSL-made PKCS#1 and PSS signatures (and
+Host tests: OpenSSL-made PKCS#1 and PSS signatures (and
 damaged ones), the FIPS SHA-384/512 examples, real chains of example.com,
 github.com and www.google.com saved with their time
 (`beenet/testdata/certs`), checked at that time; wrong names, ten years
 later and twenty years before, a forged byte, an empty root set; and RFC
 8448's CertificateVerify (RSA-PSS) checked in the handshake trace. The
-self-test `certificates` runs a chain in the kernel. On the HP, github.com
-(4096-bit RSA) checks out in a 0.7 s download. Next: ECDSA (P-256, P-384).
+self-test `certificates` runs an RSA and an ECDSA chain in the kernel. The
+ECDSA tests: OpenSSL-made P-256 and P-384 signatures (with SHA-256 and
+SHA-384 on either curve), every byte changed, every length cut, the wrong
+key, curve or hash; real ECDSA chains of en.wikipedia.org,
+os.beecoders.com and news.ycombinator.com. On the HP, Wikipedia's page on
+honey bees (854 KB, ECDSA up to ISRG Root X2) checks out in 0.7 s.
 
 ## Next phases
 

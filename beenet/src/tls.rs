@@ -11,11 +11,13 @@
 //! (x509.rs) for the host name and the time given to `Client::new`, and
 //! its CertificateVerify signature with the server's key: a certificate
 //! that is wrong ends the handshake (`TlsError::Certificate`). Chains that
-//! need ECDSA, or that lead to an unknown root, are not checked yet:
-//! `trust` says so, and callers tell the user.
+//! lead to an unknown root, or need another kind of signature than RSA or
+//! ECDSA on P-256/P-384, are not checked: `trust` says so, and callers tell
+//! the user.
 
 use crate::crypto::{hkdf_expand_label, hkdf_extract, hmac_sha256, x25519, x25519_public, Gcm};
 use crate::rsa::Hash;
+use crate::ecdsa::{Curve, CurveName};
 use crate::x509::{self, Certificate, PublicKey, Trust};
 use crate::sha256::sha256;
 use alloc::string::String;
@@ -407,19 +409,22 @@ impl Client {
         let mut signed = alloc::vec![0x20u8; 64];
         signed.extend_from_slice(b"TLS 1.3, server CertificateVerify\0");
         signed.extend_from_slice(hash);
-        let rsa_hash = match scheme {
-            0x0804 => Some(Hash::Sha256),
-            0x0805 => Some(Hash::Sha384),
-            0x0806 => Some(Hash::Sha512),
+        // RSA-PSS with SHA-256/384/512, or ECDSA with the curve's own hash.
+        let good = match (scheme, &leaf.key) {
+            (0x0804..=0x0806, PublicKey::Rsa(key)) => {
+                let h = [Hash::Sha256, Hash::Sha384, Hash::Sha512][(scheme - 0x0804) as usize];
+                Some(key.verify_pss(h, &h.digest(&signed), signature))
+            }
+            (0x0403 | 0x0503, PublicKey::Ec { curve, point }) => {
+                let (name, h) = if scheme == 0x0403 { (CurveName::P256, Hash::Sha256) } else { (CurveName::P384, Hash::Sha384) };
+                Some(x509::curve_of(curve) == Some(name) && Curve::new(name).verify(point, &h.digest(&signed), signature))
+            }
             _ => None,
         };
-        match (&leaf.key, rsa_hash) {
-            (PublicKey::Rsa(key), Some(h)) => {
-                if !key.verify_pss(h, &h.digest(&signed), signature) {
-                    return Err(TlsError::BadServerSignature);
-                }
-            }
-            _ => trust = Trust::Unchecked("ECDSA signatures are not checked yet"),
+        match good {
+            Some(true) => {}
+            Some(false) => return Err(TlsError::BadServerSignature),
+            None => trust = Trust::Unchecked("a kind of signature this OS cannot check yet"),
         }
         self.trust = Some(trust);
         Ok(())
