@@ -1683,6 +1683,13 @@ filmed 87 pictures in 5.0 s to /data/hello.avi (1687 KiB)
   as a JPEG in the home folder; `q` closes it and switches the camera off.
   Each picture is decoded on every processor; when pictures come faster than
   they are drawn, the window skips to the latest.
+- **`camera watch FOLDER [MINUTES]`**: a security camera. Every picture is
+  shrunk to 64 x 48 cells of brightness (`beenet/src/motion.rs`) and compared
+  with a background that slowly follows the scene; when 2% of the cells
+  differ clearly (after taking out a change of the whole picture's
+  brightness, so the camera's exposure is no movement), the picture is saved
+  as `2026-11-19_21-05-31.jpg`, at most one a second. On the HP: 16 pictures
+  a second decoded and compared, no false alarm in a still room for minutes.
 - **`camera on [WxH]`, `camera off`, `camera log`**: leave the camera
   sending and watch what arrives (`camera` then counts transfers, bytes,
   pictures, damaged ones, errors and the ring running dry); the log shows
@@ -1707,7 +1714,8 @@ filmed 87 pictures in 5.0 s to /data/hello.avi (1687 KiB)
 - **Tests:** `beenet` unit tests for descriptors (also cut short, and the
   HP webcam's real one in `beenet/testdata/uvc-1bcf-2281.hex`), size and
   bandwidth choice, probe blocks, packet assembly, YUY2 colours, and JPEGs
-  without tables; self-tests for the linked ring and for camera pictures
+  without tables, motion detection (a still scene, exposure changes, a
+  moving block, learning first); self-tests for the linked ring and for camera pictures
   (pixels, mirror, saved JPEG); `camera.scn` for the commands without a
   camera (QEMU has no USB camera to attach).
 

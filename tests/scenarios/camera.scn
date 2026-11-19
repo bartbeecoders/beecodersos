@@ -14,3 +14,11 @@ $ camera record /me.gif 5
 usage: camera record FILE.avi SECONDS   (1 to 600; Ctrl+C stops early)
 $ camera snap /me.jpg big
 usage: camera snap FILE [WIDTHxHEIGHT]
+$ camera watch /nowhere
+camera watch: /nowhere: no such folder
+$ camera watch / 0
+usage: camera watch FOLDER [MINUTES]   (1 to 1440; Ctrl+C stops)
+$ camera watch /
+~ watching: a picture goes to / when something moves
+camera: no camera plugged in ('lsusb' lists the devices)
+~ watched for 0m 00s \(0 pictures\): 0 saved

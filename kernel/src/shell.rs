@@ -623,6 +623,60 @@ impl Shell {
         }
     }
 
+    /// `camera watch`: a picture saved in `folder` whenever something moves
+    /// (at most one a second), named after the local time; until Ctrl+C or
+    /// the minutes are over.
+    fn camera_watch(&mut self, folder: &str, minutes: Option<u64>) {
+        let dir = self.abs(folder);
+        if !self.storage.fs().is_dir(&dir) {
+            error(&format!("camera watch: {folder}: no such folder"));
+            return;
+        }
+        let probe = format!("{}/.watch", dir.trim_end_matches('/'));
+        if !self.may_change(&probe) {
+            return;
+        }
+        let start = crate::time::uptime_ms();
+        let end = minutes.map(|m| start + m * 60_000);
+        println!("watching: a picture goes to {dir} when something moves (Ctrl+C stops)");
+        let mut detector = beenet::motion::Detector::new();
+        let (mut pictures, mut saved, mut last_save) = (0u32, 0u32, 0u64);
+        let Some(mut storage) = crate::storage::handle() else { return };
+        let result = self.camera_pictures((640, 480), |picture| {
+            let now = crate::time::uptime_ms();
+            pictures += 1;
+            if let Some(img) = crate::webcam::pixels(&picture) {
+                let moved = detector.feed(&beenet::motion::cells(&img.pixels, img.width, img.height));
+                if beenet::motion::is_movement(moved) && now >= last_save + 1000 {
+                    last_save = now;
+                    let stamp = match crate::time::now_unix() {
+                        Some(unix) => crate::time::local(crate::time::zone(), unix)[..19].replace(' ', "_").replace(':', "-"),
+                        None => format!("up-{}", now / 1000),
+                    };
+                    let path = format!("{}/{stamp}.jpg", dir.trim_end_matches('/'));
+                    match storage.fs().write_file(&path, &crate::webcam::as_jpeg(&picture, &img)) {
+                        Ok(()) => {
+                            saved += 1;
+                            println!("{} movement ({}.{}% of the picture): {path}", &stamp[stamp.len().saturating_sub(8)..], moved / 10, moved % 10);
+                        }
+                        Err(e) => {
+                            error(&format!("camera watch: {path}: {e}"));
+                            return false;
+                        }
+                    }
+                }
+            }
+            end.is_none_or(|end| now < end)
+        });
+        if let Err(why) = result {
+            if why != "stopped" {
+                error(&format!("camera: {why}"));
+            }
+        }
+        let secs = (crate::time::uptime_ms() - start) / 1000;
+        println!("watched for {} ({pictures} pictures): {saved} saved", crate::time::format_duration(secs * 1000));
+    }
+
     fn camera_snap(&mut self, file: &str, size: (u16, u16)) {
         let path = self.abs(file);
         if !self.may_change(&path) {
@@ -1522,6 +1576,11 @@ impl Shell {
                 None => error("usage: camera on [WIDTHxHEIGHT]"),
             },
             ("camera", ["off"]) => self.camera_switch(None),
+            ("camera", ["watch", folder]) => self.camera_watch(folder, None),
+            ("camera", ["watch", folder, minutes]) => match minutes.parse::<u64>() {
+                Ok(m @ 1..=1440) => self.camera_watch(folder, Some(m)),
+                _ => error("usage: camera watch FOLDER [MINUTES]   (1 to 1440; Ctrl+C stops)"),
+            },
             ("camera", ["view"]) => match crate::desk::open_camera() {
                 Ok(_) => println!("the camera in a new window: s saves a picture, m mirrors, q leaves"),
                 Err(why) => error(&format!("camera: {why}")),
@@ -2957,6 +3016,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("install [DISK]", "put the OS on a disk, or upgrade it (alone: list the disks)"),
     ("lsusb", "USB controller and devices"),
     ("camera [raw|log]", "USB cameras: the picture formats and sizes they offer ('raw': the description as the camera gave it; 'log': what the driver noted)"),
+    ("camera watch FOLDER [MIN]", "a security camera: saves a picture in FOLDER whenever something moves (Ctrl+C stops)"),
     ("camera view", "the camera live in a window, as in a mirror: s saves a picture, m mirrors, q leaves"),
     ("camera on [WxH] | off", "leave the camera sending (then 'camera' counts what arrives), or stop it"),
     ("camera snap FILE [WxH]", "take a picture with the USB camera (640x480 unless asked): JPEG, PNG or BMP by the name"),
