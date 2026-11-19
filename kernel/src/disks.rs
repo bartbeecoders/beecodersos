@@ -104,4 +104,14 @@ impl BlockDevice for DiskRef {
         let disk = all().get_mut(self.0).ok_or(FsError::OutOfRange)?;
         command(|| disk.device.flush())
     }
+
+    fn read_blocks(&mut self, first: u64, bufs: &mut [Block]) -> Result<(), FsError> {
+        let disk = all().get_mut(self.0).ok_or(FsError::OutOfRange)?;
+        command(|| disk.device.read_blocks(first, bufs))
+    }
+
+    fn write_blocks(&mut self, first: u64, bufs: &[Block]) -> Result<(), FsError> {
+        let disk = all().get_mut(self.0).ok_or(FsError::OutOfRange)?;
+        command(|| disk.device.write_blocks(first, bufs))
+    }
 }

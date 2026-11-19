@@ -1624,7 +1624,7 @@ sources; when you raise `OS_VERSION`, reset `BUILD_NUMBER` to 1. Both show on
 the boot banner and with `version`, e.g. `BeeCodersOs 0.0.3 b6`. A/B slots and
 backlog items record the build they shipped in.
 
-## Networking — phase N7 (first part): cryptography for HTTPS 🚧
+## Networking — phase N7: HTTPS (TLS 1.3) 🚧 certificates not checked yet
 
 The goal is HTTPS (TLS 1.3) for `wget` and `browse`: almost every site is
 HTTPS-only now. The first part is the cryptography for the cipher suite
@@ -1637,8 +1637,28 @@ compile time) and GCM. Host tests use the published vectors: RFC 7748
 test cases, plus every changed byte of a sealed message being refused; the
 self-test `crypto for TLS` runs the same vectors in the kernel (passes on
 the HP). AES and GHASH are written for clarity, not hardened against timing
-attacks from the same machine. Next: the TLS 1.3 handshake (checked against
-the RFC 8448 traces) and certificate checks.
+attacks from the same machine.
+
+The second part is the TLS 1.3 client, `beenet/src/tls.rs`, socket-free like
+the rest of beenet: the ClientHello (server name, X25519 key share, TLS 1.3
+only), the key schedule, encrypted records, the server's flight
+(EncryptedExtensions, Certificate, CertificateVerify, Finished, whose MAC is
+checked), our Finished, then application data both ways; tickets are set
+aside, close_notify ends the stream. Host tests replay the whole
+"Simple 1-RTT Handshake" of RFC 8448 (`beenet/testdata/rfc8448-1rtt.txt`)
+and get every byte the RFC shows: secrets, our Finished record, data
+records; also fed one byte at a time, with changed records refused and cut
+or damaged hellos failing cleanly. In the kernel, `net::Conn` puts TLS over
+a TCP stream; `Url` knows `https://` (port 443), so `wget https://...`,
+redirects to https and `browse` all work. Keys come from
+`rand::secret32` (RDRAND and timestamp-counter jitter through SHA-256). On
+the HP the 854 KB Wikipedia page on honey bees arrives in 0.7 s.
+
+**The server's certificate is not checked yet**: the connection is private
+from anyone who only listens, but someone who can change the traffic could
+pretend to be the server. `wget` and `browse` say so after every HTTPS
+transfer. Next: X.509 parsing, RSA and ECDSA signature checks, and a set of
+root certificates.
 
 ## Next phases
 

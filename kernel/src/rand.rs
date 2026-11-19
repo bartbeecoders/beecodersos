@@ -59,3 +59,24 @@ pub fn next_u64() -> u64 {
 pub fn next_u32() -> u32 {
     (next_u64() >> 32) as u32
 }
+
+/// 32 bytes for keys (TLS): SHA-256 over RDRAND values (when the CPU has
+/// RDRAND), many timestamp-counter readings (their low bits jitter), the
+/// clock and a counter, so that two calls never give the same bytes.
+pub fn secret32() -> [u8; 32] {
+    static CALLS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    let mut h = beenet::sha256::Sha256::new();
+    h.update(&CALLS.fetch_add(1, core::sync::atomic::Ordering::Relaxed).to_le_bytes());
+    if has_rdrand() {
+        for _ in 0..8 {
+            h.update(&rdrand().unwrap_or(0).to_le_bytes());
+        }
+    }
+    for _ in 0..256 {
+        h.update(&time::rdtsc().to_le_bytes());
+        core::hint::spin_loop();
+    }
+    h.update(&time::now_unix_ms().unwrap_or(0).to_le_bytes());
+    h.update(&time::uptime_ms().to_le_bytes());
+    h.finish()
+}

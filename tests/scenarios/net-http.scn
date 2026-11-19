@@ -32,10 +32,10 @@ first
 third
 $ wget http://{http}/loop
 ~ /loop: too many redirects$
-$ wget http://{http}/secure
-~ /secure: the server sends us to an https:// address, and HTTPS \(encrypted HTTP\) is not supported yet$
-$ wget https://example.com/
-~ ^https://example.com/: HTTPS \(encrypted HTTP\) is not supported yet: only http:// addresses work$
+# HTTPS (TLS 1.3) to a server that only speaks plain HTTP: it waits for a
+# request and never answers the handshake; Ctrl+C stops the wait.
+$^C wget https://{http}/hello
+~ /hello: cancelled$
 # Errors say what happened; the error page itself is not shown.
 $ wget http://{http}/missing
 ~ /missing: the server answered: 404 Not Found$

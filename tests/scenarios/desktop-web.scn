@@ -21,7 +21,7 @@ $ head -n 2 /start.html
 ~ ^  \* notes\.txt$
 # Its local link opens notes.txt from the same folder (which is not there yet).
 @ctl keys {machine} "{end}{tab}"
-@ctl keys {machine} "{tab}{tab}{tab}{tab}{enter}"
+@ctl keys {machine} "{tab}{tab}{tab}{tab}{tab}{enter}"
 @ctl text {machine}
 ~ ^ /notes\.txt: no such file or directory$
 # A page of one's own stays: a second click shows it as it was changed.

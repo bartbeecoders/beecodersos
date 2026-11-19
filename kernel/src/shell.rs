@@ -1709,6 +1709,7 @@ impl Shell {
                 println!();
             }
             return match result {
+                Ok(r) if r.secure => println!("{}", net::UNCHECKED_NOTE),
                 Ok(_) => {}
                 Err(e) if e == "too large" => {
                     error(&format!("{url}: too large to show ({} KiB at most): save it with wget URL FILE", MAX_SHOWN / 1024))
@@ -1728,6 +1729,9 @@ impl Shell {
                     println!("(redirected to {to})");
                 }
                 println!("saved {} bytes to {path}", r.bytes);
+                if r.secure {
+                    println!("{}", net::UNCHECKED_NOTE);
+                }
             }
             Err(e) if e == "too large" => {
                 error(&format!("{url}: too large (files can be {} MiB at most)", beefs::MAX_FILE_SIZE >> 20))
