@@ -394,7 +394,7 @@ fn play_in_background(storage: &mut crate::storage::Storage, path: &str) -> (Str
         Ok(w) => w,
         Err(why) => return (format!("{name}: {why}"), true),
     };
-    let seconds = crate::time::format_duration(wav.duration_ms());
+    let seconds = wav.duration_text();
     let frames = wav.to_48k();
     let started = crate::thread::spawn("sound", None, move || {
         let _ = crate::hda::play(&frames, || false);

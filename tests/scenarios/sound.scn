@@ -22,3 +22,17 @@ play /missing.wav: no such file or directory
 $ echo hello > /note.txt
 $ play /note.txt
 play /note.txt: not a WAV file
+# A tune saved as a WAV file and read back (playing needs a card).
+$ tune save /tune.wav c5 e5 g5 c6:500 r:100
+saved 5 notes to /tune.wav (254 KiB)
+$ play /tune.wav
+/tune.wav: 48000 Hz, 16 bits, stereo, 1.4 s (Ctrl+C stops)
+play: no sound card (HD Audio) found
+$ tune c5 e5
+tune: no sound card (HD Audio) found
+$ tune save /tune.txt c5
+usage: tune save FILE.wav NOTE[:MS]...
+$ tune c5 x5
+tune: not a note (like c5, a#4, 440, or r for a rest)
+$ tune
+usage: tune NOTE[:MS]...  or  tune save FILE.wav NOTE[:MS]...   (e.g. tune c5 e5 g5 c6:500; r is a rest)

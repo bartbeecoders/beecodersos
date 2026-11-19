@@ -331,7 +331,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `whoami`, `users`, `useradd`, `userdel`, `passwd`, `login`, `logout`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `head`, `tail`, `wc`, `grep`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `timezone`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `do`, `ai`,
-`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `cpu`, `monitor`, `view`, `screenshot`, `record`, `sound`, `beep`, `play`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `vnc`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `cpu`, `monitor`, `view`, `screenshot`, `record`, `sound`, `beep`, `play`, `tune`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `vnc`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Text tools** (`kernel/src/textops.rs`, self-tested; `text-tools.scn`):
 `head` / `tail [-n N | -N] FILE` show the first or last lines (10 unless N
@@ -1378,7 +1378,10 @@ desktop.
   and line-out pin; `sound volume 0-100` sets the DACs' amplifiers;
   `beep [HZ|NOTE [MS]]` plays a sine tone (notes like `a4`, `c#5`), and
   `play FILE.wav` a PCM WAV file (8 or 16 bits, mono or stereo, any rate:
-  converted to 48 kHz stereo). `kernel/src/hda.rs` is only touched by
+  converted to 48 kHz stereo). `tune c5 e5 g5 c6:500 r:100` plays notes
+  (`NOTE[:MS]`, 250 ms by default, `r` rests) and `tune save FILE.wav
+  NOTES` writes them as a WAV file, which `play` and the file manager play
+  (on the HP: a 1.9 s tune, 357 KiB). `kernel/src/hda.rs` is only touched by
   these commands: it resets the controller, talks to the codecs through
   the CORB/RIRB rings, finds the ways (`sound::route`, breadth first
   through mixers and selectors, skipping digital converters), unmutes and

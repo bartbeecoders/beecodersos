@@ -3071,6 +3071,20 @@ fn sound_files() -> TestResult {
     check_eq!(frequency("h4"), None);
     check_eq!(frequency("a9"), None);
     check_eq!(frequency("b"), None);
+    // Tunes: notes with and without lengths, rests; saved and read back the same.
+    use crate::sound::{encode_wav, parse_tune, render_tune};
+    let tune = parse_tune(&["c5", "r:100", "a4:500", "440:10"]).map_err(String::from)?;
+    check_eq!(tune, alloc::vec![(Some(523), 250), (None, 100), (Some(440), 500), (Some(440), 10)]);
+    let frames = render_tune(&tune, 50);
+    check_eq!(frames.len(), 48 * (250 + 100 + 500 + 10) * 4);
+    check!(frames[48 * 250 * 4..48 * 350 * 4].iter().all(|b| *b == 0)); // the rest is silent
+    let back = parse_wav(&encode_wav(&frames)).map_err(String::from)?;
+    check_eq!((back.rate, back.channels, back.bits), (48_000, 2, 16));
+    check!(back.to_48k() == frames);
+    check!(parse_tune(&[]).is_err());
+    check!(parse_tune(&["c5:5"]).is_err());
+    check!(parse_tune(&["x5"]).is_err());
+    check!(parse_tune(&["c5:10000"; 7]).is_err()); // over 60 s
     Ok(())
 }
 
