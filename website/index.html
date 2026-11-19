@@ -16,7 +16,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=209">
+<link rel="stylesheet" href="style.css?v=211">
 <script src="site.js" defer></script>
 </head>
 <body>
@@ -45,7 +45,7 @@
   <div class="hive-bg" aria-hidden="true"></div>
   <div class="wrap hero-grid">
     <div class="hero-text">
-      <p class="pill"><span class="dot"></span> v0.0.3 · build 209 · running on real hardware</p>
+      <p class="pill"><span class="dot"></span> v0.0.3 · build 211 · running on real hardware</p>
       <h1>The operating system that <span class="honey">improves itself</span>.</h1>
       <p class="lead">BeeCodersOs is a 64-bit OS written from scratch in Rust. It notices what goes
         wrong and what people miss, and an AI turns that into small, tested changes that a person
@@ -84,8 +84,8 @@ clover
 <!-- ======================================================== numbers -->
 <section class="wrap numbers" aria-label="In numbers">
   <div><strong data-count="33700">33.7k</strong><span>lines of Rust, from boot code to TCP</span></div>
-  <div><strong data-count="356">356</strong><span>automated tests, run on every change</span></div>
-  <div><strong data-count="209">209</strong><span>builds in the first six days</span></div>
+  <div><strong data-count="357">357</strong><span>automated tests, run on every change</span></div>
+  <div><strong data-count="211">211</strong><span>builds in the first six days</span></div>
   <div><strong>1</strong><span>outside crate in the kernel, for its heap. Everything else is written here</span></div>
 </section>
 
@@ -272,6 +272,7 @@ clover
     <div><span class="ico" aria-hidden="true">⟲</span><h3>A/B kernel slots</h3><p>A new kernel boots on trial. If it doesn't pass its health check, the machine goes back to the last good one without anyone touching it.</p></div>
     <div><span class="ico" aria-hidden="true">✓</span><h3>Tests before anything ships</h3><p><code>make check</code> boots the system dozens of times in virtual machines (BIOS and UEFI, disks, network, desktop, crashes and rollbacks), with no internet and no AI.</p></div>
     <div><span class="ico" aria-hidden="true">◉</span><h3>Privacy first</h3><p>The event log keeps command names, never what you typed after them. Host names and addresses are never logged. API keys stay on the host.</p></div>
+    <div><span class="ico" aria-hidden="true">⏱</span><h3>A watchdog</h3><p>If a program ever keeps the processor and starves the rest, the timer notices within 30 seconds, records what happened and restarts the machine. Learnt the hard way: a video player froze the HP until someone pressed its power button.</p></div>
     <div><span class="ico" aria-hidden="true">⏻</span><h3>An off switch</h3><p><code>ai off</code> stops every AI feature, and the system works fine without them. Nothing listens on the network unless you switch it on.</p></div>
   </div>
 </section>
