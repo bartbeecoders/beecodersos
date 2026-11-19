@@ -985,7 +985,7 @@ Still open in N6: downloading a new kernel into the spare slot (phase H4 of
 `Docs/beehive-network-plan.html`, not built). Signals to beehive over the
 network: see the next section.
 
-## Beehive over the network (phases H1–H3) ✅ in QEMU, not yet tried on the HP
+## Beehive over the network (phases H1–H3) ✅ (the HP is driven this way every day)
 
 ```
 host$ tools/beehive/beehive.py pair hp
@@ -1610,7 +1610,7 @@ share when each touches only a part of its own. Tests: self-tests (names, featur
 tables cut off anywhere; every piece of a job runs exactly once), `cpu.scn`
 `cpu-many.scn`, `cpu-auto.scn` and `display-many.scn` (a 4-processor VM: `@cpus 4`).
 
-## USB: keyboard and mouse (xHCI) ✅ in QEMU, not yet tried on the HP
+## USB: keyboard and mouse (xHCI) ✅ (the HP's keyboard and mouse)
 
 ```
 [usb]  xHCI controller 1b36:000d, 8 ports, 2 devices ('lsusb' shows them)
