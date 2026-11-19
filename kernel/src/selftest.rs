@@ -68,6 +68,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("sound: WAV files, tones, notes", sound_files),
     ("sound: the way from a speaker to a converter", sound_routes),
     ("file manager icons: grid, moving, clicks, thumbnails", file_icons),
+    ("crypto for TLS: X25519, HKDF, AES-128-GCM (published vectors)", tls_crypto),
     ("remote desktop: a viewer's keys, the tiles that changed", vnc_parts),
     ("accounts: the file, passwords, what needs an admin", accounts),
     ("heap: alloc and free", heap_alloc_free),
@@ -3178,6 +3179,29 @@ fn file_icons() -> TestResult {
     check_eq!(crate::image::dimensions(include_bytes!("../../beenet/testdata/pal.png")), Some((37, 23)));
     check_eq!(crate::image::dimensions(include_bytes!("../../beenet/testdata/anim.gif")), Some((40, 30)));
     check_eq!(crate::image::dimensions(b"hello"), None);
+    Ok(())
+}
+
+fn tls_crypto() -> TestResult {
+    use beenet::crypto::{hkdf_expand, hkdf_extract, x25519, x25519_public, Gcm};
+    let hex = |s: &str| -> Vec<u8> { (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap_or(0)).collect() };
+    let arr = |s: &str| -> [u8; 32] { hex(s).try_into().unwrap_or([0; 32]) };
+    // RFC 7748 6.1: both sides reach the same secret.
+    let alice = arr("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a");
+    let bob = arr("5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb");
+    let shared = hex("4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742");
+    check_eq!(x25519(&alice, &x25519_public(&bob)).to_vec(), shared);
+    check_eq!(x25519(&bob, &x25519_public(&alice)).to_vec(), shared);
+    // RFC 5869 test 1.
+    let prk = hkdf_extract(&hex("000102030405060708090a0b0c"), &[0x0b; 22]);
+    check_eq!(hkdf_expand(&prk, &hex("f0f1f2f3f4f5f6f7f8f9"), 42), hex("3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865"));
+    // GCM test case 2, and a changed byte refused.
+    let gcm = Gcm::new(&[0; 16]);
+    let sealed = gcm.seal(&[0; 12], &[], &[0; 16]);
+    check_eq!(sealed, hex("0388dace60b6a392f328c2b971b2fe78ab6e47d42cec13bdf53a67b21257bddf"));
+    let mut bad = sealed.clone();
+    bad[3] ^= 1;
+    check_eq!(gcm.open(&[0; 12], &[], &bad), None);
     Ok(())
 }
 
