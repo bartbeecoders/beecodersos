@@ -129,6 +129,8 @@ pub struct Viewer {
     images: Vec<(String, crate::image::Image)>,
     /// Pictures that could not be loaded (not tried again).
     failed: Vec<String>,
+    /// Show the whole page, not only its `<main>` part (`m` switches).
+    whole: bool,
 }
 
 /// At most this many pictures are loaded for a page.
@@ -228,6 +230,7 @@ impl Viewer {
             warning: false,
             images: Vec::new(),
             failed: Vec::new(),
+            whole: false,
         }
     }
 
@@ -275,6 +278,13 @@ impl Viewer {
         out
     }
 
+    /// Is only the page's main part shown? (After it was laid out.)
+    pub fn main_only(&mut self) -> bool {
+        let w = if self.width == 0 { 80 } else { self.width };
+        self.lay_out(w);
+        self.page.main_only
+    }
+
     /// A picture of the page, loaded: the page is laid out again around it.
     pub fn add_image(&mut self, src: &str, picture: crate::image::Image) {
         self.images.push((String::from(src), picture));
@@ -319,7 +329,7 @@ impl Viewer {
         }
         let known: Vec<(String, usize)> = self.images.iter().map(|(s, p)| (s.clone(), Self::rows_for(p.height))).collect();
         self.page = match &self.source {
-            Source::Html(text) => html::render_with(text, width, &known),
+            Source::Html(text) => html::render_with(text, width, &known, !self.whole),
             Source::Plain(text) => html::plain(text, width),
         };
         self.width = width;
@@ -437,6 +447,19 @@ impl Viewer {
             },
             Key::Char('g') => self.mode = Mode::Address(String::new()),
             Key::Char('r') => return Action::Reload(self.address.clone()),
+            // The whole page, or only its main part (when it marks one).
+            Key::Char('m') => {
+                let has_main = matches!(&self.source, Source::Html(text) if html::has_main(text));
+                if has_main {
+                    self.whole = !self.whole;
+                    self.width = 0;
+                    self.top = 0;
+                    self.chosen = None;
+                    self.say(if self.whole { "the whole page (m: only its main part)" } else { "only the page's main part (m: the whole page)" }, false);
+                } else {
+                    self.say("this page marks no main part: it is shown whole", false);
+                }
+            }
             // The page through FrogFind's reader: simpler text for heavy pages.
             Key::Char('f') if self.address.starts_with("http") && !self.address.starts_with(READER) => {
                 return Action::Open(reader_address(&self.address));
@@ -548,7 +571,10 @@ pub fn run(window: usize, start: String, mut storage: Storage) {
             match fetch(&mut storage, &address) {
                 Ok((body, at, note)) => {
                     viewer.show(&at, &body, back, again);
-                    let note = String::from(note.as_deref().unwrap_or(""));
+                    let mut note = String::from(note.as_deref().unwrap_or(""));
+                    if viewer.main_only() {
+                        note = if note.is_empty() { String::from("its main part (m: the whole page)") } else { format!("{note}; main part (m: all)") };
+                    }
                     load_pictures(window, &mut viewer, &mut storage, &note);
                     viewer.say(&note, false);
                 }

@@ -3244,12 +3244,12 @@ fn web_pictures() -> TestResult {
     check_eq!(page.text(0), "before[Bee]");
     check_eq!(page.images.iter().map(|i| (i.src.as_str(), i.rows)).collect::<Vec<_>>(), alloc::vec![("a.png", 0), ("b.jpg", 0)]);
     // Loaded (3 lines for a.png): empty lines kept for it, the text goes on below.
-    let page = render_with(html, 40, &[(String::from("a.png"), 3)]);
+    let page = render_with(html, 40, &[(String::from("a.png"), 3)], false);
     check_eq!(page.images[0], PageImage { src: String::from("a.png"), line: 1, rows: 3 });
     check!((1..4).all(|l| page.text(l).is_empty()));
     check!((0..page.lines.len()).position(|l| page.text(l).starts_with("after")).is_some_and(|l| l >= 4));
     // A picture at the very end keeps its lines.
-    let page = render_with("<p>x<img src=a.png>", 40, &[(String::from("a.png"), 2)]);
+    let page = render_with("<p>x<img src=a.png>", 40, &[(String::from("a.png"), 2)], false);
     check_eq!(page.lines.len(), 3);
     // The viewer: the pictures not loaded yet, then where it draws them.
     let mut v = Viewer::new();
