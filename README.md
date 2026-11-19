@@ -1624,6 +1624,22 @@ sources; when you raise `OS_VERSION`, reset `BUILD_NUMBER` to 1. Both show on
 the boot banner and with `version`, e.g. `BeeCodersOs 0.0.3 b6`. A/B slots and
 backlog items record the build they shipped in.
 
+## Networking — phase N7 (first part): cryptography for HTTPS 🚧
+
+The goal is HTTPS (TLS 1.3) for `wget` and `browse`: almost every site is
+HTTPS-only now. The first part is the cryptography for the cipher suite
+every TLS 1.3 server must offer, TLS_AES_128_GCM_SHA256 with X25519 key
+exchange, in `beenet/src/crypto.rs`: X25519 (RFC 7748; a constant-time
+Montgomery ladder on five 51-bit limbs), HMAC-SHA256, HKDF and TLS's
+HKDF-Expand-Label (RFC 2104, 5869, 8446), AES-128 (its S-box computed at
+compile time) and GCM. Host tests use the published vectors: RFC 7748
+(including its 1000-round test), RFC 4231, RFC 5869, FIPS-197, and the GCM
+test cases, plus every changed byte of a sealed message being refused; the
+self-test `crypto for TLS` runs the same vectors in the kernel (passes on
+the HP). AES and GHASH are written for clarity, not hardened against timing
+attacks from the same machine. Next: the TLS 1.3 handshake (checked against
+the RFC 8448 traces) and certificate checks.
+
 ## Next phases
 
 Following `Docs/self-improving-os-plan.html`: phase 9, AI-written apps in a
