@@ -30,9 +30,31 @@ Tab picks a link, Enter or a click follows it, Backspace goes back, g asks for a
 <li><a href=\"http://info.cern.ch/hypertext/WWW/TheProject.html\">The first web site</a> (CERN, 1991)\n\
 <li><a href=\"http://frogfind.com/\">FrogFind</a>: a search engine for simple browsers\n\
 <li><a href=\"http://68k.news/\">68k.news</a>: the news, for simple browsers\n\
-<li><a href=\"https://en.wikipedia.org/wiki/Honey_bee\">Honey bees</a> on Wikipedia\n<li><a href=\"http://neverssl.com/\">NeverSSL</a>\n</ul>\n\
+<li><a href=\"https://en.wikipedia.org/wiki/Honey_bee\">Honey bees</a> on Wikipedia\n\
+<li><a href=\"https://os.beecoders.com/\">BeeCodersOs</a>: what this system is, and what it learnt today\n\
+<li><a href=\"http://neverssl.com/\">NeverSSL</a>\n</ul>\n\
 <h2>On this machine</h2>\n<ul>\n<li><a href=\"notes.txt\">notes.txt</a>\n</ul>\n\
-<p>https:// pages are encrypted (TLS 1.3); their certificates are not checked yet.\n";
+<p>https:// pages are encrypted (TLS 1.3), and their certificates are checked against 118 trusted roots.\n";
+
+/// SHA-256 of start pages earlier versions wrote. A start.html that is still
+/// exactly one of them was never changed by its user: it is brought up to
+/// date. Any other start.html is the user's and is left alone.
+const OLD_START_PAGES: [&str; 2] = [
+    "f71c99ffb66dc5ef691644f5178c3d43d0059d8a078df832f0a0378864ae7189", // "the OS has no TLS"
+    "498df2311c2ca3d09b263ba3bfeb35c82ce5645ec3666a045d2e0b4699313ca7", // "certificates are not checked yet"
+];
+
+/// What start.html should become: the current page when there is none, or
+/// when it is an earlier version's page nobody changed; `None` to keep it.
+pub fn start_page_update(existing: Option<&[u8]>) -> Option<&'static str> {
+    match existing {
+        None => Some(START_PAGE),
+        Some(data) => {
+            let hash = beenet::hive::hex(&beenet::sha256::sha256(data));
+            OLD_START_PAGES.contains(&hash.as_str()).then_some(START_PAGE)
+        }
+    }
+}
 
 /// Searching, and reading heavy pages as simpler text (`f`), goes through
 /// FrogFind: a search engine for simple browsers that also hands out other

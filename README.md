@@ -1547,7 +1547,9 @@ desktop.
   editor on `notes.txt` there) and Web (the web page viewer on
   `start.html` there: written the first time with links to the first web
   site, FrogFind, 68k.news and NeverSSL, sites that still work without
-  https; after that it is the user's page and is left alone) and Camera
+  https; after that it is the user's page and is left alone, unless it is
+  still exactly the page an earlier version wrote (checked by its SHA-256):
+  then it is brought up to date) and Camera
   (the USB camera live, `camera view`; without a camera the window says
   so: `desktop-camera.scn`). A click **inside a window** goes to its
   program as the character under the pointer: the file manager chooses and

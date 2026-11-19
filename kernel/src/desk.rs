@@ -122,10 +122,11 @@ pub fn launch(button: usize) -> Result<usize, &'static str> {
         3 => {
             let start = filemgr::join(home(), web::START_NAME);
             let mut storage = storage::handle().ok_or("no file system is mounted")?;
-            let missing = !storage.fs().exists(&start);
-            if missing {
-                // A page of its own to start from; a disk that is full simply has none.
-                let _ = storage.fs().write_file(&start, web::START_PAGE.as_bytes());
+            let existing = storage.fs().read_file(&start).ok();
+            // A page of its own to start from (or an earlier version's page that
+            // was never changed, brought up to date); a disk that is full simply has none.
+            if let Some(page) = web::start_page_update(existing.as_deref()) {
+                let _ = storage.fs().write_file(&start, page.as_bytes());
             }
             open_web(&start)
         }
