@@ -7,7 +7,7 @@ $ monitor
 the system monitor in a new window: q leaves
 $ sleep 2
 @ctl text {machine}
-~ ^--- window 1 ---$
+~ ^--- window 1: .+ ---$
 ~ ^ System monitor   up \d
 ~ ^ Processors: 4 in use$
 ~ ^  cpu 0  runs the kernel

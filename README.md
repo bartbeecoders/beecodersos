@@ -1401,6 +1401,10 @@ desktop.
   as a 24-bit BMP; `view FILE` shows a PNG, BMP (uncompressed, 24 or 32
   bits) or binary PPM (P6) picture in a window (`kernel/src/view.rs`), as large
   as fits and at most twice its size, in the middle on a dark background.
+  The arrow keys (and Page Up / Page Down) go to the previous and next
+  picture in the same folder, in name order, round and round, and the
+  window's title follows; `view FOLDER` starts at its first picture (handy
+  for what `camera watch` saved).
   The lines are scaled on every processor in use (`console::pane_picture`);
   a window that shows a picture is not covered again by its text. Files
   are untrusted: `kernel/src/image.rs` checks every size, refuses
@@ -1562,7 +1566,8 @@ desktop.
   `desktop-files.scn` drives the file manager from the host,
   `desktop-launch.scn` uses the buttons and clicks in windows,
   `desktop-web.scn` the Web button and its start page. Through
-  `beectl.py text` the host sees the text of every window.
+  `beectl.py text` the host sees the text of every window, each under a
+  line with its number and title (`--- window 2: View: me.jpg ---`).
 
 ## Processors: `cpu`, `cpu start`, `cpu test`, `cpu auto`
 

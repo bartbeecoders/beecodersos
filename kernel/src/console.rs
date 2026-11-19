@@ -675,9 +675,10 @@ pub fn screen_text() -> String {
         }
         Screen::Graphics(screen) => text += &cells_text(screen.cells(), cols),
     }
-    // The other windows follow, each under a line with its number.
+    // The other windows follow, each under a line with its number and title.
     for pane in PANES.get().iter() {
-        text += &format!("--- window {} ---\n", pane.window);
+        let title = DESKTOP.get().as_ref().and_then(|d| d.window(pane.window)).map(|w| w.title.clone()).unwrap_or_default();
+        text += &format!("--- window {}: {title} ---\n", pane.window);
         text += cells_text(pane.con.cells(), pane.con.width()).trim_end();
         text.push('\n');
     }
@@ -883,6 +884,13 @@ pub fn set_clock(text: &str) {
     *CLOCK.get() = String::from(text);
     let _rebuilding = Rebuilding::start();
     let Some(rect) = DESKTOP.get().as_mut().and_then(|desk| desk.set_clock(text)) else { return };
+    compose(rect);
+}
+
+/// Give a window another title (a picture viewer on its next picture).
+pub fn pane_title(window: usize, title: &str) {
+    let _rebuilding = Rebuilding::start();
+    let Some(rect) = DESKTOP.get().as_mut().and_then(|desk| desk.set_title(window, title)) else { return };
     compose(rect);
 }
 

@@ -66,7 +66,8 @@ pub fn open_picture(path: &str) -> Result<(usize, usize, usize, usize), String> 
     let (width, height) = picture.size();
     let frames = picture.frames();
     let name = path.rsplit('/').next().unwrap_or(path);
-    let window = open(&format!("View: {name}"), "view", false, move |window| crate::view::run(window, picture))?;
+    let owned = String::from(path);
+    let window = open(&format!("View: {name}"), "view", false, move |window| crate::view::run(window, picture, owned, storage))?;
     Ok((window, width, height, frames))
 }
 

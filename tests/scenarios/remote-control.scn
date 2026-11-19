@@ -60,7 +60,7 @@ still here
 @ctl run {machine} "cat /afar/keys.txt"
 typed from afar
 @ctl text {machine}
-~ ^--- window 1 ---$
+~ ^--- window 1: .+ ---$
 ~ echo typed from afar > /afar/keys.txt$
 # An editor, driven from afar: type, save, leave.
 @ctl run {machine} "edit /afar/keys.txt"
@@ -68,7 +68,7 @@ typed from afar
 @ctl keys {machine} "{end} and edited{ctrl+s}"
 ~ keys typed
 @ctl text {machine}
-~ ^--- window 2 ---$
+~ ^--- window 2: .+ ---$
 ~ ^ saved, 27 bytes$
 ~ ^typed from afar and edited$
 @ctl keys {machine} "{ctrl+q}"
