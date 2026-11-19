@@ -1416,6 +1416,22 @@ desktop.
   the one-by-one decoder. On the HP a 1923x1599 photo of a honey bee
   (2.4 MB, fetched from Wikimedia over HTTPS) is read and shown in 0.44 s,
   and a 1200x800 progressive photo of honey from Unsplash in 40 ms.
+- **Video:** `play FILE.avi` (and Enter on an `.avi` in the file manager)
+  plays Motion-JPEG AVI videos in a window (`kernel/src/video.rs`):
+  `beenet/src/avi.rs` reads the RIFF headers (size, time per frame, the
+  video's compression, PCM sound) and where each frame is; each frame is a
+  JPEG decoded on every processor and shown at its time, frames that would
+  come too late are skipped, and the sound plays on the sound card on a
+  thread of its own (space pauses both, `q` stops both). Host tests read an
+  ffmpeg-made clip (`beenet/testdata/clip.avi`: 10 frames, 440 Hz), cut and
+  damaged files fail cleanly. On the HP a 480x320 video of honey with a
+  melody (`https://os.beecoders.com/media/honey.avi`, 3.2 MB, made with
+  ffmpeg from an Unsplash photo) plays at its 24 frames a second with sound.
+  The first version froze the HP: after the last frame the player waited
+  for a time already past, which returns at once, so it never let the other
+  threads run (threads switch only when one waits); now it waits only for a
+  key after the end. QEMU showed the same freeze with the old line and none
+  with the fix.
 - **GIF and screen recordings:** `view` also shows GIF pictures and plays
   animated GIFs at the speed the file asks for, round and round (space
   pauses, `n` steps a frame, `q` leaves). `beenet/src/gif.rs` reads

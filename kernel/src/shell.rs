@@ -1209,6 +1209,13 @@ impl Shell {
                 Err(why) => error(&format!("tune: {why}")),
             },
             ("tune", _) => error("usage: tune NOTE[:MS]...  or  tune save FILE.wav NOTE[:MS]...   (e.g. tune c5 e5 g5 c6:500; r is a rest)"),
+            ("play", [file]) if file.to_ascii_lowercase().ends_with(".avi") => {
+                let path = self.abs(file);
+                match crate::desk::open_video(&path) {
+                    Ok((_, w, h, n, sound)) => println!("{path} ({w} x {h}, {n} frames{}) in a new window: space pauses, q leaves", if sound { ", with sound" } else { "" }),
+                    Err(why) => error(&format!("play {file}: {why}")),
+                }
+            }
             ("play", [file]) => {
                 let path = self.abs(file);
                 let data = self.storage.fs().read_file(&path);
@@ -1220,7 +1227,7 @@ impl Shell {
                     Err(why) => error(&format!("play {file}: {why}")),
                 }
             }
-            ("play", _) => error("usage: play FILE.wav"),
+            ("play", _) => error("usage: play FILE.wav|FILE.avi"),
             ("record", _) => error("usage: record FILE.gif SECONDS   (1 to 60; Ctrl+C stops early)"),
             ("monitor", []) => match crate::desk::open_monitor() {
                 Ok(_) => println!("the system monitor in a new window: q leaves"),
@@ -2662,7 +2669,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("view FILE", "show a picture (JPEG, PNG, GIF, BMP or PPM) in a window; animated GIFs play"),
     ("sound [volume N]", "the sound card, its outputs and volume (0-100)"),
     ("beep [HZ|NOTE [MS]]", "play a tone (default 880 Hz, 300 ms; notes like a4, c#5)"),
-    ("play FILE.wav", "play a WAV file (PCM, 8 or 16 bits)"),
+    ("play FILE.wav|.avi", "play a WAV file, or a Motion-JPEG AVI video in a window"),
     ("tune [save FILE.wav] NOTES", "play notes like c5 e5 g5 c6:500 (r rests), or save them as a WAV file"),
     ("record FILE.gif SECS", "film the screen for SECS seconds (1-60) into an animated GIF"),
     ("screenshot FILE", "save the screen as a picture (FILE.png: PNG, FILE.gif: GIF, otherwise BMP)"),

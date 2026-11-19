@@ -70,6 +70,26 @@ pub fn open_picture(path: &str) -> Result<(usize, usize, usize, usize), String> 
     Ok((window, width, height, frames))
 }
 
+/// Open a video player on an AVI file (`path` is absolute): read and
+/// checked before the window opens. Returns the window, size, frames and
+/// whether it has sound.
+pub fn open_video(path: &str) -> Result<(usize, usize, usize, usize, bool), String> {
+    let mut storage = storage::handle().ok_or("no file system is mounted")?;
+    let data = storage.fs().read_file(path).map_err(|e| format!("{e}"))?;
+    let avi = beenet::avi::parse(&data).map_err(String::from)?;
+    if !avi.is_mjpeg() {
+        let codec = String::from_utf8_lossy(&avi.codec).into_owned();
+        return Err(format!("a video in {codec} (only Motion-JPEG videos can be played)"));
+    }
+    if avi.frames.is_empty() {
+        return Err(String::from("a video without frames"));
+    }
+    let (w, h, n, sound) = (avi.width, avi.height, avi.frames.len(), avi.sound.is_some());
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let window = open(&format!("Video: {name}"), "video", false, move |window| crate::video::run(window, data, avi))?;
+    Ok((window, w, h, n, sound))
+}
+
 /// Open the system monitor in a window.
 pub fn open_monitor() -> Result<usize, &'static str> {
     open("Monitor", "monitor", false, crate::monitor::run)
