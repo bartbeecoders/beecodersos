@@ -44,7 +44,7 @@
   <div class="hive-bg" aria-hidden="true"></div>
   <div class="wrap hero-grid">
     <div class="hero-text">
-      <p class="pill"><span class="dot"></span> v0.0.3 · build 167 · running on real hardware</p>
+      <p class="pill"><span class="dot"></span> v0.0.3 · build 169 · running on real hardware</p>
       <h1>The operating system that <span class="honey">improves itself</span>.</h1>
       <p class="lead">BeeCodersOs is a 64-bit OS written from scratch in Rust. It notices what goes
         wrong and what people miss, and an AI turns that into small, tested changes that a person
@@ -83,8 +83,8 @@ clover
 <!-- ======================================================== numbers -->
 <section class="wrap numbers" aria-label="In numbers">
   <div><strong data-count="33700">33.7k</strong><span>lines of Rust, from boot code to TCP</span></div>
-  <div><strong data-count="316">316</strong><span>automated tests, run on every change</span></div>
-  <div><strong data-count="167">167</strong><span>builds in the first six days</span></div>
+  <div><strong data-count="320">320</strong><span>automated tests, run on every change</span></div>
+  <div><strong data-count="169">169</strong><span>builds in the first six days</span></div>
   <div><strong>1</strong><span>outside crate in the kernel, for its heap. Everything else is written here</span></div>
 </section>
 
@@ -208,7 +208,8 @@ clover
       <span class="tag">Multi-core</span>
       <h3>Every core at work</h3>
       <p>All processors start at boot, and work is split across them. Hashing 64 MiB takes
-        <b>130 ms</b> instead of 521 ms on four cores.</p>
+        <b>130 ms</b> instead of 521 ms on four cores. A screenshot is compressed in 16 pieces at once: the HP's whole
+        screen as a 53 KB PNG in 30 ms.</p>
       <div class="bars" aria-hidden="true"><span class="w100">1 core · 521 ms</span><span class="w25">4 cores · 130 ms</span></div>
     </article>
 
@@ -283,7 +284,7 @@ clover
       <li class="done"><time>Nov 16</time><b>Installed on the HP</b><span>graphics through the firmware's framebuffer, USB keyboard and mouse, beehive over the network, an installer for the hard disk</span></li>
       <li class="done"><time>Nov 17</time><b>A desktop worth using</b><span>several windows, a text editor, a file manager, fast drawing, restarting by itself after a crash, driven from the host</span></li>
       <li class="done"><time>Nov 18</time><b>Every core, and the web</b><span>all four processors at work, a web browser, <code>do</code>, <code>grep</code> and friends, a system monitor, a clock with time zones, pictures and wallpaper, disk writes 15× faster, a remote desktop (VNC), user accounts and protected home folders, and PNG pictures</span></li>
-      <li class="done"><time>Nov 19</time><b>Moving pictures</b><span>animated GIFs in the picture viewer, and <code>record</code>: the screen filmed into a GIF, turned into colors on every core; and sound: an HD Audio driver, <code>beep</code> and <code>play</code> on the HP's speaker, and a file manager that opens pictures and sounds</span></li>
+      <li class="done"><time>Nov 19</time><b>Moving pictures</b><span>animated GIFs in the picture viewer, and <code>record</code>: the screen filmed into a GIF, turned into colors on every core; and sound: an HD Audio driver, <code>beep</code> and <code>play</code> on the HP's speaker, a file manager that opens pictures and sounds, and PNG screenshots compressed on all four cores (3.8 MB → 53 KB)</span></li>
       <li class="next"><time>Next</time><b>Asked for by its user</b><span>a USB camera, private files, owners per file</span></li>
       <li class="next"><time>Later</time><b>And then</b><span>AI-written apps in a WebAssembly sandbox, encrypted web (TLS), paging, user programs</span></li>
     </ol>

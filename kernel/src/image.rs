@@ -192,3 +192,45 @@ pub fn cover_pixel(width: usize, height: usize, room_w: usize, room_h: usize, x:
     let (dx, dy) = ((sw - room_w) / 2, (sh - room_h) / 2);
     (((x + dx) * width / sw).min(width - 1), ((y + dy) * height / sh).min(height - 1))
 }
+
+/// A PNG made on every processor in use: the lines are read and filtered
+/// in parallel, then compressed in `PIECES` pieces at once (each piece on
+/// its own, joined into one stream; beenet::deflate). The same file as
+/// `beenet::png::encode` would make, but for where the pieces start.
+pub fn encode_png(width: usize, height: usize, pixel: &(dyn Fn(usize, usize) -> u32 + Sync)) -> Vec<u8> {
+    use crate::smp::{self, Disjoint};
+    const PIECES: usize = 16;
+    let line = width * 3;
+    let mut rgb = alloc::vec![0u8; line * height];
+    let rgb_at = Disjoint(rgb.as_mut_ptr());
+    smp::run(height, &|y| {
+        // SAFETY: each job writes its own line.
+        let out = unsafe { core::slice::from_raw_parts_mut(rgb_at.get().add(y * line), line) };
+        for x in 0..width {
+            let c = pixel(x, y);
+            out[x * 3..x * 3 + 3].copy_from_slice(&[(c >> 16) as u8, (c >> 8) as u8, c as u8]);
+        }
+    });
+    let mut raw = alloc::vec![0u8; (line + 1) * height];
+    let raw_at = Disjoint(raw.as_mut_ptr());
+    let rgb = &rgb;
+    smp::run(height, &|y| {
+        // SAFETY: each job writes its own filtered line; the RGB lines are only read.
+        let out = unsafe { core::slice::from_raw_parts_mut(raw_at.get().add(y * (line + 1)), line + 1) };
+        let prev = if y > 0 { Some(&rgb[(y - 1) * line..y * line]) } else { None };
+        beenet::png::filter_row(prev, &rgb[y * line..(y + 1) * line], out);
+    });
+    // Pieces of whole lines.
+    let lines_per = height.div_ceil(PIECES).max(1);
+    let chunks: Vec<&[u8]> = raw.chunks(lines_per * (line + 1)).collect();
+    let last = chunks.len().saturating_sub(1);
+    let mut pieces: Vec<Vec<u8>> = (0..chunks.len()).map(|_| Vec::new()).collect();
+    let pieces_at = Disjoint(pieces.as_mut_ptr());
+    let chunks_ref = &chunks;
+    smp::run(chunks.len(), &|i| {
+        // SAFETY: each job sets its own piece.
+        unsafe { *pieces_at.get().add(i) = beenet::deflate::deflate_piece(chunks_ref[i], i == last) };
+    });
+    let z = beenet::deflate::zlib_from_pieces(&pieces, beenet::inflate::adler32(&raw));
+    beenet::png::from_zlib(width, height, &z)
+}

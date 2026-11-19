@@ -5,6 +5,7 @@
 //! checked, and pictures are at most `MAX_SIDE` pixels on a side.
 
 use crate::inflate;
+use alloc::vec;
 use alloc::vec::Vec;
 
 pub const MAX_SIDE: usize = 4096;
@@ -221,37 +222,64 @@ fn pixel(h: &Header, line: &[u8], col: usize, palette: &[u32], alpha: &[u8]) -> 
     }
 }
 
-/// A PNG of `width` x `height` pixels (`pixel(x, y)` gives 0xRRGGBB): RGB, 8
-/// bits, the data in stored (uncompressed) DEFLATE blocks. Simple and valid
-/// everywhere; about as large as a BMP.
-pub fn encode(width: usize, height: usize, pixel: impl Fn(usize, usize) -> u32) -> Vec<u8> {
-    let mut raw = Vec::with_capacity((width * 3 + 1) * height);
-    for y in 0..height {
-        raw.push(0); // no filter
-        for x in 0..width {
-            let rgb = pixel(x, y);
-            raw.extend_from_slice(&[(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8]);
+/// One line of an RGB picture made ready for compression: the filter
+/// (of the five) whose bytes are smallest in sum, then the filtered bytes.
+/// `out` is `row.len() + 1` bytes; `prev` is the line above, if any.
+pub fn filter_row(prev: Option<&[u8]>, row: &[u8], out: &mut [u8]) {
+    let up = |i: usize| prev.map_or(0, |p| p[i]);
+    let left = |i: usize| if i >= 3 { row[i - 3] } else { 0 };
+    let up_left = |i: usize| if i >= 3 { up(i - 3) } else { 0 };
+    let paeth = |a: u8, b: u8, c: u8| {
+        let p = a as i16 + b as i16 - c as i16;
+        let (pa, pb, pc) = ((p - a as i16).abs(), (p - b as i16).abs(), (p - c as i16).abs());
+        if pa <= pb && pa <= pc { a } else if pb <= pc { b } else { c }
+    };
+    let predict = |filter: u8, i: usize| -> u8 {
+        match filter {
+            0 => 0,
+            1 => left(i),
+            2 => up(i),
+            3 => ((left(i) as u16 + up(i) as u16) / 2) as u8,
+            _ => paeth(left(i), up(i), up_left(i)),
         }
+    };
+    let cost = |filter: u8| -> u32 { (0..row.len()).map(|i| (row[i].wrapping_sub(predict(filter, i)) as i8).unsigned_abs() as u32).sum() };
+    let best = (0..5u8).min_by_key(|&f| cost(f)).unwrap_or(0);
+    out[0] = best;
+    for i in 0..row.len() {
+        out[i + 1] = row[i].wrapping_sub(predict(best, i));
     }
-    let mut z = alloc::vec![0x78, 0x01];
-    let mut blocks = raw.chunks(65535).peekable();
-    if blocks.peek().is_none() {
-        z.extend_from_slice(&[1, 0, 0, 0xFF, 0xFF]);
+}
+
+/// A PNG of `width` x `height` pixels (`pixel(x, y)` gives 0xRRGGBB): RGB, 8
+/// bits, each line filtered (`filter_row`) and compressed (beenet::deflate).
+pub fn encode(width: usize, height: usize, pixel: impl Fn(usize, usize) -> u32) -> Vec<u8> {
+    let rgb: Vec<u8> = (0..height)
+        .flat_map(|y| (0..width).map(move |x| (x, y)))
+        .flat_map(|(x, y)| {
+            let c = pixel(x, y);
+            [(c >> 16) as u8, (c >> 8) as u8, c as u8]
+        })
+        .collect();
+    let line = width * 3;
+    let mut raw = vec![0u8; (line + 1) * height];
+    for y in 0..height {
+        let prev = if y > 0 { Some(&rgb[(y - 1) * line..y * line]) } else { None };
+        filter_row(prev, &rgb[y * line..(y + 1) * line], &mut raw[y * (line + 1)..(y + 1) * (line + 1)]);
     }
-    while let Some(block) = blocks.next() {
-        z.push(blocks.peek().is_none() as u8);
-        z.extend_from_slice(&(block.len() as u16).to_le_bytes());
-        z.extend_from_slice(&(!(block.len() as u16)).to_le_bytes());
-        z.extend_from_slice(block);
-    }
-    z.extend_from_slice(&inflate::adler32(&raw).to_be_bytes());
+    let z = crate::deflate::zlib_from_pieces(&[crate::deflate::deflate(&raw)], inflate::adler32(&raw));
+    from_zlib(width, height, &z)
+}
+
+/// The PNG file around compressed, filtered RGB lines (a zlib stream).
+pub fn from_zlib(width: usize, height: usize, z: &[u8]) -> Vec<u8> {
     let mut out = SIGNATURE.to_vec();
     let mut ihdr = Vec::new();
     ihdr.extend_from_slice(&(width as u32).to_be_bytes());
     ihdr.extend_from_slice(&(height as u32).to_be_bytes());
     ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
     chunk(&mut out, b"IHDR", &ihdr);
-    chunk(&mut out, b"IDAT", &z);
+    chunk(&mut out, b"IDAT", z);
     chunk(&mut out, b"IEND", &[]);
     out
 }
@@ -311,7 +339,7 @@ mod tests {
     fn written_and_read_back() {
         assert_eq!(crc32(b"IEND"), 0xAE42_6082); // as in every PNG file
         let colors = |x: usize, y: usize| ((x * 7) as u32) << 16 | ((y * 3) as u32) << 8 | (x ^ y) as u32;
-        // Wide enough that the data needs more than one stored block.
+        // Wide, with many different lines: every filter gets used.
         let png = encode(300, 80, colors);
         let back = decode(&png).unwrap();
         assert_eq!((back.width, back.height), (300, 80));

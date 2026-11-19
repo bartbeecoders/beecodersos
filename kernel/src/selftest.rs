@@ -2879,6 +2879,13 @@ fn pictures() -> TestResult {
     let png = decode(include_bytes!("../../beenet/testdata/pal.png")).map_err(String::from)?;
     check_eq!((png.width, png.height), (37, 23));
     check!(decode(&include_bytes!("../../beenet/testdata/pal.png")[..100]).is_err());
+    // A PNG made on every processor (pieces compressed apart) reads back the same.
+    let colors = |x: usize, y: usize| if (x / 9 + y / 7) % 3 == 0 { 0x203040 } else { ((x * 7) as u32 & 0xFF) << 16 | ((y * 3) as u32 & 0xFF) << 8 | (x ^ y) as u32 & 0xFF };
+    let png = crate::image::encode_png(173, 61, &colors);
+    let back = decode(&png).map_err(String::from)?;
+    check_eq!((back.width, back.height), (173, 61));
+    check!(back.pixels.iter().enumerate().all(|(i, p)| *p == colors(i % 173, i / 173)));
+    check!(png.len() < 173 * 61 * 3 / 2);
     // An animated GIF (ImageMagick): the first frame, through the same door.
     let gif = decode(include_bytes!("../../beenet/testdata/anim.gif")).map_err(String::from)?;
     check_eq!((gif.width, gif.height), (40, 30));
