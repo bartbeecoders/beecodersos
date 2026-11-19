@@ -57,10 +57,35 @@ $ threads
 $ sleep 1
 $ threads
 !~ view
+# JPEG: written on every processor, read back by the viewer.
+$ screenshot /screen.jpg
+~ ^saved the screen \(800 x 600\) to /screen\.jpg \(\d+ KiB\)$
+$ view /screen.jpg
+/screen.jpg (800 x 600 pixels) in a new window: q leaves
+$ sleep 1
+@screenshot 800x600 pixels 60,200=202020 660,200=202020
+@ctl keys {machine} "q"
+$ sleep 1
+# A video of the screen: MJPEG frames, played back by the video player.
+$ monitor
+the system monitor in a new window: q leaves
+$ record /clip.avi 2
+~ ^recorded \d+ frames in [23]\.\d s \(\d+ a second\) to /clip\.avi \(\d+ KiB\)$
+@ctl keys {machine} "q"
+$ sleep 1
+$ play /clip.avi
+~ ^/clip\.avi \(800 x 600, \d+ frames\) in a new window: space pauses, q leaves$
+$ sleep 3
+$ threads
+~ video +(waiting|ready)
+@ctl keys {machine} "q"
+$ sleep 1
+$ threads
+!~ video
 $ record /clip.txt 3
-usage: record FILE.gif SECONDS   (1 to 60; Ctrl+C stops early)
+usage: record FILE.gif|FILE.avi SECONDS   (1 to 60; Ctrl+C stops early)
 $ record /clip.gif 0
-usage: record FILE.gif SECONDS   (1 to 60; Ctrl+C stops early)
+usage: record FILE.gif|FILE.avi SECONDS   (1 to 60; Ctrl+C stops early)
 # What is no picture opens no window.
 $ echo hello > /note.txt
 $ view /note.txt
@@ -70,4 +95,4 @@ view /missing.bmp: no such file or directory
 $ view
 usage: view FILE   (a JPEG, PNG, GIF, BMP or PPM picture; an animated GIF plays)
 $ screenshot
-usage: screenshot FILE   (saves the screen as a picture: PNG or GIF if FILE ends in .png or .gif, BMP otherwise)
+usage: screenshot FILE   (saves the screen as a picture: JPEG, PNG or GIF by the ending, BMP otherwise)

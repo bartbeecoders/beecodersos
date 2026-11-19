@@ -124,7 +124,7 @@ impl<'a> Bits<'a> {
             code = code << 1 | self.bit() as u16;
             let (first, index, count) = h.first[len];
             if count > 0 && code >= first && (code as u32) < first as u32 + count as u32 {
-                return h.symbols.get((index + code - first) as usize).copied();
+                return h.symbols.get(index as usize + (code - first) as usize).copied();
             }
         }
         None
@@ -621,6 +621,258 @@ pub fn dimensions(data: &[u8]) -> Option<(usize, usize)> {
     None
 }
 
+// --- writing JPEG ------------------------------------------------------------------------
+
+/// Annex K's quantization tables (quality 50), luminance and chrominance, in zigzag order.
+const STD_QUANT: [[u8; 64]; 2] = [[16, 11, 12, 14, 12, 10, 16, 14, 13, 14, 18, 17, 16, 19, 24, 40, 26, 24, 22, 22, 24, 49, 35, 37, 29, 40, 58, 51, 61, 60, 57, 51, 56, 55, 64, 72, 92, 78, 64, 68, 87, 69, 55, 56, 80, 109, 81, 87, 95, 98, 103, 104, 103, 62, 77, 113, 121, 112, 100, 120, 92, 101, 103, 99], [17, 18, 18, 24, 21, 24, 47, 26, 26, 47, 99, 66, 56, 66, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99]];
+/// Annex K's Huffman tables as DHT segment bodies: DC 0, AC 0, DC 1, AC 1.
+const STD_DC0: &[u8] = &[0, 0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+const STD_AC0: &[u8] = &[16, 0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 125, 1, 2, 3, 0, 4, 17, 5, 18, 33, 49, 65, 6, 19, 81, 97, 7, 34, 113, 20, 50, 129, 145, 161, 8, 35, 66, 177, 193, 21, 82, 209, 240, 36, 51, 98, 114, 130, 9, 10, 22, 23, 24, 25, 26, 37, 38, 39, 40, 41, 42, 52, 53, 54, 55, 56, 57, 58, 67, 68, 69, 70, 71, 72, 73, 74, 83, 84, 85, 86, 87, 88, 89, 90, 99, 100, 101, 102, 103, 104, 105, 106, 115, 116, 117, 118, 119, 120, 121, 122, 131, 132, 133, 134, 135, 136, 137, 138, 146, 147, 148, 149, 150, 151, 152, 153, 154, 162, 163, 164, 165, 166, 167, 168, 169, 170, 178, 179, 180, 181, 182, 183, 184, 185, 186, 194, 195, 196, 197, 198, 199, 200, 201, 202, 210, 211, 212, 213, 214, 215, 216, 217, 218, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250];
+const STD_DC1: &[u8] = &[1, 0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+const STD_AC1: &[u8] = &[17, 0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 119, 0, 1, 2, 3, 17, 4, 5, 33, 49, 6, 18, 65, 81, 7, 97, 113, 19, 34, 50, 129, 8, 20, 66, 145, 161, 177, 193, 9, 35, 51, 82, 240, 21, 98, 114, 209, 10, 22, 36, 52, 225, 37, 241, 23, 24, 25, 26, 38, 39, 40, 41, 42, 53, 54, 55, 56, 57, 58, 67, 68, 69, 70, 71, 72, 73, 74, 83, 84, 85, 86, 87, 88, 89, 90, 99, 100, 101, 102, 103, 104, 105, 106, 115, 116, 117, 118, 119, 120, 121, 122, 130, 131, 132, 133, 134, 135, 136, 137, 138, 146, 147, 148, 149, 150, 151, 152, 153, 154, 162, 163, 164, 165, 166, 167, 168, 169, 170, 178, 179, 180, 181, 182, 183, 184, 185, 186, 194, 195, 196, 197, 198, 199, 200, 201, 202, 210, 211, 212, 213, 214, 215, 216, 217, 218, 226, 227, 228, 229, 230, 231, 232, 233, 234, 242, 243, 244, 245, 246, 247, 248, 249, 250];
+
+/// A Huffman code for writing: (code, length) per symbol.
+struct Codes([(u16, u8); 256]);
+
+impl Codes {
+    fn from_dht(body: &[u8]) -> Codes {
+        let mut codes = [(0u16, 0u8); 256];
+        let counts = &body[1..17];
+        let mut symbols = body[17..].iter();
+        let mut code = 0u16;
+        for (len, &n) in counts.iter().enumerate() {
+            for _ in 0..n {
+                if let Some(&s) = symbols.next() {
+                    codes[s as usize] = (code, len as u8 + 1);
+                }
+                code += 1;
+            }
+            code <<= 1;
+        }
+        Codes(codes)
+    }
+}
+
+/// Writes bits, most significant first, with a 0 after every 0xFF byte.
+struct BitWriter {
+    out: Vec<u8>,
+    acc: u32,
+    n: u32,
+}
+
+impl BitWriter {
+    fn put(&mut self, value: u32, len: u32) {
+        if len == 0 {
+            return;
+        }
+        self.acc = self.acc << len | (value & ((1 << len) - 1));
+        self.n += len;
+        while self.n >= 8 {
+            let byte = (self.acc >> (self.n - 8)) as u8;
+            self.out.push(byte);
+            if byte == 0xFF {
+                self.out.push(0);
+            }
+            self.n -= 8;
+        }
+        self.acc &= (1 << self.n) - 1;
+    }
+
+    fn flush(&mut self) {
+        let pad = (8 - self.n % 8) % 8;
+        self.put((1 << pad) - 1, pad); // fill with ones
+    }
+}
+
+/// How many bits a value needs (JPEG's "category"), and the bits to write.
+fn category(v: i32) -> (u32, u32) {
+    let size = 32 - v.unsigned_abs().leading_zeros();
+    let bits = if v < 0 { (v - 1) as u32 } else { v as u32 };
+    (size, bits & ((1u32 << size) - 1))
+}
+
+/// A JPEG writer: 4:2:0 YCbCr, baseline, the standard Huffman tables and
+/// quantization tables scaled for `quality` as libjpeg does. Each row of
+/// 16-line MCUs is made into coefficients on its own (`row`), so rows can
+/// be done on different processors; `finish` codes them in order.
+pub struct Writer {
+    pub width: usize,
+    pub height: usize,
+    quant: [[u16; 64]; 2],
+}
+
+impl Writer {
+    pub fn new(width: usize, height: usize, quality: u32) -> Writer {
+        let q = quality.clamp(1, 100);
+        let scale = if q < 50 { 5000 / q } else { 200 - 2 * q };
+        let mut quant = [[1u16; 64]; 2];
+        for t in 0..2 {
+            for k in 0..64 {
+                quant[t][k] = ((STD_QUANT[t][k] as u32 * scale + 50) / 100).clamp(1, 255) as u16;
+            }
+        }
+        Writer { width, height, quant }
+    }
+
+    pub fn mcu_rows(&self) -> usize {
+        self.height.div_ceil(16)
+    }
+
+    /// The quantized coefficients (zigzag order) of MCU row `my`: for each
+    /// MCU, four Y blocks, then Cb and Cr.
+    pub fn row(&self, my: usize, pixel: impl Fn(usize, usize) -> u32) -> Vec<i16> {
+        let mcus = self.width.div_ceil(16);
+        let mut out = Vec::with_capacity(mcus * 6 * 64);
+        let (wmax, hmax) = (self.width - 1, self.height - 1);
+        let ycc = |x: usize, y: usize| -> (i32, i32, i32) {
+            let p = pixel(x.min(wmax), y.min(hmax));
+            let (r, g, b) = ((p >> 16 & 255) as i32, (p >> 8 & 255) as i32, (p & 255) as i32);
+            let yy = (19_595 * r + 38_470 * g + 7_471 * b + 32_768) >> 16;
+            let cb = ((-11_056 * r - 21_712 * g + 32_768 * b + 32_768) >> 16) + 128;
+            let cr = ((32_768 * r - 27_440 * g - 5_328 * b + 32_768) >> 16) + 128;
+            (yy, cb, cr)
+        };
+        for mx in 0..mcus {
+            let (x0, y0) = (mx * 16, my * 16);
+            let mut ys = [[0i32; 256]; 1];
+            let mut cbs = [0i32; 64];
+            let mut crs = [0i32; 64];
+            for y in 0..16 {
+                for x in 0..16 {
+                    let (yy, cb, cr) = ycc(x0 + x, y0 + y);
+                    ys[0][y * 16 + x] = yy;
+                    cbs[(y / 2) * 8 + x / 2] += cb;
+                    crs[(y / 2) * 8 + x / 2] += cr;
+                }
+            }
+            for by in 0..2 {
+                for bx in 0..2 {
+                    let mut block = [0i32; 64];
+                    for y in 0..8 {
+                        for x in 0..8 {
+                            block[y * 8 + x] = ys[0][(by * 8 + y) * 16 + bx * 8 + x];
+                        }
+                    }
+                    out.extend_from_slice(&fdct_quant(&block, &self.quant[0]));
+                }
+            }
+            for plane in [&mut cbs, &mut crs] {
+                for v in plane.iter_mut() {
+                    *v = (*v + 2) / 4;
+                }
+                out.extend_from_slice(&fdct_quant(plane, &self.quant[1]));
+            }
+        }
+        out
+    }
+
+    /// The whole file from all rows' coefficients, in order.
+    pub fn finish(&self, rows: &[Vec<i16>]) -> Vec<u8> {
+        let mut out = vec![0xFF, 0xD8];
+        let segment = |out: &mut Vec<u8>, marker: u8, body: &[u8]| {
+            out.extend_from_slice(&[0xFF, marker]);
+            out.extend_from_slice(&((body.len() + 2) as u16).to_be_bytes());
+            out.extend_from_slice(body);
+        };
+        segment(&mut out, 0xE0, b"JFIF\0\x01\x01\0\0\x01\0\x01\0\0");
+        for t in 0..2 {
+            let mut body = vec![t as u8];
+            body.extend(self.quant[t].iter().map(|q| *q as u8));
+            segment(&mut out, 0xDB, &body);
+        }
+        let mut sof = vec![8];
+        sof.extend_from_slice(&(self.height as u16).to_be_bytes());
+        sof.extend_from_slice(&(self.width as u16).to_be_bytes());
+        sof.extend_from_slice(&[3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1]);
+        segment(&mut out, 0xC0, &sof);
+        for t in [STD_DC0, STD_AC0, STD_DC1, STD_AC1] {
+            segment(&mut out, 0xC4, t);
+        }
+        segment(&mut out, 0xDA, &[3, 1, 0x00, 2, 0x11, 3, 0x11, 0, 63, 0]);
+        let (dc0, ac0, dc1, ac1) = (Codes::from_dht(STD_DC0), Codes::from_dht(STD_AC0), Codes::from_dht(STD_DC1), Codes::from_dht(STD_AC1));
+        let mut bits = BitWriter { out, acc: 0, n: 0 };
+        let mut pred = [0i32; 3];
+        for row in rows {
+            for (i, block) in row.chunks(64).enumerate() {
+                let comp = match i % 6 {
+                    0..=3 => 0,
+                    4 => 1,
+                    _ => 2,
+                };
+                let (dc, ac) = if comp == 0 { (&dc0, &ac0) } else { (&dc1, &ac1) };
+                let diff = block[0] as i32 - pred[comp];
+                pred[comp] = block[0] as i32;
+                let (size, value) = category(diff);
+                let (code, len) = dc.0[size as usize];
+                bits.put(code as u32, len as u32);
+                bits.put(value, size);
+                let mut run = 0;
+                for k in 1..64 {
+                    let v = block[k] as i32;
+                    if v == 0 {
+                        run += 1;
+                        continue;
+                    }
+                    while run > 15 {
+                        let (code, len) = ac.0[0xF0];
+                        bits.put(code as u32, len as u32);
+                        run -= 16;
+                    }
+                    let (size, value) = category(v);
+                    let (code, len) = ac.0[(run << 4 | size as usize) & 0xFF];
+                    bits.put(code as u32, len as u32);
+                    bits.put(value, size);
+                    run = 0;
+                }
+                if run > 0 {
+                    let (code, len) = ac.0[0x00];
+                    bits.put(code as u32, len as u32);
+                }
+            }
+        }
+        bits.flush();
+        let mut out = bits.out;
+        out.extend_from_slice(&[0xFF, 0xD9]);
+        out
+    }
+}
+
+/// Forward DCT of 8x8 samples (0-255), quantized, in zigzag order.
+fn fdct_quant(block: &[i32; 64], quant: &[u16; 64]) -> [i16; 64] {
+    let mut tmp = [0i64; 64];
+    for y in 0..8 {
+        for u in 0..8 {
+            let mut s = 0i64;
+            for x in 0..8 {
+                s += (block[y * 8 + x] - 128) as i64 * COS[u][x] as i64;
+            }
+            tmp[y * 8 + u] = s;
+        }
+    }
+    let mut out = [0i16; 64];
+    for v in 0..8 {
+        for u in 0..8 {
+            let mut s = 0i64;
+            for y in 0..8 {
+                s += tmp[y * 8 + u] * COS[v][y] as i64;
+            }
+            // s = 4096^2 * 4 * F(u, v); round F / q.
+            let q = quant[ZIGZAG.iter().position(|&z| z == v * 8 + u).unwrap_or(0)] as i64 * (4 << 24);
+            let f = if s >= 0 { (s + q / 2) / q } else { -((-s + q / 2) / q) };
+            let k = ZIGZAG.iter().position(|&z| z == v * 8 + u).unwrap_or(0);
+            out[k] = f.clamp(-2047, 2047) as i16;
+        }
+    }
+    out
+}
+
+/// A JPEG of the picture, in one go (the kernel spreads `Writer::row` over processors).
+pub fn encode(width: usize, height: usize, quality: u32, pixel: impl Fn(usize, usize) -> u32) -> Vec<u8> {
+    let w = Writer::new(width, height, quality);
+    let rows: Vec<Vec<i16>> = (0..w.mcu_rows()).map(|my| w.row(my, &pixel)).collect();
+    w.finish(&rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -684,5 +936,32 @@ mod tests {
                 let _ = decode(&d);
             }
         }
+    }
+
+    #[test]
+    fn written_and_read_back() {
+        // A picture with smooth parts and edges, odd sizes: read back close to it.
+        let colors = |x: usize, y: usize| -> u32 {
+            if (x / 20 + y / 15) % 3 == 0 { 0x3060C0 } else { ((x * 3) as u32 & 255) << 16 | ((y * 5) as u32 & 255) << 8 | 0x40 }
+        };
+        let (w, h) = (101, 67);
+        let jpg = encode(w, h, 90, colors);
+        let (dw, dh, pixels) = decode(&jpg).unwrap();
+        assert_eq!((dw, dh), (w, h));
+        let mut total = 0u64;
+        for (i, p) in pixels.iter().enumerate() {
+            let want = colors(i % w, i / w);
+            for shift in [16, 8, 0] {
+                total += ((p >> shift & 255) as i64 - (want >> shift & 255) as i64).unsigned_abs();
+            }
+        }
+        let mean = total as f64 / (w * h * 3) as f64;
+        assert!(mean < 6.0, "mean difference {mean}");
+        // Quality changes the size; tiny pictures work.
+        assert!(encode(w, h, 30, colors).len() < jpg.len());
+        assert_eq!(decode(&encode(1, 1, 75, |_, _| 0xFF8000)).unwrap().0, 1);
+        assert_eq!(category(0), (0, 0));
+        assert_eq!(category(-3), (2, 0));
+        assert_eq!(category(5), (3, 5));
     }
 }

@@ -158,6 +158,111 @@ impl Avi {
     }
 }
 
+/// Writes a Motion-JPEG AVI (video only): frames are added one by one,
+/// `finish` puts the headers and the index around them.
+pub struct Writer {
+    width: usize,
+    height: usize,
+    frame_us: u32,
+    /// The frames' chunks ("00dc", length, JPEG, padding), one after the other.
+    movi: Vec<u8>,
+    /// (offset in `movi` of each chunk, its length).
+    index: Vec<(u32, u32)>,
+}
+
+impl Writer {
+    pub fn new(width: usize, height: usize, frame_us: u32) -> Writer {
+        Writer { width, height, frame_us, movi: Vec::new(), index: Vec::new() }
+    }
+
+    pub fn frame(&mut self, jpeg: &[u8]) {
+        // Offsets in the index count from the "movi" word, 4 bytes before this data.
+        self.index.push((self.movi.len() as u32 + 4, jpeg.len() as u32));
+        self.movi.extend_from_slice(b"00dc");
+        self.movi.extend_from_slice(&(jpeg.len() as u32).to_le_bytes());
+        self.movi.extend_from_slice(jpeg);
+        if jpeg.len() % 2 == 1 {
+            self.movi.push(0);
+        }
+    }
+
+    pub fn frames(&self) -> usize {
+        self.index.len()
+    }
+
+    /// The time per frame, when it is known only at the end (a recording).
+    pub fn set_frame_us(&mut self, frame_us: u32) {
+        self.frame_us = frame_us.max(1);
+    }
+
+    /// Bytes so far (about what the file will be).
+    pub fn len(&self) -> usize {
+        self.movi.len() + 16 * self.index.len() + 256
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.index.is_empty()
+    }
+
+    pub fn finish(self) -> Vec<u8> {
+        let le = |v: u32| v.to_le_bytes();
+        let (w, h, n) = (self.width as u32, self.height as u32, self.index.len() as u32);
+        let biggest = self.index.iter().map(|(_, l)| *l).max().unwrap_or(0) + 8;
+        let mut avih = Vec::new();
+        for v in [self.frame_us, biggest.saturating_mul(1_000_000 / self.frame_us.max(1)), 0, 0x10, n, 0, 1, biggest, w, h, 0, 0, 0, 0] {
+            avih.extend_from_slice(&le(v));
+        }
+        let mut strh = Vec::new();
+        strh.extend_from_slice(b"vidsMJPG");
+        for v in [0u32, 0, 0, self.frame_us, 1_000_000, 0, n, biggest, u32::MAX, 0] {
+            strh.extend_from_slice(&le(v));
+        }
+        for v in [0u16, 0, w as u16, h as u16] {
+            strh.extend_from_slice(&v.to_le_bytes());
+        }
+        let mut strf = Vec::new();
+        strf.extend_from_slice(&le(40));
+        strf.extend_from_slice(&le(w));
+        strf.extend_from_slice(&le(h));
+        strf.extend_from_slice(&1u16.to_le_bytes());
+        strf.extend_from_slice(&24u16.to_le_bytes());
+        strf.extend_from_slice(b"MJPG");
+        for v in [w * h * 3, 0, 0, 0, 0] {
+            strf.extend_from_slice(&le(v));
+        }
+        let chunk = |id: &[u8], body: &[u8]| -> Vec<u8> {
+            let mut c = id.to_vec();
+            c.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            c.extend_from_slice(body);
+            if body.len() % 2 == 1 {
+                c.push(0);
+            }
+            c
+        };
+        let list = |kind: &[u8], body: &[u8]| -> Vec<u8> {
+            let mut inner = kind.to_vec();
+            inner.extend_from_slice(body);
+            chunk(b"LIST", &inner)
+        };
+        let mut strl = chunk(b"strh", &strh);
+        strl.extend(chunk(b"strf", &strf));
+        let mut hdrl = chunk(b"avih", &avih);
+        hdrl.extend(list(b"strl", &strl));
+        let mut idx1 = Vec::with_capacity(16 * self.index.len());
+        for (offset, len) in &self.index {
+            idx1.extend_from_slice(b"00dc");
+            idx1.extend_from_slice(&le(0x10)); // a key frame
+            idx1.extend_from_slice(&le(*offset));
+            idx1.extend_from_slice(&le(*len));
+        }
+        let mut body = b"AVI ".to_vec();
+        body.extend(list(b"hdrl", &hdrl));
+        body.extend(list(b"movi", &self.movi));
+        body.extend(chunk(b"idx1", &idx1));
+        chunk(b"RIFF", &body)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +302,22 @@ mod tests {
             let _ = parse(&d);
         }
         assert_eq!(parse(b"RIFF\0\0\0\0WAVE"), Err("not an AVI video"));
+    }
+
+    #[test]
+    fn written_and_read_back() {
+        let frames: Vec<Vec<u8>> = (0..5u32).map(|t| crate::jpeg::encode(40, 30, 80, |x, y| (x as u32 * 6 + t * 40) << 16 | (y as u32 * 8) << 8)).collect();
+        let mut w = Writer::new(40, 30, 200_000);
+        for f in &frames {
+            w.frame(f);
+        }
+        assert_eq!(w.frames(), 5);
+        let file = w.finish();
+        let avi = parse(&file).unwrap();
+        assert_eq!((avi.width, avi.height, avi.frame_us, avi.frames.len()), (40, 30, 200_000, 5));
+        assert!(avi.is_mjpeg() && avi.sound.is_none());
+        for (i, f) in frames.iter().enumerate() {
+            assert_eq!(avi.frame(&file, i).unwrap(), &f[..]);
+        }
     }
 }
