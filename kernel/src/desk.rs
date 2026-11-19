@@ -60,13 +60,14 @@ pub fn open_web(address: &str) -> Result<usize, &'static str> {
 
 /// Open a picture viewer on a file (`path` is absolute); the picture is
 /// read before the window opens, so a file that is no picture opens none.
-pub fn open_picture(path: &str) -> Result<(usize, usize, usize), String> {
+pub fn open_picture(path: &str) -> Result<(usize, usize, usize, usize), String> {
     let mut storage = storage::handle().ok_or("no file system is mounted")?;
-    let picture = crate::view::load(&mut storage, path)?;
-    let (width, height) = (picture.width, picture.height);
+    let picture = crate::view::load_any(&mut storage, path)?;
+    let (width, height) = picture.size();
+    let frames = picture.frames();
     let name = path.rsplit('/').next().unwrap_or(path);
     let window = open(&format!("View: {name}"), "view", false, move |window| crate::view::run(window, picture))?;
-    Ok((window, width, height))
+    Ok((window, width, height, frames))
 }
 
 /// Open the system monitor in a window.
