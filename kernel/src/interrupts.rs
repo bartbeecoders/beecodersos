@@ -213,7 +213,10 @@ extern "C" fn interrupt_dispatch(frame: &mut InterruptFrame) {
             acpi::on_interrupt(); // may share its line with another device
         }
         match irq {
-            IRQ_TIMER => time::on_tick(),
+            IRQ_TIMER => {
+                time::on_tick();
+                crate::thread::watchdog_tick();
+            }
             IRQ_KEYBOARD => keyboard::on_interrupt(),
             IRQ_COM2 => aibridge::on_interrupt(),
             IRQ_COM1 => serial::on_interrupt(),

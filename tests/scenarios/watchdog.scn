@@ -1,0 +1,14 @@
+# The watchdog: threads switch only when one waits, so a thread that never
+# does starves all the others (the network too) and the machine looks dead.
+# The timer interrupt notices that no thread gave up the processor for too
+# long and panics on purpose; the crash is reported after the restart.
+# `watchdog=3` shortens the limit from 30 s to 3 s for the test.
+@disk
+@args watchdog=3
+$ sleep 5
+$ uptime
+~ ^up \d+m \d\ds$
+$! crash hang
+~ \[crash\] the previous boot crashed \(b\d+, panic\): .*watchdog: thread 'main' kept the processor for 3 s without letting the others run
+$ cat /system/crash/history.jsonl
+~ "kind":"panic","build":"\d+","cmd":"crash","msg":".*watchdog: thread 'main'

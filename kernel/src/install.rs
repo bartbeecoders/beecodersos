@@ -285,6 +285,7 @@ pub fn install<D: BlockDevice>(disk: &mut D, image: &[u8], stop_after: Option<u3
     let used = || ranges.iter().flat_map(|&(first, count)| first..first + count);
     for index in used() {
         disk.write_block(index, sector(index)).map_err(|e| fail("writing the boot area", e))?;
+        crate::thread::still_working();
     }
 
     cut(disk)?;
@@ -301,6 +302,7 @@ pub fn install<D: BlockDevice>(disk: &mut D, image: &[u8], stop_after: Option<u3
     let mut read: Block = [0; BLOCK_SIZE];
     for index in used() {
         disk.read_block(index, &mut read).map_err(|e| fail("reading the boot area back", e))?;
+        crate::thread::still_working();
         if &read != sector(index) {
             return Err(format!("the disk gave back something else than was written (sector {index}): it may be failing"));
         }
@@ -412,12 +414,14 @@ pub fn write_trial<D: BlockDevice>(disk: &mut D, kernel: &[u8], build: u32, mut 
     for &(start, len) in &runs {
         let blocks: Vec<Block> = (start..start + len).map(content).collect();
         disk.write_blocks(target[start], &blocks).map_err(|e| fail("writing the kernel", e))?;
+        crate::thread::still_working();
     }
     disk.flush().map_err(|e| fail("writing the kernel", e))?;
     step("checking what was written");
     for &(start, len) in &runs {
         let mut blocks: Vec<Block> = alloc::vec![[0; BLOCK_SIZE]; len];
         disk.read_blocks(target[start], &mut blocks).map_err(|e| fail("reading the kernel back", e))?;
+        crate::thread::still_working();
         if blocks.iter().enumerate().any(|(k, b)| *b != content(start + k)) {
             return Err(String::from("the disk gave back something else than was written: the old kernel is still the one that boots"));
         }
@@ -460,6 +464,7 @@ pub fn reinstall<D: BlockDevice>(disk: &mut D, image: &[u8], mut step: impl FnMu
     let used = || ranges.iter().flat_map(|&(first, count)| first..first + count);
     for index in used() {
         disk.write_block(index, sector(index)).map_err(|e| fail("writing the boot area", e))?;
+        crate::thread::still_working();
     }
     step("making the os file system again");
     format_part(disk, os, &["/system"], None).map_err(|e| fail("the os partition", e))?;
@@ -468,6 +473,7 @@ pub fn reinstall<D: BlockDevice>(disk: &mut D, image: &[u8], mut step: impl FnMu
     let mut read: Block = [0; BLOCK_SIZE];
     for index in used() {
         disk.read_block(index, &mut read).map_err(|e| fail("reading the boot area back", e))?;
+        crate::thread::still_working();
         if &read != sector(index) {
             return Err(format!("the disk gave back something else than was written (sector {index}): it may be failing"));
         }
