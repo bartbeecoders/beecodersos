@@ -228,6 +228,7 @@ kernel/
   src/cpu.rs           the processor: name, features, how many there are (`cpu`)
   src/textedit.rs      the text editor (`edit`)
   src/filemgr.rs       the file manager (`files`)
+  src/icons.rs         its icon view: grid, drawn icons, picture thumbnails
   src/web.rs           the web page viewer (`browse`); beenet/src/html.rs lays pages out
   src/keyboard.rs      PS/2 keyboard driver + scancode decoder (modifiers, dead keys)
   src/layouts.rs       keyboard layouts (US, Belgian Period)
@@ -1313,7 +1314,15 @@ desktop.
   (the name is typed in the status line; Escape drops it), **d** or Delete
   deletes after a `y` (a folder only when it is empty), **u** reads the
   folder again, **q** leaves. A **click** on an entry puts the bar there, a
-  second click opens it. It is a list of text for now: no icons.
+  second click opens it. **v** switches to the icon view
+  (`kernel/src/icons.rs`): a grid drawn in the window's pixels, with icons
+  for folders, text, sounds and pictures, and a real thumbnail (at most
+  64x64, each pixel the average of those it covers) for every picture up to
+  2 megapixels and 8 MB; the files are read one by one and then decoded and
+  shrunk on every processor at once. Arrows move in the grid, a click
+  chooses and a second click opens; `v` goes back to the list
+  (`console::pane_draw` draws pixels, `pane_show` brings the text back).
+  `desktop-icons.scn` checks the icons' pixels at 800x600.
 - **Web page viewer:** `browse URL|FILE|WORDS` shows a page in a window of its
   own (`kernel/src/web.rs`): an `http://` page from the web (the `http://`
   may be left out) or an HTML or text file from the disk. The page is shown

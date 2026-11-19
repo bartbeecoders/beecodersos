@@ -67,6 +67,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("wallpaper: covering the screen, behind the windows", wallpaper),
     ("sound: WAV files, tones, notes", sound_files),
     ("sound: the way from a speaker to a converter", sound_routes),
+    ("file manager icons: grid, moving, clicks, thumbnails", file_icons),
     ("remote desktop: a viewer's keys, the tiles that changed", vnc_parts),
     ("accounts: the file, passwords, what needs an admin", accounts),
     ("heap: alloc and free", heap_alloc_free),
@@ -2365,7 +2366,7 @@ fn file_manager() -> TestResult {
     check_eq!(row_text(&lines[2]).trim_end(), "   <folder>  Beta/");
     check_eq!(row_text(&lines[3]).trim_end(), "       1234  alpha.txt");
     check_eq!(row_text(&lines[4]).trim_end(), "         10  zeta.txt");
-    check_eq!((row_text(&lines[5]).trim_end(), row_text(&lines[7]).trim_end()), ("", " Enter open  e edit  Backspace up  n new"));
+    check_eq!((row_text(&lines[5]).trim_end(), row_text(&lines[7]).trim_end()), ("", " Enter open  e edit  Backspace up  v ico"));
     // The chosen line stands out; folders have their own color.
     check_eq!((lines[1][0] >> 8, lines[2][0] >> 8, lines[3][0] >> 8, lines[0][0] >> 8), (0x1F, 0x09, 0x07, 0x70));
 
@@ -3133,3 +3134,50 @@ fn sound_routes() -> TestResult {
     check_eq!(verb16(2, 0x02, 0x3, 0xB04A), 0x2023_B04A);
     Ok(())
 }
+
+fn file_icons() -> TestResult {
+    use crate::icons::{step, thumbnail, Grid, CELL_H, CELL_W, THUMB};
+    use crate::image::Image;
+    // 640 x 400 pixels: 5 columns of 112 (80 left over, 40 on each side), 3 rows.
+    let grid = Grid::new(640, 400);
+    check_eq!(grid, Grid { cols: 5, rows: 3, left: 40 });
+    check_eq!(Grid::new(50, 50), Grid { cols: 1, rows: 1, left: 0 });
+    // Arrows in a grid of 5 columns, 12 entries (the last row has 2).
+    check_eq!(step(0, Key::Left, 5, 3, 12), Some(0));
+    check_eq!(step(0, Key::Right, 5, 3, 12), Some(1));
+    check_eq!(step(11, Key::Right, 5, 3, 12), Some(11));
+    check_eq!(step(7, Key::Up, 5, 3, 12), Some(2));
+    check_eq!(step(2, Key::Up, 5, 3, 12), Some(2));
+    check_eq!(step(2, Key::Down, 5, 3, 12), Some(7));
+    check_eq!(step(8, Key::Down, 5, 3, 12), Some(11)); // the row below is short
+    check_eq!(step(11, Key::Down, 5, 3, 12), Some(11));
+    check_eq!(step(3, Key::End, 5, 3, 12), Some(11));
+    check_eq!(step(3, Key::Enter, 5, 3, 12), None);
+    check_eq!(step(0, Key::Down, 5, 3, 0), Some(0));
+    // Scrolling by whole rows; clicks to entries.
+    check_eq!(grid.top_for(4, 0), 0);
+    check_eq!(grid.top_for(15, 0), 5);
+    check_eq!(grid.top_for(2, 10), 0);
+    check_eq!(grid.cell_at(40, 22, 0, 12), Some(0));
+    check_eq!(grid.cell_at(40 + CELL_W + 5, 22 + CELL_H + 5, 0, 12), Some(6));
+    check_eq!(grid.cell_at(40 + 2 * CELL_W, 22 + 2 * CELL_H, 0, 12), None); // past the last
+    check_eq!(grid.cell_at(30, 50, 0, 12), None);
+    check_eq!(grid.cell_at(40, 22, 5, 12), Some(5));
+    // Thumbnails: shrunk to fit, the shape kept, colors averaged; small ones kept.
+    let wide = Image { width: 256, height: 128, pixels: (0..256 * 128).map(|i| if (i % 256) < 128 { 0xFF0000 } else { 0x0000FF }).collect() };
+    let t = thumbnail(&wide);
+    check_eq!((t.width, t.height), (THUMB, THUMB / 2));
+    check_eq!((t.pixels[0], t.pixels[THUMB - 1]), (0xFF0000, 0x0000FF));
+    let grey = Image { width: 2, height: 2, pixels: alloc::vec![0x000000, 0xFFFFFF, 0xFFFFFF, 0x000000] };
+    check_eq!(thumbnail(&grey).pixels, grey.pixels);
+    let tall = Image { width: 10, height: 1000, pixels: alloc::vec![0x101010; 10_000] };
+    check_eq!((thumbnail(&tall).width, thumbnail(&tall).height), (1, THUMB));
+    let checker = Image { width: 128, height: 128, pixels: (0..128 * 128).map(|i| if (i % 128 + i / 128) % 2 == 0 { 0xFFFFFF } else { 0 }).collect() };
+    check!(thumbnail(&checker).pixels.iter().all(|p| *p == 0x7F7F7F));
+    // Picture sizes from the file header only.
+    check_eq!(crate::image::dimensions(include_bytes!("../../beenet/testdata/pal.png")), Some((37, 23)));
+    check_eq!(crate::image::dimensions(include_bytes!("../../beenet/testdata/anim.gif")), Some((40, 30)));
+    check_eq!(crate::image::dimensions(b"hello"), None);
+    Ok(())
+}
+

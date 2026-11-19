@@ -31,6 +31,7 @@ mod monitor;
 mod clock;
 mod image;
 mod view;
+mod icons;
 mod sound;
 mod hda;
 mod vnc;

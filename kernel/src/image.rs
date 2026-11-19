@@ -36,6 +36,22 @@ fn checked_size(width: usize, height: usize) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// The size a picture file says it has (PNG, GIF, BMP), without decoding it.
+pub fn dimensions(data: &[u8]) -> Option<(usize, usize)> {
+    let be = |at: usize| Some(u32::from_be_bytes(data.get(at..at + 4)?.try_into().ok()?) as usize);
+    if beenet::png::is_png(data) {
+        return Some((be(16)?, be(20)?));
+    }
+    if beenet::gif::is_gif(data) {
+        return Some((u16_at(data, 6)? as usize, u16_at(data, 8)? as usize));
+    }
+    if data.get(..2) == Some(b"BM") {
+        let (w, h) = (u32_at(data, 18)? as i32, u32_at(data, 22)? as i32);
+        return Some((w.unsigned_abs() as usize, h.unsigned_abs() as usize));
+    }
+    None
+}
+
 /// A PNG, a GIF (its first frame), a BMP (uncompressed, 24 or 32 bits per
 /// pixel) or a binary PPM (P6, 8 bits).
 pub fn decode(data: &[u8]) -> Result<Image, &'static str> {

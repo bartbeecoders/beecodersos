@@ -103,6 +103,54 @@ impl Browser {
         &self.folder
     }
 
+    /// The entries in the order shown.
+    pub fn entries(&self) -> &[Entry] {
+        &self.entries
+    }
+
+    /// Which entry the bar is on.
+    pub fn chosen_index(&self) -> usize {
+        self.chosen
+    }
+
+    /// Put the bar on entry `at` (kept in the list).
+    pub fn set_chosen(&mut self, at: usize) {
+        self.chosen = at.min(self.entries.len().saturating_sub(1));
+    }
+
+    /// Is it waiting for an ordinary key (not a name or a yes/no answer)?
+    pub fn is_listing(&self) -> bool {
+        self.mode == Mode::List
+    }
+
+    /// The status line as `render` shows it, and whether it is a warning or question.
+    pub fn status(&self) -> (String, bool) {
+        let (text, attr, _) = self.status_line();
+        (text, attr != STATUS_ATTR)
+    }
+
+    /// The status line: its text, color, and where the cursor goes in it
+    /// when a name is being typed.
+    fn status_line(&self) -> (String, u8, Option<usize>) {
+        let chosen_name = self.chosen().map(|e| e.name.as_str()).unwrap_or("");
+        match &self.mode {
+            Mode::ConfirmDelete => (format!(" Delete {chosen_name}? y: yes, any other key: no"), WARNING_ATTR, None),
+            Mode::Name { rename, text } => {
+                let ask = if *rename { format!(" New name for {chosen_name}: ") } else { String::from(" Name of the new folder: ") };
+                let at = ask.chars().count() + text.chars().count();
+                (format!("{ask}{text}"), STATUS_ATTR, Some(at))
+            }
+            Mode::List if !self.message.is_empty() => (format!(" {}", self.message), if self.warning { WARNING_ATTR } else { STATUS_ATTR }, None),
+            Mode::List => {
+                let count = match self.entries.len() {
+                    0 => String::from("empty"),
+                    n => format!("{} of {n}", self.chosen + 1),
+                };
+                (format!(" {}  ({count})", self.folder), STATUS_ATTR, None)
+            }
+        }
+    }
+
     /// The name the bar is on, if the folder is not empty.
     pub fn chosen(&self) -> Option<&Entry> {
         self.entries.get(self.chosen)
@@ -232,23 +280,10 @@ impl Browser {
         };
         let mut out = Vec::with_capacity(rows);
         let mut cursor = (0, cols - 1);
-        let chosen_name = self.chosen().map(|e| e.name.as_str()).unwrap_or("");
-        let (status, attr) = match &self.mode {
-            Mode::ConfirmDelete => (format!(" Delete {chosen_name}? y: yes, any other key: no"), WARNING_ATTR),
-            Mode::Name { rename, text } => {
-                let ask = if *rename { format!(" New name for {chosen_name}: ") } else { String::from(" Name of the new folder: ") };
-                cursor = (0, (ask.chars().count() + text.chars().count()).min(cols - 1));
-                (format!("{ask}{text}"), STATUS_ATTR)
-            }
-            Mode::List if !self.message.is_empty() => (format!(" {}", self.message), if self.warning { WARNING_ATTR } else { STATUS_ATTR }),
-            Mode::List => {
-                let count = match self.entries.len() {
-                    0 => String::from("empty"),
-                    n => format!("{} of {n}", self.chosen + 1),
-                };
-                (format!(" {}  ({count})", self.folder), STATUS_ATTR)
-            }
-        };
+        let (status, attr, at) = self.status_line();
+        if let Some(at) = at {
+            cursor = (0, at.min(cols - 1));
+        }
         out.push(line(&status, attr));
         for at in self.top..self.top + page {
             out.push(match self.entries.get(at) {
@@ -261,7 +296,7 @@ impl Browser {
                 None => line("", TEXT_ATTR),
             });
         }
-        out.push(line(" Enter open  e edit  Backspace up  n new folder  r rename  d delete  u again  q leave", HELP_ATTR));
+        out.push(line(" Enter open  e edit  Backspace up  v icons  n new folder  r rename  d delete  u again  q leave", HELP_ATTR));
         (out, cursor)
     }
 }
@@ -279,13 +314,48 @@ pub fn run(window: usize, start: String, mut storage: Storage) {
         Ok(entries) => browser.show(&start, entries, None),
         Err(_) => return,
     }
+    // The icon view (`v`), its thumbnails and the first entry it shows.
+    let (mut icons, mut thumbs, mut top) = (false, crate::icons::Thumbs::new(), 0);
     loop {
         let Some((cols, rows)) = console::pane_size(window) else { return };
-        let (lines, cursor) = browser.render(cols, rows);
-        console::pane_show(window, &lines, cursor);
-        let key = input::read_key();
+        // The window in pixels (characters are 8 x 16).
+        let grid = crate::icons::Grid::new(cols * 8, rows * 16);
+        if icons {
+            thumbs.update(&mut storage, &browser);
+            top = grid.top_for(browser.chosen_index(), top);
+            console::pane_draw(window, |canvas| crate::icons::draw(canvas, &browser, &thumbs, top));
+        } else {
+            let (lines, cursor) = browser.render(cols, rows);
+            console::pane_show(window, &lines, cursor);
+        }
+        let mut key = input::read_key();
         if key == Key::Ctrl('d') && session::current().is_none_or(session::is_closed) {
             return; // the window was closed
+        }
+        if browser.is_listing() {
+            if key == Key::Char('v') {
+                icons = !icons;
+                top = 0;
+                continue;
+            }
+            if icons {
+                let count = browser.entries().len();
+                if let Some(at) = crate::icons::step(browser.chosen_index(), key, grid.cols, grid.rows, count) {
+                    browser.set_chosen(at);
+                    continue;
+                }
+                if let Key::Click(col, row) = key {
+                    // A click on an icon chooses it; on the chosen one it opens.
+                    match grid.cell_at(col as usize * 8 + 4, row as usize * 16 + 8, top, count) {
+                        Some(at) if at == browser.chosen_index() => key = Key::Enter,
+                        Some(at) => {
+                            browser.set_chosen(at);
+                            continue;
+                        }
+                        None => continue,
+                    }
+                }
+            }
         }
         let folder = String::from(browser.folder());
         // What to show afterwards: (folder, the name to put the bar on).
