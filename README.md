@@ -1371,20 +1371,26 @@ desktop.
   1280x1024 wallpaper is 22 KB as PNG instead of 3.9 MB as BMP. `pictures.scn` saves the screen at 800x600, views it
   on a 4-processor VM and checks the pixels of the window.
 - **JPEG photos:** `view`, the file manager's thumbnails and the wallpaper
-  also read JPEG (`beenet/src/jpeg.rs`): baseline JPEG with Huffman
-  coding, restart markers, grayscale or YCbCr in 4:4:4, 4:2:2 or 4:2:0
+  also read JPEG (`beenet/src/jpeg.rs`): baseline and progressive JPEG
+  with Huffman coding, restart markers, grayscale or YCbCr in 4:4:4, 4:2:2 or 4:2:0
   (colors from the nearest chroma sample), up to 8192 pixels a side and 24
   megapixels. Decoding has two halves: the coefficients are read in one
   pass, then each row of 8x8 (or 16x16) blocks is turned into pixels
   (an inverse DCT in whole numbers, its cosine table computed beforehand,
   and the color conversion) on whichever processor is free
-  (`image::decode_jpeg`). Progressive JPEGs are refused for now with a
-  clear message. Host tests compare ImageMagick-made JPEGs in every layout
-  (also with restart markers, and a 160x120 photo) with libjpeg's own
+  (`image::decode_jpeg`). A progressive JPEG comes in several scans (often
+  ten): DC first, then bands of AC coefficients, each refined bit by bit
+  later, single components in their own block order, runs of blocks with
+  nothing more to add (EOB runs); every scan adds to the same coefficients,
+  and the pixels are made once at the end. Lossless, arithmetic-coded and
+  CMYK JPEGs are refused with a clear message. Host tests compare ImageMagick-made JPEGs in every layout
+  (also with restart markers, and a 160x120 photo; and progressive ones,
+  with restart markers and gray too) with libjpeg's own
   pixels: never more than 4 apart; cut and damaged files fail cleanly; the
   self-test checks that the processors together give exactly the pixels of
   the one-by-one decoder. On the HP a 1923x1599 photo of a honey bee
-  (2.4 MB, fetched from Wikimedia over HTTPS) is read and shown in 0.44 s.
+  (2.4 MB, fetched from Wikimedia over HTTPS) is read and shown in 0.44 s,
+  and a 1200x800 progressive photo of honey from Unsplash in 40 ms.
 - **GIF and screen recordings:** `view` also shows GIF pictures and plays
   animated GIFs at the speed the file asks for, round and round (space
   pauses, `n` steps a frame, `q` leaves). `beenet/src/gif.rs` reads
