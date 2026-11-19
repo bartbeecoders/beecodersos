@@ -856,6 +856,20 @@ bee:/$ threads
   1  net        waiting       4198  3 of 256 KiB
 ```
 
+- **The watchdog:** a thread that never waits starves all the others,
+  the network too, and the machine looks dead (the first video player did
+  this on the HP: after its last frame it waited for a time already past,
+  which returns at once; only the power button helped). The timer
+  interrupt now checks when a thread last gave up the processor (a switch,
+  or a sleep with nothing to do: idle is not stuck); after 30 s without,
+  it panics on purpose, and the crash handling records it and restarts the
+  machine (`thread::watchdog_tick`). Long work that never waits on purpose,
+  like writing a whole disk in `install`, calls `thread::still_working`.
+  Boot flag `watchdog=SECONDS` changes the limit (2-600); `crash hang`
+  hangs the way the player did, and `watchdog.scn` checks (with a 3 s
+  limit) that the machine restarts and reports which thread it was. The
+  owner approved this change to the protected `thread.rs` and
+  `interrupts.rs`.
 - **`kernel/src/thread.rs`:** threads with their own 256 KiB stacks and a
   small context-switch routine. They are *cooperative*: the CPU changes
   thread only where one waits (for a key, the network, a timer) or ends,

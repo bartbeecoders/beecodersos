@@ -111,6 +111,7 @@ pub fn init() {
         runs: 1,
     };
     *SCHEDULER.get() = Some(Scheduler { threads: vec![Box::new(main)], current: 0, generation: 1, next_id: 1 });
+    arm_watchdog();
 }
 
 fn scheduler() -> Option<&'static mut Scheduler> {
@@ -129,6 +130,54 @@ fn interrupts_on() {
 /// atomic, so an interrupt that arrives just before is not missed.
 fn sleep_until_interrupt() {
     unsafe { asm!("sti; hlt", options(nomem, nostack)) };
+}
+
+// --- the watchdog ---------------------------------------------------------------------------
+//
+// Threads switch only when one waits (`pause`, `yield_now`). A thread that
+// loops without ever waiting starves all the others, the network included:
+// the machine looks dead and only its power button helps. So the timer
+// interrupt checks when a thread last gave up the processor (a switch, or
+// a sleep with nothing to do); after WATCHDOG_MS without, it panics on
+// purpose, and the crash handling restarts the machine. Long work that does
+// not wait on purpose (writing a whole disk) calls `still_working`.
+
+/// When a thread last gave up the processor (ms of uptime; 0: not started).
+static LAST_YIELD_MS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// The limit; boot flag `watchdog=SECONDS` changes it (tests use a short one).
+static WATCHDOG_MS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(30_000);
+
+fn gave_way() {
+    LAST_YIELD_MS.store(crate::time::uptime_ms().max(1), Ordering::Relaxed);
+}
+
+/// For long work that never waits on purpose: it is busy, not stuck.
+pub fn still_working() {
+    gave_way();
+}
+
+/// Set the watchdog's limit from the boot flags (2 to 600 seconds).
+fn arm_watchdog() {
+    if let Some(secs) = crate::bootargs::value("watchdog").and_then(|v| v.parse::<u64>().ok()).filter(|s| (2..=600).contains(s)) {
+        WATCHDOG_MS.store(secs * 1000, Ordering::Relaxed);
+    }
+    gave_way();
+}
+
+/// From the timer interrupt: panic if no thread has given up the processor
+/// for too long (the panic restarts the machine).
+pub fn watchdog_tick() {
+    let last = LAST_YIELD_MS.load(Ordering::Relaxed);
+    if last == 0 {
+        return; // threads have not started
+    }
+    let now = crate::time::uptime_ms();
+    let limit = WATCHDOG_MS.load(Ordering::Relaxed);
+    if now.saturating_sub(last) > limit {
+        gave_way(); // once
+        let name = scheduler().and_then(|s| s.threads.get(s.current)).map_or("?", |t| t.name.as_str());
+        panic!("watchdog: thread '{name}' kept the processor for {} s without letting the others run", limit / 1000);
+    }
 }
 
 fn fs_busy() -> bool {
@@ -163,6 +212,7 @@ fn switch_to(next: usize) {
     target.runs += 1;
     let new_rsp = target.rsp;
     s.current = next;
+    gave_way();
     unsafe { thread_switch(save, new_rsp) };
     // Running again (possibly much later). Clear away threads that ended:
     // never the current one, whose stack we are standing on.
@@ -196,6 +246,7 @@ pub fn pause(mut ready: impl FnMut() -> bool) -> bool {
                 _ => {
                     sleep_until_interrupt();
                     interrupts_off();
+                    gave_way(); // nothing else to do: idle, not stuck
                     if let Some(s) = scheduler() {
                         s.generation += 1; // an interrupt arrived: everyone tests again
                     }

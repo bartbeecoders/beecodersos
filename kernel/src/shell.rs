@@ -1337,7 +1337,12 @@ impl Shell {
             ("crash", []) => panic!("'crash' command: deliberate kernel panic (tests crash reports)"),
             // An instruction the CPU refuses: the other way a kernel dies.
             ("crash", ["exception"]) => unsafe { core::arch::asm!("ud2", options(nomem, nostack)) },
-            ("crash", _) => error("usage: crash [exception]"),
+            // A thread that never lets the others run (as the first video
+            // player did): the watchdog must restart the machine.
+            ("crash", ["hang"]) => loop {
+                crate::thread::pause(|| true);
+            },
+            ("crash", _) => error("usage: crash [exception|hang]"),
             ("reboot", []) => {
                 self.log_power("reboot");
                 power::reboot()
