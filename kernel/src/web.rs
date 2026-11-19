@@ -124,7 +124,17 @@ pub struct Viewer {
     mode: Mode,
     message: String,
     warning: bool,
+    /// Pictures loaded for this page: the address as the page wrote it,
+    /// and the picture made to fit the window.
+    images: Vec<(String, crate::image::Image)>,
+    /// Pictures that could not be loaded (not tried again).
+    failed: Vec<String>,
 }
+
+/// At most this many pictures are loaded for a page.
+pub const MAX_PICTURES: usize = 16;
+/// Pictures are drawn at most this high (pixels).
+pub const PICTURE_HEIGHT: usize = 320;
 
 /// Does this look like HTML (rather than plain text)?
 pub fn looks_like_html(address: &str, body: &str) -> bool {
@@ -216,6 +226,8 @@ impl Viewer {
             mode: Mode::View,
             message: String::new(),
             warning: false,
+            images: Vec::new(),
+            failed: Vec::new(),
         }
     }
 
@@ -240,11 +252,58 @@ impl Viewer {
         self.address = String::from(address);
         self.source = if looks_like_html(address, body) { Source::Html(String::from(body)) } else { Source::Plain(String::from(body)) };
         self.width = 0;
+        self.images.clear();
+        self.failed.clear();
         if !again {
             self.top = 0;
             self.chosen = None;
         }
         self.mode = Mode::View;
+    }
+
+    /// Pictures on the page not loaded (or tried) yet, as the page wrote
+    /// their addresses; at most `MAX_PICTURES` in all.
+    pub fn missing_images(&mut self, width: usize) -> Vec<String> {
+        self.lay_out(width);
+        let mut out: Vec<String> = Vec::new();
+        for i in &self.page.images {
+            let seen = out.contains(&i.src) || self.images.iter().any(|(s, _)| *s == i.src) || self.failed.contains(&i.src);
+            if i.rows == 0 && !seen && out.len() + self.images.len() + self.failed.len() < MAX_PICTURES {
+                out.push(i.src.clone());
+            }
+        }
+        out
+    }
+
+    /// A picture of the page, loaded: the page is laid out again around it.
+    pub fn add_image(&mut self, src: &str, picture: crate::image::Image) {
+        self.images.push((String::from(src), picture));
+        self.width = 0;
+    }
+
+    pub fn image_failed(&mut self, src: &str) {
+        self.failed.push(String::from(src));
+    }
+
+    /// How many lines a picture of `height` pixels takes (and one more as a gap).
+    fn rows_for(height: usize) -> usize {
+        height.div_ceil(16) + 1
+    }
+
+    /// The pictures to draw in a window of `rows` lines: each with the
+    /// pixel line its top is at (above the window if negative).
+    pub fn image_spots(&self, rows: usize) -> Vec<(&crate::image::Image, isize)> {
+        let page_rows = rows.saturating_sub(2);
+        let mut out = Vec::new();
+        for spot in self.page.images.iter().filter(|i| i.rows > 0) {
+            if spot.line + spot.rows <= self.top || spot.line >= self.top + page_rows {
+                continue;
+            }
+            if let Some((_, picture)) = self.images.iter().find(|(s, _)| *s == spot.src) {
+                out.push((picture, (spot.line as isize - self.top as isize + 1) * 16));
+            }
+        }
+        out
     }
 
     /// A message in the status line until the next key.
@@ -258,8 +317,9 @@ impl Viewer {
         if self.width == width {
             return;
         }
+        let known: Vec<(String, usize)> = self.images.iter().map(|(s, p)| (s.clone(), Self::rows_for(p.height))).collect();
         self.page = match &self.source {
-            Source::Html(text) => html::render(text, width),
+            Source::Html(text) => html::render_with(text, width, &known),
             Source::Plain(text) => html::plain(text, width),
         };
         self.width = width;
@@ -488,7 +548,9 @@ pub fn run(window: usize, start: String, mut storage: Storage) {
             match fetch(&mut storage, &address) {
                 Ok((body, at, note)) => {
                     viewer.show(&at, &body, back, again);
-                    viewer.say(note.as_deref().unwrap_or(""), false);
+                    let note = String::from(note.as_deref().unwrap_or(""));
+                    load_pictures(window, &mut viewer, &mut storage, &note);
+                    viewer.say(&note, false);
                 }
                 Err(why) => {
                     if back {
@@ -502,6 +564,7 @@ pub fn run(window: usize, start: String, mut storage: Storage) {
         let Some((cols, rows)) = console::pane_size(window) else { return };
         let (lines, cursor) = viewer.render(cols, rows);
         console::pane_show(window, &lines, cursor);
+        draw_pictures(window, &viewer, rows);
         let key = input::read_key();
         if key == Key::Ctrl('d') && session::current().is_none_or(session::is_closed) {
             return; // the window was closed
@@ -515,3 +578,66 @@ pub fn run(window: usize, start: String, mut storage: Storage) {
         }
     }
 }
+
+/// Load the pictures of the page just shown (from the web or the disk),
+/// each made to fit the window; the page is laid out again around them.
+fn load_pictures(window: usize, viewer: &mut Viewer, storage: &mut Storage, note: &str) {
+    let Some((cols, rows)) = console::pane_size(window) else { return };
+    let wanted = viewer.missing_images(cols);
+    let base = String::from(viewer.address());
+    for (i, src) in wanted.iter().enumerate() {
+        viewer.say(&format!("loading pictures ({} of {}) ... {note}", i + 1, wanted.len()), false);
+        let (lines, cursor) = viewer.render(cols, rows);
+        console::pane_show(window, &lines, cursor);
+        draw_pictures(window, viewer, rows);
+        match load_picture(storage, &base, src, (cols * 8).saturating_sub(16), PICTURE_HEIGHT) {
+            Some(picture) => viewer.add_image(src, picture),
+            None => viewer.image_failed(src),
+        }
+    }
+}
+
+/// One picture: its address seen from the page, read, decoded, made to fit.
+pub fn load_picture(storage: &mut Storage, base: &str, src: &str, max_w: usize, max_h: usize) -> Option<crate::image::Image> {
+    const MAX_BYTES: u64 = 8 * 1024 * 1024;
+    let address = resolve(base, src).ok()?;
+    let data = if address.starts_with('/') {
+        storage.fs().read_file(&address).ok().filter(|d| d.len() as u64 <= MAX_BYTES)?
+    } else {
+        let mut body = Vec::new();
+        net::http_get(&address, MAX_BYTES, &mut |d| {
+            body.extend_from_slice(d);
+            Ok(())
+        })
+        .ok()?;
+        body
+    };
+    // Only formats the OS reads, and not too many pixels (SVG and WebP are skipped).
+    let (w, h) = crate::image::dimensions(&data)?;
+    if w * h > 16 * 1024 * 1024 {
+        return None;
+    }
+    let picture = crate::image::decode(&data).ok()?;
+    Some(crate::image::shrunk(&picture, max_w, max_h))
+}
+
+/// Draw the page's pictures where their lines are, between the status
+/// line and the help line.
+fn draw_pictures(window: usize, viewer: &Viewer, rows: usize) {
+    let spots = viewer.image_spots(rows);
+    if spots.is_empty() {
+        return;
+    }
+    let (top, bottom) = (16isize, (rows.saturating_sub(1) * 16) as isize);
+    console::pane_draw(window, |canvas| {
+        for (picture, y) in &spots {
+            for row in 0..picture.height {
+                let py = y + row as isize;
+                if py >= top && py < bottom {
+                    canvas.put_row(8, py as usize, &picture.pixels[row * picture.width..(row + 1) * picture.width]);
+                }
+            }
+        }
+    });
+}
+

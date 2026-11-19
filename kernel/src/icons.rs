@@ -98,26 +98,7 @@ pub fn step(chosen: usize, key: Key, cols: usize, rows: usize, count: usize) -> 
 /// A picture shrunk to fit in `THUMB` x `THUMB` (never made larger): each
 /// pixel the average of the ones it covers.
 pub fn thumbnail(picture: &Image) -> Image {
-    let (w, h) = (picture.width.max(1), picture.height.max(1));
-    let (tw, th) = if w >= h { (THUMB.min(w), (h * THUMB.min(w) / w).max(1)) } else { ((w * THUMB.min(h) / h).max(1), THUMB.min(h)) };
-    let mut pixels = Vec::with_capacity(tw * th);
-    for ty in 0..th {
-        let (y0, y1) = (ty * h / th, ((ty + 1) * h / th).max(ty * h / th + 1));
-        for tx in 0..tw {
-            let (x0, x1) = (tx * w / tw, ((tx + 1) * w / tw).max(tx * w / tw + 1));
-            let (mut r, mut g, mut b, mut n) = (0u32, 0u32, 0u32, 0u32);
-            for y in y0..y1 {
-                for &p in &picture.pixels[y * w + x0..y * w + x1] {
-                    r += p >> 16 & 0xFF;
-                    g += p >> 8 & 0xFF;
-                    b += p & 0xFF;
-                    n += 1;
-                }
-            }
-            pixels.push((r / n) << 16 | (g / n) << 8 | b / n);
-        }
-    }
-    Image { width: tw, height: th, pixels }
+    crate::image::shrunk(picture, THUMB, THUMB)
 }
 
 /// The thumbnails of a folder's pictures, in the order of its entries.

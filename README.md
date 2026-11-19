@@ -1323,6 +1323,17 @@ desktop.
   chooses and a second click opens; `v` goes back to the list
   (`console::pane_draw` draws pixels, `pane_show` brings the text back).
   `desktop-icons.scn` checks the icons' pixels at 800x600.
+- **Pictures in web pages:** after a page is shown, `browse` loads its
+  `<img>` pictures (up to 16; from the web, also over HTTPS, or from the
+  disk for a page on the disk), in the formats the OS reads (JPEG, PNG,
+  GIF, BMP; SVG and WebP are skipped, as are pictures over 16 megapixels),
+  shrinks each to fit the window (at most 320 pixels high, each pixel the
+  average of those it covers: `image::shrunk`) and lays the page out again
+  with empty lines kept for it (`html::render_with`, `Page::images`); the
+  pictures are drawn into those lines after the text (`console::pane_draw`),
+  cut off at the status and help lines while scrolling. A picture that
+  could not be loaded keeps its alt text. `web-pictures.scn` checks the
+  pixels of a picture and the alt text of a missing one.
 - **Web page viewer:** `browse URL|FILE|WORDS` shows a page in a window of its
   own (`kernel/src/web.rs`): an `http://` page from the web (the `http://`
   may be left out) or an HTML or text file from the disk. The page is shown
