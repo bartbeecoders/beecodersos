@@ -831,10 +831,10 @@ fn second_shell_session() -> TestResult {
 }
 
 fn net_clients() -> TestResult {
-    use beenet::http::{HttpError, Response, Url};
+    use beenet::http::{Response, Url};
     let url = Url::parse("http://Example.com:8080/a?b=1").map_err(|e| String::from(e.message()))?;
     check_eq!((url.host.as_str(), url.port, url.path.as_str()), ("example.com", 8080, "/a?b=1"));
-    check_eq!(Url::parse("https://example.com/").err(), Some(HttpError::Https));
+    check_eq!(Url::parse("https://example.com/").map(|u| (u.secure, u.port)), Ok((true, 443)));
     check!(Url::parse("http://h/a b").is_err());
     let (mut response, mut body) = (Response::new(), Vec::new());
     for piece in b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n".chunks(5) {
@@ -2631,7 +2631,9 @@ fn web_viewer() -> TestResult {
     check_eq!(resolve("http://h/a/", "/x"), Ok("http://h/x".to_string()));
     check_eq!(resolve("http://h/a/", "http://other.org"), Ok("http://other.org/".to_string()));
     check_eq!(resolve("http://h/a/", "//cdn.org/s"), Ok("http://cdn.org/s".to_string()));
-    check!(resolve("http://h/", "https://secure.org/").is_err());
+    check_eq!(resolve("http://h/", "https://secure.org/"), Ok("https://secure.org/".to_string()));
+    check_eq!(resolve("https://h/a/b.html", "c.html"), Ok("https://h/a/c.html".to_string()));
+    check_eq!(resolve("https://h/a/", "//cdn.org/s"), Ok("https://cdn.org/s".to_string()));
     check!(resolve("http://h/", "mailto:someone@example.org").is_err());
     check!(resolve("/a.html", "javascript:void(0)").is_err());
     // What is typed: a path, an address, or words to search for.
@@ -2643,7 +2645,7 @@ fn web_viewer() -> TestResult {
     check_eq!(typed("honey bees"), Ok("http://frogfind.com/?q=honey%20bees".to_string()));
     check_eq!(typed("rust"), Ok("http://frogfind.com/?q=rust".to_string()));
     check_eq!(typed("what is 2+2? "), Ok("http://frogfind.com/?q=what%20is%202%2B2%3F".to_string()));
-    check_eq!(typed("https://en.wikipedia.org/wiki/Bee"), Ok("http://frogfind.com/read?a=https%3A%2F%2Fen.wikipedia.org%2Fwiki%2FBee".to_string()));
+    check_eq!(typed("https://en.wikipedia.org/wiki/Bee"), Ok("https://en.wikipedia.org/wiki/Bee".to_string()));
     check!(crate::web::looks_like_html("http://h/", "<!DOCTYPE html><p>x"));
     check!(!crate::web::looks_like_html("http://h/", "just text, 1 < 2"));
     check!(!crate::web::looks_like_html("/notes.txt", "<p>shown as it is</p>"));
@@ -2666,15 +2668,14 @@ fn web_viewer() -> TestResult {
     check_eq!(v.key(Key::Enter, w, h), Action::None);
     check_eq!(v.key(Key::Tab, w, h), Action::None);
     check_eq!(v.key(Key::Enter, w, h), Action::Open("/site/one.html".to_string()));
-    // The second link cannot be followed: it says why and stays.
+    // The second link is a secure page: it opens like any other.
     check_eq!(v.key(Key::Tab, w, h), Action::None);
-    check_eq!(v.key(Key::Enter, w, h), Action::None);
+    check_eq!(v.key(Key::Enter, w, h), Action::Open("https://x/".to_string()));
+    // `f` reads a page from the web through the reader; this one is on the disk.
+    check_eq!(v.key(Key::Char('f'), w, h), Action::None);
     let (cells, _) = v.render(w, h);
     let status: String = cells[0].iter().map(|c| (*c & 0xFF) as u8 as char).collect();
-    check!(status.starts_with(" an https:// page: this OS has no TLS"));
-    // `f` reads it through the reader; only right after it was chosen.
-    check_eq!(v.key(Key::Char('f'), w, h), Action::Open("http://frogfind.com/read?a=https%3A%2F%2Fx%2F".to_string()));
-    check_eq!(v.key(Key::Char('f'), w, h), Action::None);
+    check!(status.starts_with(" f reads a page from the web"));
     // The third link is far down: Tab scrolls to it.
     check_eq!(v.key(Key::Tab, w, h), Action::None);
     let (cells, _) = v.render(w, h);

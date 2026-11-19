@@ -133,7 +133,12 @@ impl AtaDisk {
     }
 
     fn start(&self, lba: u64, cmd: u8) -> Result<(), FsError> {
-        if lba >= self.sectors {
+        self.start_n(lba, 1, cmd)
+    }
+
+    /// A command for `count` sectors (1-256) from `lba`.
+    fn start_n(&self, lba: u64, count: usize, cmd: u8) -> Result<(), FsError> {
+        if lba + count as u64 > self.sectors.min(1 << 28) || !(1..=256).contains(&count) {
             return Err(FsError::OutOfRange);
         }
         self.wait_not_busy()?;
@@ -141,7 +146,7 @@ impl AtaDisk {
             let drive = 0xE0 | (self.slave as u8) << 4 | ((lba >> 24) & 0x0F) as u8;
             outb(self.io + REG_DRIVE, drive);
             delay_400ns(self.ctrl);
-            outb(self.io + REG_SECCOUNT, 1);
+            outb(self.io + REG_SECCOUNT, count as u8); // 256 is written as 0
             outb(self.io + REG_LBA0, lba as u8);
             outb(self.io + REG_LBA1, (lba >> 8) as u8);
             outb(self.io + REG_LBA2, (lba >> 16) as u8);
@@ -170,6 +175,31 @@ impl BlockDevice for AtaDisk {
         // single port access is slow, and an install writes thousands of sectors.
         unsafe { outsw(self.io + REG_DATA, buf) };
         self.wait_not_busy()?;
+        Ok(())
+    }
+
+    /// Many sectors per command (up to 256): far fewer port accesses, which
+    /// are what is slow under a hypervisor.
+    fn read_blocks(&mut self, first: u64, bufs: &mut [Block]) -> Result<(), FsError> {
+        for (n, part) in bufs.chunks_mut(256).enumerate() {
+            self.start_n(first + n as u64 * 256, part.len(), CMD_READ)?;
+            for buf in part.iter_mut() {
+                self.wait_drq()?;
+                unsafe { insw(self.io + REG_DATA, buf) };
+            }
+        }
+        Ok(())
+    }
+
+    fn write_blocks(&mut self, first: u64, bufs: &[Block]) -> Result<(), FsError> {
+        for (n, part) in bufs.chunks(256).enumerate() {
+            self.start_n(first + n as u64 * 256, part.len(), CMD_WRITE)?;
+            for buf in part {
+                self.wait_drq()?;
+                unsafe { outsw(self.io + REG_DATA, buf) };
+            }
+            self.wait_not_busy()?;
+        }
         Ok(())
     }
 

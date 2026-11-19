@@ -401,14 +401,24 @@ pub fn write_trial<D: BlockDevice>(disk: &mut D, kernel: &[u8], build: u32, mut 
         }
         b // past the new kernel's end: zeros
     };
-    for (i, &to) in target.iter().enumerate() {
-        disk.write_block(to, &content(i)).map_err(|e| fail("writing the kernel", e))?;
+    // The slot's sectors in runs of neighbours: one command per run.
+    let mut runs: Vec<(usize, usize)> = Vec::new(); // (index in target, length)
+    for i in 0..target.len() {
+        match runs.last_mut() {
+            Some((start, len)) if target[*start] + *len as u64 == target[i] => *len += 1,
+            _ => runs.push((i, 1)),
+        }
+    }
+    for &(start, len) in &runs {
+        let blocks: Vec<Block> = (start..start + len).map(content).collect();
+        disk.write_blocks(target[start], &blocks).map_err(|e| fail("writing the kernel", e))?;
     }
     disk.flush().map_err(|e| fail("writing the kernel", e))?;
     step("checking what was written");
-    for (i, &to) in target.iter().enumerate() {
-        disk.read_block(to, &mut sector).map_err(|e| fail("reading the kernel back", e))?;
-        if sector != content(i) {
+    for &(start, len) in &runs {
+        let mut blocks: Vec<Block> = alloc::vec![[0; BLOCK_SIZE]; len];
+        disk.read_blocks(target[start], &mut blocks).map_err(|e| fail("reading the kernel back", e))?;
+        if blocks.iter().enumerate().any(|(k, b)| *b != content(start + k)) {
             return Err(String::from("the disk gave back something else than was written: the old kernel is still the one that boots"));
         }
     }

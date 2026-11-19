@@ -14,6 +14,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 pub const DEFAULT_PORT: u16 = 80;
+pub const HTTPS_PORT: u16 = 443;
 /// The status line and headers together may not be larger than this.
 pub const MAX_HEAD: usize = 16 * 1024;
 const MAX_HEADERS: usize = 100;
@@ -51,9 +52,11 @@ impl fmt::Display for HttpError {
     }
 }
 
-/// An `http://` address.
+/// An `http://` or `https://` address.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Url {
+    /// `https://`: the connection goes through TLS (tls.rs), port 443 by default.
+    pub secure: bool,
     pub host: String,
     pub port: u16,
     /// Path and query, always starting with `/`.
@@ -66,13 +69,14 @@ fn strip_prefix_ignore_case<'a>(text: &'a str, prefix: &str) -> Option<&'a str> 
 }
 
 impl Url {
-    /// Parse `http://HOST[:PORT][/PATH]`; the `http://` may be left out.
+    /// Parse `http[s]://HOST[:PORT][/PATH]`; `http://` may be left out.
     pub fn parse(text: &str) -> Result<Url, HttpError> {
         let text = text.trim();
-        if strip_prefix_ignore_case(text, "https://").is_some() {
-            return Err(HttpError::Https);
-        }
-        let rest = strip_prefix_ignore_case(text, "http://").unwrap_or(text);
+        let (secure, rest) = match strip_prefix_ignore_case(text, "https://") {
+            Some(rest) => (true, rest),
+            None => (false, strip_prefix_ignore_case(text, "http://").unwrap_or(text)),
+        };
+        let default_port = if secure { HTTPS_PORT } else { DEFAULT_PORT };
         if rest.contains("://") {
             return Err(HttpError::BadUrl);
         }
@@ -81,7 +85,7 @@ impl Url {
         let (authority, path) = rest.split_at(split);
         let (host, port) = match authority.rsplit_once(':') {
             Some((h, p)) => (h, p.parse::<u16>().ok().filter(|p| *p != 0).ok_or(HttpError::BadUrl)?),
-            None => (authority, DEFAULT_PORT),
+            None => (authority, default_port),
         };
         let host_ok = !host.is_empty()
             && host.len() <= 253
@@ -96,7 +100,7 @@ impl Url {
             Some(b'?') => format!("/{path}"),
             _ => String::from(path),
         };
-        Ok(Url { host: host.to_ascii_lowercase(), port, path })
+        Ok(Url { secure, host: host.to_ascii_lowercase(), port, path })
     }
 
     /// The address a redirect's `Location` header points to, seen from here.
@@ -106,7 +110,7 @@ impl Url {
             return Url::parse(location);
         }
         if let Some(rest) = location.strip_prefix("//") {
-            return Url::parse(rest);
+            return Url::parse(&format!("{}{rest}", self.scheme()));
         }
         let path = if location.starts_with('/') {
             String::from(location)
@@ -115,13 +119,16 @@ impl Url {
             let dir = &without_query[..without_query.rfind('/').map_or(0, |i| i + 1)];
             format!("{dir}{location}")
         };
-        let port = if self.port == DEFAULT_PORT { String::new() } else { format!(":{}", self.port) };
-        Url::parse(&format!("{}{port}{path}", self.host))
+        Url::parse(&format!("{}{}{path}", self.scheme(), self.authority()))
+    }
+
+    pub fn scheme(&self) -> &'static str {
+        if self.secure { "https://" } else { "http://" }
     }
 
     /// The value of the `Host` header.
     pub fn authority(&self) -> String {
-        if self.port == DEFAULT_PORT {
+        if self.port == if self.secure { HTTPS_PORT } else { DEFAULT_PORT } {
             self.host.clone()
         } else {
             format!("{}:{}", self.host, self.port)
@@ -131,7 +138,7 @@ impl Url {
 
 impl fmt::Display for Url {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "http://{}{}", self.authority(), self.path)
+        write!(f, "{}{}{}", self.scheme(), self.authority(), self.path)
     }
 }
 
@@ -522,13 +529,18 @@ mod tests {
 
     #[test]
     fn urls() {
-        assert_eq!(url("http://example.com"), Url { host: "example.com".into(), port: 80, path: "/".into() });
+        assert_eq!(url("http://example.com"), Url { secure: false, host: "example.com".into(), port: 80, path: "/".into() });
+        assert_eq!(url("HTTPS://example.com/x"), Url { secure: true, host: "example.com".into(), port: 443, path: "/x".into() });
+        assert_eq!(format!("{}", url("https://example.com:8443/x")), "https://example.com:8443/x");
+        assert_eq!(format!("{}", url("https://example.com:443/x")), "https://example.com/x");
+        assert_eq!(url("https://a/b/c").join("d").unwrap(), url("https://a/b/d"));
+        assert_eq!(url("https://a/b").join("//c/x").unwrap(), url("https://c/x"));
+        assert_eq!(url("http://a/b").join("https://c/").unwrap(), url("https://c/"));
         assert_eq!(url("Example.COM/a/b?x=1#frag").path, "/a/b?x=1");
         assert_eq!(url("HTTP://10.0.2.2:8080/x").port, 8080);
         assert_eq!(url("http://h?q=1").path, "/?q=1");
         assert_eq!(url("http://h:8080/x").authority(), "h:8080");
         assert_eq!(format!("{}", url("h/x")), "http://h/x");
-        assert_eq!(Url::parse("https://example.com/"), Err(HttpError::Https));
         for bad in ["", "http://", "ftp://h/x", "http://h:0/", "http://h:99999/", "http://h:x/", "http://a b/",
             "http://h/a b", "http://h/a\r\nEvil: 1", "http://user@h/", "http://[::1]/"]
         {
@@ -543,7 +555,6 @@ mod tests {
         assert_eq!(base.join("next").unwrap(), url("http://h:8080/dir/next"));
         assert_eq!(base.join("http://else/where").unwrap(), url("http://else/where"));
         assert_eq!(base.join("//else/where").unwrap(), url("http://else/where"));
-        assert_eq!(base.join("https://secure/"), Err(HttpError::Https));
         assert_eq!(url("http://h").join("x").unwrap(), url("http://h/x"));
     }
 

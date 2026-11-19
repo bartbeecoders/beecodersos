@@ -17,6 +17,21 @@ pub trait BlockDevice {
     fn flush(&mut self) -> Result<()> {
         Ok(())
     }
+    /// Read `bufs.len()` blocks from `first` on (devices that can do it in
+    /// fewer commands override this).
+    fn read_blocks(&mut self, first: u64, bufs: &mut [Block]) -> Result<()> {
+        for (i, buf) in bufs.iter_mut().enumerate() {
+            self.read_block(first + i as u64, buf)?;
+        }
+        Ok(())
+    }
+    /// Write `bufs.len()` blocks from `first` on.
+    fn write_blocks(&mut self, first: u64, bufs: &[Block]) -> Result<()> {
+        for (i, buf) in bufs.iter().enumerate() {
+            self.write_block(first + i as u64, buf)?;
+        }
+        Ok(())
+    }
 }
 
 /// Lets `FileSystem<Box<dyn BlockDevice>>` work over any device type.
@@ -32,6 +47,12 @@ impl<T: BlockDevice + ?Sized> BlockDevice for Box<T> {
     }
     fn flush(&mut self) -> Result<()> {
         (**self).flush()
+    }
+    fn read_blocks(&mut self, first: u64, bufs: &mut [Block]) -> Result<()> {
+        (**self).read_blocks(first, bufs)
+    }
+    fn write_blocks(&mut self, first: u64, bufs: &[Block]) -> Result<()> {
+        (**self).write_blocks(first, bufs)
     }
 }
 

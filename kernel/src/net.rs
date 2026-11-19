@@ -877,6 +877,114 @@ pub struct HttpResult {
     /// The address the content came from, if the server sent us elsewhere.
     pub redirected_to: Option<String>,
     pub bytes: u64,
+    /// It came over HTTPS (encrypted; the certificate is not checked yet).
+    pub secure: bool,
+}
+
+/// What `wget` and `browse` say after an HTTPS transfer.
+pub const UNCHECKED_NOTE: &str = "(HTTPS: encrypted, but the server's certificate is not checked yet)";
+
+/// A connection for HTTP: plain TCP, or TLS over TCP for `https://`.
+pub enum Conn {
+    Plain(TcpStream),
+    Tls(TcpStream, alloc::boxed::Box<beenet::tls::Client>),
+}
+
+/// How long a TLS handshake may take.
+const TLS_HANDSHAKE_MS: u64 = 15_000;
+
+impl Conn {
+    /// Connect to `host` (already resolved to `ip`); `secure`: with a TLS 1.3 handshake.
+    pub fn open(host: &str, ip: Ipv4, port: u16, secure: bool) -> Result<Conn, String> {
+        let stream = tcp_connect(ip, port).map_err(|e| format!("{host} port {port}: {e}"))?;
+        if !secure {
+            return Ok(Conn::Plain(stream));
+        }
+        let random = crate::rand::secret32();
+        let mut client = alloc::boxed::Box::new(beenet::tls::Client::new(host, random, crate::rand::secret32()));
+        stream.send(&client.take_outgoing()).map_err(String::from)?;
+        let start = time::uptime_ms();
+        let mut buf = [0u8; 4096];
+        while !client.is_connected() {
+            match stream.receive(&mut buf) {
+                Received::Data(n) => {
+                    client.receive(&buf[..n]).map_err(|e| format!("{host}: {}", e.message()))?;
+                    let out = client.take_outgoing();
+                    if !out.is_empty() {
+                        stream.send(&out).map_err(String::from)?;
+                    }
+                }
+                Received::End => return Err(format!("{host}: the server closed the connection during the TLS handshake")),
+                Received::Failed(e) => return Err(String::from(e)),
+                Received::Nothing => {
+                    if cancelled() {
+                        return Err(String::from("cancelled"));
+                    }
+                    if time::uptime_ms() - start > TLS_HANDSHAKE_MS {
+                        return Err(format!("{host}: the TLS handshake took too long"));
+                    }
+                    transfer_wait(start);
+                }
+            }
+        }
+        Ok(Conn::Tls(stream, client))
+    }
+
+    pub fn send(&mut self, data: &[u8]) -> Result<(), &'static str> {
+        match self {
+            Conn::Plain(s) => s.send(data),
+            Conn::Tls(s, c) => {
+                c.send(data);
+                s.send(&c.take_outgoing())
+            }
+        }
+    }
+
+    pub fn receive(&mut self, buf: &mut [u8]) -> Received {
+        match self {
+            Conn::Plain(s) => s.receive(buf),
+            Conn::Tls(s, c) => {
+                let mut raw = [0u8; 4096];
+                let got = s.receive(&mut raw);
+                match got {
+                    Received::Data(n) => {
+                        if let Err(e) = c.receive(&raw[..n]) {
+                            return Received::Failed(match e {
+                                beenet::tls::TlsError::Protocol(why) | beenet::tls::TlsError::Unsupported(why) => why,
+                                beenet::tls::TlsError::Alert(_) => "the server ended the connection with a TLS alert",
+                                beenet::tls::TlsError::BadRecord => "a TLS record did not decrypt (changed on the way?)",
+                            });
+                        }
+                        let out = c.take_outgoing();
+                        if !out.is_empty() && s.send(&out).is_err() {
+                            return Received::Failed("could not answer the server");
+                        }
+                    }
+                    Received::End | Received::Failed(_) => {
+                        // What was decrypted before the end still comes first.
+                        let plain = c.take_plain();
+                        return if plain.is_empty() { got } else { Self::give(c, plain, buf) };
+                    }
+                    Received::Nothing => {}
+                }
+                let plain = c.take_plain();
+                if plain.is_empty() {
+                    return if c.is_closed() { Received::End } else { Received::Nothing };
+                }
+                Self::give(c, plain, buf)
+            }
+        }
+    }
+
+    /// Hand out as much of `plain` as fits; the rest goes back for next time.
+    fn give(c: &mut beenet::tls::Client, plain: Vec<u8>, buf: &mut [u8]) -> Received {
+        let n = plain.len().min(buf.len());
+        buf[..n].copy_from_slice(&plain[..n]);
+        if n < plain.len() {
+            c.put_back(&plain[n..]);
+        }
+        Received::Data(n)
+    }
 }
 
 const MAX_REDIRECTS: usize = 5;
@@ -892,7 +1000,7 @@ pub fn http_get(address: &str, limit: u64, sink: Sink) -> Result<HttpResult, Str
     let mut redirected_to = None;
     for _hop in 0..=MAX_REDIRECTS {
         let ip = resolve(&url.host)?;
-        let stream = tcp_connect(ip, url.port).map_err(|e| format!("{} port {}: {e}", url.host, url.port))?;
+        let mut stream = Conn::open(&url.host, ip, url.port, url.secure)?;
         stream.send(&request("GET", &url, &agent, None)).map_err(String::from)?;
         let (mut response, mut body, mut buf) = (Response::new(), Vec::new(), [0u8; 2048]);
         let mut bytes = 0u64;
@@ -933,14 +1041,9 @@ pub fn http_get(address: &str, limit: u64, sink: Sink) -> Result<HttpResult, Str
             }
         }
         let Some(location) = response.redirect() else {
-            return Ok(HttpResult { redirected_to, bytes });
+            return Ok(HttpResult { redirected_to, bytes, secure: url.secure });
         };
-        url = url.join(location).map_err(|e| match e {
-            beenet::http::HttpError::Https => {
-                String::from("the server sends us to an https:// address, and HTTPS (encrypted HTTP) is not supported yet")
-            }
-            e => format!("bad redirect: {}", e.message()),
-        })?;
+        url = url.join(location).map_err(|e| format!("bad redirect: {}", e.message()))?;
         redirected_to = Some(format!("{url}"));
     }
     Err(String::from("too many redirects"))

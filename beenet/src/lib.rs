@@ -26,6 +26,7 @@ pub mod rfb;
 pub mod inflate;
 pub mod deflate;
 pub mod crypto;
+pub mod tls;
 pub mod png;
 pub mod gif;
 pub mod http;

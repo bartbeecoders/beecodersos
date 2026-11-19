@@ -1,10 +1,10 @@
 //! The web page viewer (`browse URL|FILE`): a window on the desktop that
-//! shows a page from the web (http://) or an HTML or text file from the
-//! disk, as text (beenet::html lays it out). Arrows and Page Up/Down
-//! scroll, Tab picks the next link, Enter or a click follows it,
+//! shows a page from the web (http:// or https://) or an HTML or text file
+//! from the disk, as text (beenet::html lays it out). Arrows and Page
+//! Up/Down scroll, Tab picks the next link, Enter or a click follows it,
 //! Backspace goes back, `g` asks for an address or words to search for,
-//! `f` reads an https:// link through FrogFind, `r` loads again, `q`
-//! leaves.
+//! `f` reads the page through FrogFind (simpler text), `r` loads again,
+//! `q` leaves.
 //!
 //! `Viewer` is the page, the scrolling and the choice of link, and knows
 //! nothing about windows, disks or the network: keys go in, what to do
@@ -30,13 +30,13 @@ Tab picks a link, Enter or a click follows it, Backspace goes back, g asks for a
 <li><a href=\"http://info.cern.ch/hypertext/WWW/TheProject.html\">The first web site</a> (CERN, 1991)\n\
 <li><a href=\"http://frogfind.com/\">FrogFind</a>: a search engine for simple browsers\n\
 <li><a href=\"http://68k.news/\">68k.news</a>: the news, for simple browsers\n\
-<li><a href=\"http://neverssl.com/\">NeverSSL</a>\n</ul>\n\
+<li><a href=\"https://en.wikipedia.org/wiki/Honey_bee\">Honey bees</a> on Wikipedia\n<li><a href=\"http://neverssl.com/\">NeverSSL</a>\n</ul>\n\
 <h2>On this machine</h2>\n<ul>\n<li><a href=\"notes.txt\">notes.txt</a>\n</ul>\n\
-<p>Pages with https:// cannot be opened yet: the OS has no TLS.\n";
+<p>https:// pages are encrypted (TLS 1.3); their certificates are not checked yet.\n";
 
-/// Searching, and reading https:// pages, goes through FrogFind: a search
-/// engine for simple browsers that also hands out other sites as plain
-/// HTML over http. The user chooses it (words typed, or `f`): it sees what
+/// Searching, and reading heavy pages as simpler text (`f`), goes through
+/// FrogFind: a search engine for simple browsers that also hands out other
+/// sites as plain HTML over http. The user chooses it (words typed, or `f`): it sees what
 /// is searched for and which pages are read through it.
 const SEARCH: &str = "http://frogfind.com/?q=";
 const READER: &str = "http://frogfind.com/read?a=";
@@ -46,24 +46,21 @@ pub fn search_address(words: &str) -> String {
     format!("{SEARCH}{}", beenet::http::percent_encode(words.trim()))
 }
 
-/// The address that shows an https:// page through the reader.
+/// The address that shows a page through the reader.
 pub fn reader_address(url: &str) -> String {
     format!("{READER}{}", beenet::http::percent_encode(url.trim()))
 }
 
 /// What was typed (after `g`, or with `browse`): a path on the disk, a web
-/// address (`http://` may be left out; `https://` is read through the
-/// reader), or words to search for (with a space, or without a dot).
+/// address (`http://` may be left out), or words to search for (with a
+/// space, or without a dot).
 pub fn typed_address(typed: &str) -> Result<String, String> {
     let typed = typed.trim();
     let lower = typed.to_ascii_lowercase();
     if typed.starts_with('/') {
         return resolve("/", typed);
     }
-    if lower.starts_with("https://") {
-        return Ok(reader_address(typed));
-    }
-    if lower.starts_with("http://") {
+    if lower.starts_with("http://") || lower.starts_with("https://") {
         return resolve("/", typed);
     }
     let host = typed.split(['/', '?']).next().unwrap_or("");
@@ -127,8 +124,6 @@ pub struct Viewer {
     mode: Mode,
     message: String,
     warning: bool,
-    /// The https:// link just chosen, which `f` reads through the reader.
-    https: Option<String>,
 }
 
 /// Does this look like HTML (rather than plain text)?
@@ -166,19 +161,22 @@ fn normalize(path: &str) -> String {
 }
 
 /// Where a link on the page at `base` leads: an absolute path on the disk
-/// or an http:// URL, or why it cannot be followed.
+/// or an http(s):// URL, or why it cannot be followed.
 pub fn resolve(base: &str, href: &str) -> Result<String, String> {
     let href = href.trim();
     let lower = href.to_ascii_lowercase();
-    if lower.starts_with("https://") {
-        return Err(String::from("https:// pages cannot be opened yet (no TLS)"));
-    }
     let scheme = href.find(':').map(|i| &lower[..i]).filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric()));
-    if lower.starts_with("http://") || lower.starts_with("//") {
-        let url = beenet::http::Url::parse(href.trim_start_matches('/')).map_err(|e| String::from(e.message()))?;
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        let url = beenet::http::Url::parse(href).map_err(|e| String::from(e.message()))?;
         return Ok(format!("{url}"));
     }
-    if let Some(scheme) = scheme.filter(|s| *s != "http") {
+    if let Some(rest) = href.strip_prefix("//") {
+        // The same scheme as the page.
+        let secure = base.to_ascii_lowercase().starts_with("https://");
+        let url = beenet::http::Url::parse(&format!("{}{rest}", if secure { "https://" } else { "http://" })).map_err(|e| String::from(e.message()))?;
+        return Ok(format!("{url}"));
+    }
+    if let Some(scheme) = scheme.filter(|s| *s != "http" && *s != "https") {
         return Err(format!("{scheme}: links cannot be followed"));
     }
     let href = href.split('#').next().unwrap_or("");
@@ -202,7 +200,7 @@ pub fn resolve(base: &str, href: &str) -> Result<String, String> {
         path.push('?');
         path.push_str(q);
     }
-    Ok(format!("http://{}{path}", joined.authority()))
+    Ok(format!("{}{}{path}", joined.scheme(), joined.authority()))
 }
 
 impl Viewer {
@@ -218,7 +216,6 @@ impl Viewer {
             mode: Mode::View,
             message: String::new(),
             warning: false,
-            https: None,
         }
     }
 
@@ -283,11 +280,6 @@ impl Viewer {
 
     fn follow(&mut self, n: usize) -> Action {
         let Some(href) = self.page.links.get(n) else { return Action::None };
-        if href.trim().to_ascii_lowercase().starts_with("https://") {
-            self.https = Some(String::from(href.trim()));
-            self.say("an https:// page: this OS has no TLS yet. f reads it through FrogFind", true);
-            return Action::None;
-        }
         match resolve(&self.address, href) {
             Ok(to) => Action::Open(to),
             Err(why) => {
@@ -321,7 +313,6 @@ impl Viewer {
     pub fn key(&mut self, key: Key, width: usize, rows: usize) -> Action {
         self.lay_out(width);
         self.message.clear();
-        let https = self.https.take();
         let page_rows = rows.saturating_sub(2).max(1);
         let last_top = self.page.lines.len().saturating_sub(page_rows);
         if let Mode::Address(text) = &mut self.mode {
@@ -386,10 +377,11 @@ impl Viewer {
             },
             Key::Char('g') => self.mode = Mode::Address(String::new()),
             Key::Char('r') => return Action::Reload(self.address.clone()),
-            Key::Char('f') => match https {
-                Some(url) => return Action::Open(reader_address(&url)),
-                None => self.say("f reads an https:// link through FrogFind: pick one first", false),
-            },
+            // The page through FrogFind's reader: simpler text for heavy pages.
+            Key::Char('f') if self.address.starts_with("http") && !self.address.starts_with(READER) => {
+                return Action::Open(reader_address(&self.address));
+            }
+            Key::Char('f') => self.say("f reads a page from the web through FrogFind", false),
             _ => {}
         }
         Action::None
@@ -494,7 +486,8 @@ pub fn run(window: usize, start: String, mut storage: Storage) {
             match fetch(&mut storage, &address) {
                 Ok((body, at)) => {
                     viewer.show(&at, &body, back, again);
-                    viewer.say("", false);
+                    let secure = at.starts_with("https://");
+                    viewer.say(if secure { "HTTPS: encrypted; the certificate is not checked yet" } else { "" }, false);
                 }
                 Err(why) => {
                     if back {
