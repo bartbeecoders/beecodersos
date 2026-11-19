@@ -1,5 +1,6 @@
 //! The file manager's icon view (`v` switches): a grid of icons, a
-//! picture's own thumbnail for pictures, drawn in the window's pixels.
+//! picture's own thumbnail for pictures (for videos: their first picture,
+//! with a play sign), drawn in the window's pixels.
 //!
 //! The thumbnails of a folder are made on every processor at once: the
 //! files are read one after the other (the disk is one), then decoded and
@@ -23,6 +24,18 @@ const BOTTOM: usize = 20;
 /// Pictures larger than this (pixels, or bytes in the file) get the plain picture icon.
 const MAX_PIXELS: usize = 2 * 1024 * 1024;
 const MAX_BYTES: u64 = 8 * 1024 * 1024;
+/// Videos up to this size show their first picture (the whole file is read).
+const MAX_VIDEO_BYTES: u64 = 64 * 1024 * 1024;
+
+/// The first picture of a Motion-JPEG AVI video, as JPEG data (camera
+/// frames get the standard Huffman tables written in).
+pub fn first_frame(data: &[u8]) -> Option<Vec<u8>> {
+    let avi = beenet::avi::parse(data).ok()?;
+    if !avi.is_mjpeg() {
+        return None;
+    }
+    avi.frame(data, 0).map(beenet::jpeg::with_tables)
+}
 
 const BACKGROUND: u32 = 0x1C2230;
 const BAR: u32 = 0x2B3A55;
@@ -125,8 +138,11 @@ impl Thumbs {
             .iter()
             .map(|e| {
                 let path = filemgr::join(browser.folder(), &e.name);
-                let wanted = !e.folder && e.size <= MAX_BYTES && filemgr::opener(&e.name) == Opener::Picture;
-                let data = if wanted { storage.fs().read_file(&path).ok() } else { None };
+                let kind = filemgr::opener(&e.name);
+                let picture = !e.folder && e.size <= MAX_BYTES && kind == Opener::Picture;
+                let video = !e.folder && e.size <= MAX_VIDEO_BYTES && kind == Opener::Video;
+                let data = if picture || video { storage.fs().read_file(&path).ok() } else { None };
+                let data = if video { data.and_then(|d| first_frame(&d)) } else { data };
                 data.filter(|d| crate::image::dimensions(d).is_some_and(|(w, h)| w * h <= MAX_PIXELS))
             })
             .collect();
@@ -164,7 +180,12 @@ pub fn draw(canvas: &Canvas, browser: &Browser, thumbs: &Thumbs, top: usize) {
         let back = if chosen { CHOSEN } else { BACKGROUND };
         let (ix, iy) = (x + (CELL_W - THUMB) / 2, y + 6);
         match thumbs.images.get(i).and_then(|t| t.as_ref()) {
-            Some(thumb) => draw_thumbnail(canvas, thumb, ix, iy),
+            Some(thumb) => {
+                draw_thumbnail(canvas, thumb, ix, iy);
+                if !entry.folder && filemgr::opener(&entry.name) == Opener::Video {
+                    draw_play(canvas, ix, iy);
+                }
+            }
             None => draw_icon(canvas, entry, ix, iy),
         }
         // The name, cut to fit, in the middle under the icon.
@@ -190,6 +211,19 @@ fn draw_thumbnail(canvas: &Canvas, thumb: &Image, x: usize, y: usize) {
     canvas.fill_rect(Rect::new(ox.saturating_sub(1), oy.saturating_sub(1), thumb.width + 2, thumb.height + 2), 0xD0D0D0);
     for row in 0..thumb.height {
         canvas.put_row(ox, oy + row, &thumb.pixels[row * thumb.width..(row + 1) * thumb.width]);
+    }
+}
+
+/// A play triangle on a dark disc in the middle of a video's thumbnail.
+fn draw_play(canvas: &Canvas, x: usize, y: usize) {
+    let (cx, cy) = (x + THUMB / 2, y + THUMB / 2);
+    for dy in 0..20usize {
+        let d = dy.abs_diff(10);
+        let half = 10 - d * d / 12; // roughly round
+        canvas.fill_rect(Rect::new(cx - half, cy - 10 + dy, half * 2, 1), 0x202020);
+    }
+    for k in 0..12 {
+        canvas.fill_rect(Rect::new(cx - 4 + k, cy - 6 + k / 2, 1, 12 - k), 0xF2C14E);
     }
 }
 

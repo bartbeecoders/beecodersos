@@ -732,8 +732,14 @@ impl Shell {
         let mut writer: Option<beenet::avi::Writer> = None;
         let mut start = 0;
         let mut end = 0;
+        let mut seen = 0u32;
         let result = self.camera_pictures((640, 480), |picture| {
             let now = crate::time::uptime_ms();
+            // The first pictures are dark while the camera finds its exposure.
+            seen += 1;
+            if seen <= 10 {
+                return true;
+            }
             let jpeg = match picture.kind {
                 beenet::uvc::Kind::Mjpeg => beenet::jpeg::with_tables(&picture.data),
                 _ => match crate::webcam::pixels(&picture) {

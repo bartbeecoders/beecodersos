@@ -1701,6 +1701,13 @@ filmed 87 pictures in 5.0 s to /data/hello.avi (1687 KiB)
   **`camera record FILE.avi SECONDS`** puts the camera's JPEGs straight into
   a Motion JPEG AVI (no re-encoding), which `play` and the file manager show.
   Ctrl+C stops either; the camera is switched off afterwards.
+- **Dropping off:** now and then this camera drops off the bus just as it
+  starts sending (at any size; at 1920x1080 every time) and comes back a
+  second later. The driver then waits for it and tries again, up to three
+  times, before it reports "the camera was unplugged".
+- **Films and thumbnails:** `camera record` leaves out the first ten
+  pictures (still dark), and the file manager's icon view shows a video's
+  first picture with a play sign (`icons::first_frame`).
 - **On the HP:** 640x480 and 1280x720 MJPEG at about 17 pictures a second
   in a dim room (the camera lowers its rate itself), 8000 transfers a
   second in setting 11 (3 x 1020 bytes per microframe), nothing lost over

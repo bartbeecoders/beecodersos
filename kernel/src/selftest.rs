@@ -3249,8 +3249,18 @@ fn sound_routes() -> TestResult {
 }
 
 fn file_icons() -> TestResult {
-    use crate::icons::{step, thumbnail, Grid, CELL_H, CELL_W, THUMB};
+    use crate::icons::{first_frame, step, thumbnail, Grid, CELL_H, CELL_W, THUMB};
     use crate::image::Image;
+    // A video's thumbnail is its first picture.
+    let red = beenet::jpeg::encode(16, 8, 90, |_, _| 0xFF0000);
+    let blue = beenet::jpeg::encode(16, 8, 90, |_, _| 0x0000FF);
+    let mut avi = beenet::avi::Writer::new(16, 8, 100_000);
+    avi.frame(&red);
+    avi.frame(&blue);
+    let video = avi.finish();
+    check_eq!(first_frame(&video), Some(red.clone()));
+    check_eq!(first_frame(&red), None); // not a video
+    check_eq!(first_frame(&video[..40]), None); // cut short
     // 640 x 400 pixels: 5 columns of 112 (80 left over, 40 on each side), 3 rows.
     let grid = Grid::new(640, 400);
     check_eq!(grid, Grid { cols: 5, rows: 3, left: 40 });
