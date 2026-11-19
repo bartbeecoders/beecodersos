@@ -221,6 +221,16 @@ fn draw_icon(canvas: &Canvas, entry: &Entry, x: usize, y: usize) {
             r(42, 24, 3, 16, 0xB8A8E8); // sound waves
             r(48, 20, 3, 24, 0xB8A8E8);
         }
+        Opener::Video => {
+            r(4, 10, 56, 44, 0x2A2A2A); // a strip of film
+            for k in 0..6 {
+                r(8 + k * 9, 13, 5, 4, 0xD0D0D0);
+                r(8 + k * 9, 47, 5, 4, 0xD0D0D0);
+            }
+            for k in 0..12 {
+                r(26 + k, 22 + k / 2, 1, 20 - k, 0xF2C14E); // a play triangle
+            }
+        }
         Opener::Text => {
             r(12, 4, 40, 56, 0xF4F4F4);
             for line in 0..6 {

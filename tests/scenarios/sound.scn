@@ -16,7 +16,13 @@ usage: sound volume 0-100
 $ sound volume 50
 sound: no sound card (HD Audio) found
 $ play
-usage: play FILE.wav
+usage: play FILE.wav|FILE.avi
+# Videos: a file that is no AVI, and one that is missing, open no window.
+$ echo hello > /note.avi
+$ play /note.avi
+play /note.avi: not an AVI video
+$ play /missing.avi
+play /missing.avi: no such file or directory
 $ play /missing.wav
 play /missing.wav: no such file or directory
 $ echo hello > /note.txt

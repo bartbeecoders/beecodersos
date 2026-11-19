@@ -377,6 +377,11 @@ pub fn run(window: usize, start: String, mut storage: Storage) {
                 }
             }
             Action::Open(path) if opener(&path) == Opener::Sound => said = Some(play_in_background(&mut storage, &path)),
+            Action::Open(path) if opener(&path) == Opener::Video => {
+                if let Err(why) = desk::open_video(&path) {
+                    said = Some((format!("{}: {why}", path.rsplit('/').next().unwrap_or("")), true));
+                }
+            }
             Action::Open(path) | Action::Edit(path) => {
                 if let Err(why) = desk::open_editor(&path) {
                     said = Some((format!("{}: {why}", path.rsplit('/').next().unwrap_or("")), true));
@@ -441,6 +446,7 @@ pub fn run(window: usize, start: String, mut storage: Storage) {
 pub enum Opener {
     Picture,
     Sound,
+    Video,
     Text,
 }
 
@@ -451,6 +457,7 @@ pub fn opener(name: &str) -> Opener {
     match ext {
         "png" | "jpg" | "jpeg" | "gif" | "bmp" | "ppm" => Opener::Picture,
         "wav" => Opener::Sound,
+        "avi" => Opener::Video,
         _ => Opener::Text,
     }
 }

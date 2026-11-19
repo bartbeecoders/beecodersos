@@ -34,6 +34,7 @@ pub mod tls;
 pub mod png;
 pub mod gif;
 pub mod jpeg;
+pub mod avi;
 pub mod http;
 pub mod sha256;
 pub mod sntp;

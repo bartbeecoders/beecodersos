@@ -561,6 +561,11 @@ fn ensure() -> Result<(), String> {
     }
 }
 
+/// Is there a sound card that can play? (Starts the driver if needed.)
+pub fn available() -> bool {
+    ensure().is_ok() && CONTROLLER.get().as_ref().is_some_and(|c| !c.outputs.is_empty())
+}
+
 /// What `sound` shows.
 pub fn describe() -> Result<Vec<String>, String> {
     ensure()?;

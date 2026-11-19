@@ -2889,6 +2889,13 @@ fn pictures() -> TestResult {
     check!(parallel.pixels == serial);
     check_eq!(crate::image::dimensions(jpg), Some((160, 120)));
     check_eq!(crate::filemgr::opener("/photos/Bee.JPG"), crate::filemgr::Opener::Picture);
+    // An MJPEG video (ffmpeg): its frames are pictures for the same decoder.
+    let clip: &[u8] = include_bytes!("../../beenet/testdata/clip.avi");
+    let avi = beenet::avi::parse(clip).map_err(String::from)?;
+    check!(avi.is_mjpeg() && avi.frames.len() == 10 && avi.sound.is_some());
+    let frame = decode(avi.frame(clip, 9).unwrap_or(&[])).map_err(String::from)?;
+    check_eq!((frame.width, frame.height), (64, 48));
+    check_eq!(crate::filemgr::opener("/films/Bees.AVI"), crate::filemgr::Opener::Video);
     let png = decode(include_bytes!("../../beenet/testdata/pal.png")).map_err(String::from)?;
     check_eq!((png.width, png.height), (37, 23));
     check!(decode(&include_bytes!("../../beenet/testdata/pal.png")[..100]).is_err());
