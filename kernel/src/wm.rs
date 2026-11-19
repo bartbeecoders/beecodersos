@@ -224,6 +224,18 @@ impl Desktop {
         self.next_id - 1
     }
 
+    /// Change a window's title; returns the part of the screen to draw
+    /// again (nothing when the title did not change).
+    pub fn set_title(&mut self, id: usize, title: &str) -> Option<Rect> {
+        let at = self.position(id)?;
+        let window = &mut self.windows[at];
+        if window.title == title {
+            return None;
+        }
+        window.title = String::from(title);
+        Some(window.frame)
+    }
+
     fn position(&self, id: usize) -> Option<usize> {
         self.ids.iter().position(|i| *i == id)
     }

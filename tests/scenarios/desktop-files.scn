@@ -12,7 +12,7 @@ $ files /
 $ threads
 ~ files      (waiting|ready)
 @ctl text {machine}
-~ ^--- window 1 ---$
+~ ^--- window 1: .+ ---$
 ~ ^ /  \(1 of \d+\)$
 ~ ^   <folder>  docs/$
 ~ ^   <folder>  system/$
@@ -37,7 +37,7 @@ $ ls /docs
 # Enter on a file opens it in the editor, in a window of its own.
 @ctl keys {machine} "{enter}"
 @ctl text {machine}
-~ ^--- window 2 ---$
+~ ^--- window 2: .+ ---$
 ~ ^ note\.md  line 1 of 1, column 1
 ~ ^hello$
 @ctl keys {machine} " there{ctrl+s}{ctrl+q}"

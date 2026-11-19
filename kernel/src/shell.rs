@@ -1469,14 +1469,26 @@ impl Shell {
             }
             ("browse", _) => error("usage: browse URL|FILE|WORDS   (words: a search on FrogFind)"),
             ("view", [file]) => {
-                let path = self.abs(file);
+                let mut path = self.abs(file);
+                if self.storage.fs().is_dir(&path) {
+                    // A folder: its first picture (the arrow keys show the others).
+                    let names: Vec<String> =
+                        self.storage.fs().read_dir(&path).map(|es| es.into_iter().map(|e| e.name).collect()).unwrap_or_default();
+                    match crate::view::first_in(&names) {
+                        Some(first) => path = crate::filemgr::join(&path, &first),
+                        None => {
+                            error(&format!("view {file}: no pictures in this folder"));
+                            return;
+                        }
+                    }
+                }
                 match crate::desk::open_picture(&path) {
-                    Ok((_, w, h, 1)) => println!("{path} ({w} x {h} pixels) in a new window: q leaves"),
+                    Ok((_, w, h, 1)) => println!("{path} ({w} x {h} pixels) in a new window: arrows go to the other pictures here, q leaves"),
                     Ok((_, w, h, n)) => println!("{path} ({w} x {h} pixels, {n} frames) in a new window: space pauses, n steps, q leaves"),
                     Err(why) => error(&format!("view {file}: {why}")),
                 }
             }
-            ("view", _) => error("usage: view FILE   (a JPEG, PNG, GIF, BMP or PPM picture; an animated GIF plays)"),
+            ("view", _) => error("usage: view FILE|FOLDER   (a JPEG, PNG, GIF, BMP or PPM picture; an animated GIF plays; arrows: the other pictures in the folder)"),
             ("screenshot", [file]) => {
                 let path = self.abs(file);
                 if !self.may_change(&path) {
@@ -3105,7 +3117,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("camera record FILE.avi SECS", "film with the USB camera into a Motion JPEG video (play it with 'play')"),
     ("threads", "what runs side by side inside the kernel"),
     ("monitor", "system monitor in a window: work per processor, memory, network, threads"),
-    ("view FILE", "show a picture (JPEG, PNG, GIF, BMP or PPM) in a window; animated GIFs play"),
+    ("view FILE|FOLDER", "show a picture (JPEG, PNG, GIF, BMP or PPM) in a window; animated GIFs play; the arrow keys go through the folder's pictures"),
     ("sound [volume N]", "the sound card, its outputs and volume (0-100)"),
     ("beep [HZ|NOTE [MS]]", "play a tone (default 880 Hz, 300 ms; notes like a4, c#5)"),
     ("play FILE.wav|.avi", "play a WAV file, or a Motion-JPEG AVI video in a window"),

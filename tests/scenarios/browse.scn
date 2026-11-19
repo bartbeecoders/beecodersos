@@ -13,7 +13,7 @@ $ browse /site/index.html
 $ threads
 ~ browse     (waiting|ready)
 @ctl text {machine}
-~ ^--- window 1 ---$
+~ ^--- window 1: .+ ---$
 ~ ^ Bee pages - /site/index\.html  \(100%\)$
 ~ ^Welcome$
 ~ ^Go to page two or a secure one\.$
