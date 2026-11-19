@@ -1685,6 +1685,10 @@ filmed 87 pictures in 5.0 s to /data/hello.avi (1687 KiB)
   as a JPEG in the home folder; `q` closes it and switches the camera off.
   Each picture is decoded on every processor; when pictures come faster than
   they are drawn, the window skips to the latest.
+- **`camera timelapse FILE.avi SECONDS [MINUTES]`**: a picture every few
+  seconds into a video played back at 10 a second (an hour at one a minute
+  is 6 seconds of video), saved every 30 pictures so a power cut loses
+  little. On the HP: one every 2 s for a minute gave 31 pictures.
 - **`camera watch FOLDER [MINUTES]`**: a security camera. Every picture is
   shrunk to 64 x 48 cells of brightness (`beenet/src/motion.rs`) and compared
   with a background that slowly follows the scene; when 2% of the cells

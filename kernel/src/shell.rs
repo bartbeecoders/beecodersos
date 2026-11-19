@@ -723,6 +723,78 @@ impl Shell {
         }
     }
 
+    fn camera_timelapse_args(&mut self, file: &str, every: &str, minutes: Option<&str>) {
+        let every = every.parse::<u64>().ok().filter(|s| (1..=3600).contains(s));
+        let minutes = match minutes {
+            None => Some(None),
+            Some(m) => m.parse::<u64>().ok().filter(|m| (1..=10080).contains(m)).map(Some),
+        };
+        match (every, minutes) {
+            (Some(every), Some(minutes)) if file.to_ascii_lowercase().ends_with(".avi") => self.camera_timelapse(file, every, minutes),
+            _ => error("usage: camera timelapse FILE.avi SECONDS [MINUTES]   (a picture every 1-3600 s, for up to a week; Ctrl+C stops)"),
+        }
+    }
+
+    /// A picture every `every` seconds into a video that plays them at 10
+    /// a second: an hour at one a minute is 6 seconds of video. The file is
+    /// written every 30 pictures and at the end, so a power cut loses little.
+    fn camera_timelapse(&mut self, file: &str, every: u64, minutes: Option<u64>) {
+        const MAX_BYTES: usize = 256 * 1024 * 1024;
+        let path = self.abs(file);
+        if !self.may_change(&path) {
+            return;
+        }
+        let Some(mut storage) = crate::storage::handle() else { return };
+        let start = crate::time::uptime_ms();
+        let end = minutes.map(|m| start + m * 60_000);
+        println!("a picture every {every} s into {path} (Ctrl+C stops)");
+        let mut writer: Option<beenet::avi::Writer> = None;
+        let (mut next, mut seen, mut failed) = (start, 0u32, false);
+        let result = self.camera_pictures((640, 480), |picture| {
+            let now = crate::time::uptime_ms();
+            seen += 1;
+            if seen <= 10 || now < next {
+                return end.is_none_or(|end| now < end);
+            }
+            next += every * 1000;
+            let Some(img) = crate::webcam::pixels(&picture) else { return true };
+            let jpeg = crate::webcam::as_jpeg(&picture, &img);
+            let video = writer.get_or_insert_with(|| beenet::avi::Writer::new(img.width, img.height, 100_000));
+            video.frame(&jpeg);
+            // Saved every 30 pictures (and at the end): a power cut loses little.
+            if video.frames() % 30 == 0 {
+                if let Err(e) = storage.fs().write_file(&path, &video.clone().finish()) {
+                    error(&format!("camera timelapse {file}: {e}"));
+                    failed = true;
+                    return false;
+                }
+            }
+            video.len() < MAX_BYTES && end.is_none_or(|end| now < end)
+        });
+        if let Some(video) = &writer {
+            if let Err(e) = storage.fs().write_file(&path, &video.clone().finish()) {
+                error(&format!("camera timelapse {file}: {e}"));
+                return;
+            }
+        }
+        if let Err(why) = result {
+            if why != "stopped" {
+                error(&format!("camera: {why}"));
+            }
+        }
+        if failed {
+            return;
+        }
+        let frames = writer.as_ref().map_or(0, |w| w.frames());
+        let secs = (crate::time::uptime_ms() - start) / 1000;
+        println!(
+            "{frames} pictures in {} into {path} ({}.{} s of video)",
+            crate::time::format_duration(secs * 1000),
+            frames / 10,
+            frames % 10
+        );
+    }
+
     fn camera_record(&mut self, file: &str, secs: u32) {
         const MAX_BYTES: usize = 256 * 1024 * 1024;
         let path = self.abs(file);
@@ -1606,6 +1678,8 @@ impl Shell {
                 Some(size) => self.camera_snap(file, size),
                 None => error("usage: camera snap FILE [WIDTHxHEIGHT]"),
             },
+            ("camera", ["timelapse", file, every]) => self.camera_timelapse_args(file, every, None),
+            ("camera", ["timelapse", file, every, minutes]) => self.camera_timelapse_args(file, every, Some(minutes)),
             ("camera", ["record", file, secs]) => match secs.parse::<u32>() {
                 Ok(secs @ 1..=600) if file.to_ascii_lowercase().ends_with(".avi") => self.camera_record(file, secs),
                 _ => error("usage: camera record FILE.avi SECONDS   (1 to 600; Ctrl+C stops early)"),
@@ -3023,6 +3097,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("install [DISK]", "put the OS on a disk, or upgrade it (alone: list the disks)"),
     ("lsusb", "USB controller and devices"),
     ("camera [raw|log]", "USB cameras: the picture formats and sizes they offer ('raw': the description as the camera gave it; 'log': what the driver noted)"),
+    ("camera timelapse FILE.avi SECS [MIN]", "a time-lapse video: a picture every SECS seconds, played back at 10 a second"),
     ("camera watch FOLDER [MIN]", "a security camera: saves a picture in FOLDER whenever something moves (Ctrl+C stops)"),
     ("camera view", "the camera live in a window, as in a mirror: s saves a picture, m mirrors, q leaves"),
     ("camera on [WxH] | off", "leave the camera sending (then 'camera' counts what arrives), or stop it"),

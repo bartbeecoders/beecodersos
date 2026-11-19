@@ -160,6 +160,7 @@ impl Avi {
 
 /// Writes a Motion-JPEG AVI (video only): frames are added one by one,
 /// `finish` puts the headers and the index around them.
+#[derive(Clone)]
 pub struct Writer {
     width: usize,
     height: usize,
