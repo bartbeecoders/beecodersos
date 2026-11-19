@@ -443,6 +443,8 @@ struct Video {
 
 /// Transfers kept queued for a camera: at 8000 a second, an eighth of a second.
 const VIDEO_TDS: usize = 1000;
+/// How often switching the camera on is tried again when it drops off the bus.
+const VIDEO_RETRIES: u32 = 3;
 
 impl Video {
     fn buffer(&self, n: usize) -> (u64, &Page, usize) {
@@ -524,6 +526,9 @@ struct Xhci {
     video: Option<Video>,
     /// Camera buffers the controller did not confirm it let go of: never freed.
     kept: Vec<Video>,
+    /// Times the camera dropped off as it started (tried again), and when to try next.
+    video_retries: u32,
+    video_retry_at: u64,
     /// Switching the camera on failed: not tried again until it is switched off.
     video_failed: bool,
 }
@@ -680,6 +685,8 @@ impl Xhci {
             stale: true,
             video: None,
             kept: Vec::new(),
+            video_retries: 0,
+            video_retry_at: 0,
             video_failed: false,
         })
     }
@@ -1115,6 +1122,13 @@ impl Xhci {
     fn video_tick(&mut self) {
         let want = *usb::CAMERA_WANT.get();
         match (want, self.video.is_some()) {
+            // Retrying after the camera dropped off: wait until it is back.
+            (Some(_), false) if self.video_retries > 0 && !self.video_failed && (time::uptime_ms() < self.video_retry_at || usb::CAMERAS.get().is_empty()) => {
+                if time::uptime_ms() > self.video_retry_at + 5000 {
+                    self.video_failed = true;
+                    *usb::CAMERA_STATE.get() = usb::CameraState::Failed(String::from("the camera dropped off and did not come back"));
+                }
+            }
             (Some(size), false) if !self.video_failed || *usb::CAMERA_STATE.get() == usb::CameraState::Off => {
                 self.video_failed = false;
                 *usb::CAMERA_PICTURE.get() = None;
@@ -1129,10 +1143,12 @@ impl Xhci {
             }
             (None, true) => {
                 self.stop_video();
+                self.video_retries = 0;
                 *usb::CAMERA_STATE.get() = usb::CameraState::Off;
             }
             (None, false) => {
                 self.video_failed = false;
+                self.video_retries = 0;
                 if *usb::CAMERA_STATE.get() != usb::CameraState::Off {
                     *usb::CAMERA_STATE.get() = usb::CameraState::Off;
                 }
@@ -1157,9 +1173,17 @@ impl Xhci {
         let Some(index) = self.devices.iter().position(|d| d.port == port) else { return };
         let slot = self.devices[index].slot;
         let video = if self.video.as_ref().is_some_and(|v| v.slot == slot) { self.video.take() } else { None };
-        if video.is_some() {
-            *usb::CAMERA_STATE.get() = usb::CameraState::Failed(String::from("the camera was unplugged"));
-            self.video_failed = true;
+        if let Some(v) = &video {
+            // Some cameras drop off the bus now and then just as they start
+            // sending, and come back a second later: wait for it and try again.
+            if v.seq == 0 && self.video_retries < VIDEO_RETRIES {
+                self.video_retries += 1;
+                self.video_retry_at = time::uptime_ms() + 500;
+                usb::note(&format!("the camera dropped off as it started: trying again ({} of {VIDEO_RETRIES})", self.video_retries));
+            } else {
+                *usb::CAMERA_STATE.get() = usb::CameraState::Failed(String::from("the camera was unplugged"));
+                self.video_failed = true;
+            }
         }
         for ep in self.devices[index].endpoints.iter() {
             for code in usb::keyboard_changes(&ep.last_keys, &[0; 8]) {
