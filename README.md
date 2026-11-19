@@ -1644,16 +1644,19 @@ port 6: 0627:0001 mouse, high speed (in use, 2 reports)
   hub and stick, type on the USB keyboard and move the mouse through QEMU
   (`@usb`, `@keys`, `@mouse`, `@button`) and check the screen.
 
-## USB camera (UVC) 🚧 written for the HP's webcam, being tried there
+## USB camera (UVC) ✅ works on the HP (1bcf:2281 webcam, up to 1280x720)
 
 ```
 bee:/$ camera
-port 4: 1bcf:2281, UVC 1.00
-MJPEG: 640x480 (30/s), 320x240 (30/s), ...
-bee:/$ camera snap /data/me.jpg
-saved a 640 x 480 picture from the camera to /data/me.jpg (38 KiB)
-bee:/$ camera record /data/hello.avi 10
-filmed 297 pictures in 9.9 s to /data/hello.avi (11520 KiB)
+port 3: 1bcf:2281, UVC 1.00
+MJPEG: 1920x1080 (30/s), 1280x720 (30/s), 640x480 (30/s), ...
+YUY2: 1920x1080 (5/s), 1280x720 (10/s), 640x480 (30/s), ...
+bee:/$ camera view
+the camera in a new window: s saves a picture, m mirrors, q leaves
+bee:/$ camera snap /data/me.png 1280x720
+saved a 1280 x 720 picture from the camera to /data/me.png (1177 KiB)
+bee:/$ camera record /data/hello.avi 5
+filmed 87 pictures in 5.0 s to /data/hello.avi (1687 KiB)
 ```
 
 - **What a camera offers** (`beenet/src/uvc.rs`): its configuration
@@ -1675,15 +1678,38 @@ filmed 297 pictures in 9.9 s to /data/hello.avi (11520 KiB)
   JPEG without Huffman tables: the decoder then uses the standard ones, and a
   saved picture gets them written in (`jpeg::with_tables`), so other programs
   open it too. YUY2 is turned into RGB.
+- **`camera view`** (`kernel/src/webcam.rs`): the camera live in a desktop
+  window, as in a mirror (`m` turns that off); `s` saves the picture shown
+  as a JPEG in the home folder; `q` closes it and switches the camera off.
+  Each picture is decoded on every processor; when pictures come faster than
+  they are drawn, the window skips to the latest.
+- **`camera on [WxH]`, `camera off`, `camera log`**: leave the camera
+  sending and watch what arrives (`camera` then counts transfers, bytes,
+  pictures, damaged ones, errors and the ring running dry); the log shows
+  what the driver did and when, for a machine nobody sits at.
 - **`camera snap FILE [WxH]`** skips the first ten pictures (the camera is
   still finding its exposure) and saves JPEG, PNG or BMP by the name.
   **`camera record FILE.avi SECONDS`** puts the camera's JPEGs straight into
   a Motion JPEG AVI (no re-encoding), which `play` and the file manager show.
   Ctrl+C stops either; the camera is switched off afterwards.
-- **Tests:** `beenet` unit tests for descriptors (also cut short), size and
+- **On the HP:** 640x480 and 1280x720 MJPEG at about 17 pictures a second
+  in a dim room (the camera lowers its rate itself), 8000 transfers a
+  second in setting 11 (3 x 1020 bytes per microframe), nothing lost over
+  minutes. At 1920x1080 this camera drops off the bus as soon as it starts
+  sending (it comes back by itself); smaller sizes keep working.
+- **Lessons:** the usb thread waits for the next timer tick between looks
+  at the events, also while a camera sends (the ring holds an eighth of a
+  second). It first called `yield_now` in a loop: with nothing else ready
+  that never switches, the watchdog (rightly) saw a hang and restarted the
+  HP. Camera buffers are freed only after the controller confirmed it
+  stopped the endpoint (Stop Endpoint, or the endpoint dropped); otherwise
+  they are kept, since the controller might still write into them.
+- **Tests:** `beenet` unit tests for descriptors (also cut short, and the
+  HP webcam's real one in `beenet/testdata/uvc-1bcf-2281.hex`), size and
   bandwidth choice, probe blocks, packet assembly, YUY2 colours, and JPEGs
-  without tables; self-tests for the linked ring; `camera.scn` for the
-  commands without a camera (QEMU has no USB camera to attach).
+  without tables; self-tests for the linked ring and for camera pictures
+  (pixels, mirror, saved JPEG); `camera.scn` for the commands without a
+  camera (QEMU has no USB camera to attach).
 
 ## Installing on the hard disk ✅ (works on the HP)
 

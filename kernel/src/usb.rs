@@ -270,6 +270,59 @@ pub enum CameraState {
     Failed(String),
 }
 
+/// The last things the usb thread noted about cameras, with the time (for
+/// `camera log`: what happened on a machine nobody sits at).
+pub static LOG: Global<alloc::collections::VecDeque<String>> = Global::new(alloc::collections::VecDeque::new());
+
+pub fn note(text: &str) {
+    let log = LOG.get();
+    if log.len() >= 40 {
+        log.pop_front();
+    }
+    let ms = crate::time::uptime_ms();
+    log.push_back(alloc::format!("{}.{:03} {text}", ms / 1000, ms % 1000));
+}
+
+/// What came from the camera since it was switched on (for `camera`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CameraStats {
+    pub transfers: u64,
+    pub bytes: u64,
+    /// Transfers that ended in an error, and the last error's code.
+    pub errors: u64,
+    pub last_error: u8,
+    /// Events for transfers not (or no longer) known, or skipped ones.
+    pub lost: u64,
+    /// The ring ran dry (the controller found no transfer waiting).
+    pub overruns: u64,
+    pub pictures: u32,
+    pub damaged: u32,
+    pub not_jpeg: u32,
+}
+
+impl CameraStats {
+    pub fn describe(&self) -> String {
+        let mut text = alloc::format!(
+            "{} transfers, {} KiB, {} pictures ({} damaged, {} not JPEG), {} lost",
+            self.transfers,
+            self.bytes / 1024,
+            self.pictures,
+            self.damaged,
+            self.not_jpeg,
+            self.lost
+        );
+        if self.overruns > 0 {
+            text += &alloc::format!(", ran dry {} times", self.overruns);
+        }
+        if self.errors > 0 {
+            text += &alloc::format!(", {} errors (last: code {})", self.errors, self.last_error);
+        }
+        text
+    }
+}
+
+pub static CAMERA_STATS: Global<CameraStats> = Global::new(CameraStats { transfers: 0, bytes: 0, errors: 0, last_error: 0, lost: 0, overruns: 0, pictures: 0, damaged: 0, not_jpeg: 0 });
+
 /// The picture size wanted from the first camera; `None` switches it off.
 /// The usb thread does the switching.
 pub static CAMERA_WANT: Global<Option<(u16, u16)>> = Global::new(None);

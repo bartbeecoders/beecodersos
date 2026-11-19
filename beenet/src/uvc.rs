@@ -527,3 +527,29 @@ mod tests {
         assert_eq!(yuy2_to_rgb(&[1, 2], 2, 1), vec![0, 0]); // too short: black
     }
 }
+
+#[cfg(test)]
+mod real_camera {
+    use super::*;
+
+    /// The HP's webcam (1bcf:2281), as `camera raw` printed its description.
+    fn descriptor() -> Vec<u8> {
+        let hex: String = include_str!("../testdata/uvc-1bcf-2281.hex").split_whitespace().collect();
+        (0..hex.len() / 2).map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap()).collect()
+    }
+
+    #[test]
+    fn the_hp_webcam() {
+        let camera = parse(&descriptor()).unwrap();
+        assert_eq!(camera.version, 0x0100);
+        assert_eq!(camera.formats.len(), 2);
+        assert_eq!((camera.formats[0].kind, camera.formats[0].frames.len()), (Kind::Mjpeg, 10));
+        assert_eq!((camera.formats[1].kind, camera.formats[1].frames.len()), (Kind::Yuy2, 10));
+        let (_, frame) = camera.pick(Kind::Mjpeg, 1280, 720).unwrap();
+        assert_eq!((frame.width, frame.height), (1280, 720));
+        assert_eq!(camera.alts.len(), 11);
+        assert_eq!(camera.alts[10], Alt { setting: 11, endpoint: 0x81, packet: 1020, per_frame: 3, interval: 1, bulk: false });
+        assert_eq!(camera.alt_for(1000).unwrap().setting, 7); // 2 x 640 bytes
+        assert_eq!(camera.alt_for(3060).unwrap().setting, 11);
+    }
+}

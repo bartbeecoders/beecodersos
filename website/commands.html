@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=211">
+<link rel="stylesheet" href="style.css?v=232">
 </head>
 <body>
 
@@ -30,7 +30,7 @@
   <section class="wrap commands">
     <p class="kicker">BeeShell</p>
     <h2>Every <em>command</em>.</h2>
-    <p class="sub">What <code>help</code> shows in BeeCodersOs build 211: 70 entries, taken from the
+    <p class="sub">What <code>help</code> shows in BeeCodersOs build 232: 75 entries, taken from the
       OS's own source (<code>COMMANDS</code> in <code>kernel/src/shell.rs</code>), so this page says what the OS says.
       Paths can be relative; <code>"quotes"</code> group words.</p>
     <dl class="cmds">
@@ -84,6 +84,11 @@
       <div class="cmd"><dt><code>lspci [-v]</code></dt><dd>list PCI devices (-v: what each one can do)</dd></div>
       <div class="cmd"><dt><code>install [DISK]</code></dt><dd>put the OS on a disk, or upgrade it (alone: list the disks)</dd></div>
       <div class="cmd"><dt><code>lsusb</code></dt><dd>USB controller and devices</dd></div>
+      <div class="cmd"><dt><code>camera [raw|log]</code></dt><dd>USB cameras: the picture formats and sizes they offer (&#x27;raw&#x27;: the description as the camera gave it; &#x27;log&#x27;: what the driver noted)</dd></div>
+      <div class="cmd"><dt><code>camera view</code></dt><dd>the camera live in a window, as in a mirror: s saves a picture, m mirrors, q leaves</dd></div>
+      <div class="cmd"><dt><code>camera on [WxH] | off</code></dt><dd>leave the camera sending (then &#x27;camera&#x27; counts what arrives), or stop it</dd></div>
+      <div class="cmd"><dt><code>camera snap FILE [WxH]</code></dt><dd>take a picture with the USB camera (640x480 unless asked): JPEG, PNG or BMP by the name</dd></div>
+      <div class="cmd"><dt><code>camera record FILE.avi SECS</code></dt><dd>film with the USB camera into a Motion JPEG video (play it with &#x27;play&#x27;)</dd></div>
       <div class="cmd"><dt><code>threads</code></dt><dd>what runs side by side inside the kernel</dd></div>
       <div class="cmd"><dt><code>monitor</code></dt><dd>system monitor in a window: work per processor, memory, network, threads</dd></div>
       <div class="cmd"><dt><code>view FILE</code></dt><dd>show a picture (JPEG, PNG, GIF, BMP or PPM) in a window; animated GIFs play</dd></div>
@@ -102,7 +107,7 @@
       <div class="cmd"><dt><code>terminal</code></dt><dd>one more terminal window on the desktop, with a shell of its own</dd></div>
       <div class="cmd"><dt><code>desktop [on|off]</code></dt><dd>graphical desktop: the terminal in a window (on by default; saved); &#x27;desktop wallpaper FILE|none&#x27;</dd></div>
       <div class="cmd"><dt><code>slots</code></dt><dd>A/B kernel slots: which one runs, last trial</dd></div>
-      <div class="cmd"><dt><code>crash [exception]</code></dt><dd>deliberately crash the kernel: a panic, or a CPU exception (tests crash reports)</dd></div>
+      <div class="cmd"><dt><code>crash panic|exception|hang</code></dt><dd>deliberately crash the kernel: a panic, a CPU exception, or a hang the watchdog ends (tests crash reports)</dd></div>
       <div class="cmd"><dt><code>reboot, shutdown</code></dt><dd>restart / power off</dd></div>
     </dl>
   </section>

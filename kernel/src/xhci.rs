@@ -68,7 +68,10 @@ impl Page {
 
     fn bytes_at(&self, from: usize, len: usize) -> Vec<u8> {
         let end = (from + len).min(PAGE);
-        (from.min(end)..end).map(|i| unsafe { self.0.add(i).read_volatile() }).collect()
+        let from = from.min(end);
+        // What the controller wrote is in memory before its event said so.
+        core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
+        unsafe { core::slice::from_raw_parts(self.0.add(from), end - from) }.to_vec()
     }
 
     fn write_bytes(&self, data: &[u8]) {
@@ -147,6 +150,7 @@ const TRB_DISABLE_SLOT: u32 = 10;
 const TRB_ADDRESS_DEVICE: u32 = 11;
 const TRB_CONFIGURE_ENDPOINT: u32 = 12;
 const TRB_EVALUATE_CONTEXT: u32 = 13;
+const TRB_STOP_ENDPOINT: u32 = 15;
 const EVENT_TRANSFER: u32 = 32;
 const EVENT_COMMAND: u32 = 33;
 const EVENT_PORT: u32 = 34;
@@ -434,6 +438,7 @@ struct Video {
     seq: u32,
     /// New transfers were queued: ring the doorbell.
     ring_bell: bool,
+    stats: usb::CameraStats,
 }
 
 /// Transfers kept queued for a camera: at 8000 a second, an eighth of a second.
@@ -456,19 +461,32 @@ impl Video {
 
     /// A transfer finished (and the ones before it, if they gave no event).
     fn completed(&mut self, trb: u64, code: u8, left: u32) {
-        let Some(pos) = self.queued.iter().position(|q| q.0 == trb) else { return };
+        let Some(pos) = self.queued.iter().position(|q| q.0 == trb) else {
+            self.stats.lost += 1;
+            return;
+        };
         for i in 0..=pos {
             let Some((_, n)) = self.queued.pop_front() else { break };
-            if i == pos && (code == CODE_SUCCESS || code == CODE_SHORT_PACKET) {
+            self.stats.transfers += 1;
+            if i < pos {
+                self.stats.lost += 1;
+            } else if code == CODE_SUCCESS || code == CODE_SHORT_PACKET {
                 let got = self.td_len.saturating_sub(left as usize);
+                self.stats.bytes += got as u64;
                 let (_, page, offset) = self.buffer(n);
                 let packet = page.bytes_at(offset, got);
                 self.frames.push(&packet);
+            } else {
+                self.stats.errors += 1;
+                self.stats.last_error = code;
             }
             self.queue(n);
         }
+        self.stats.pictures = self.frames.finished;
+        self.stats.damaged = self.frames.dropped;
         if let Some(data) = self.frames.take() {
             if self.kind == uvc::Kind::Mjpeg && !beenet::jpeg::is_jpeg(&data) {
+                self.stats.not_jpeg += 1;
                 return;
             }
             self.seq += 1;
@@ -504,6 +522,8 @@ struct Xhci {
     /// The list `lsusb` shows is out of date.
     stale: bool,
     video: Option<Video>,
+    /// Camera buffers the controller did not confirm it let go of: never freed.
+    kept: Vec<Video>,
     /// Switching the camera on failed: not tried again until it is switched off.
     video_failed: bool,
 }
@@ -659,6 +679,7 @@ impl Xhci {
             mouse: None,
             stale: true,
             video: None,
+            kept: Vec::new(),
             video_failed: false,
         })
     }
@@ -701,6 +722,7 @@ impl Xhci {
                     if let Some(video) = video {
                         if event.code() == CODE_RING_UNDERRUN || event.code() == CODE_RING_OVERRUN {
                             video.ring_bell = true; // ran dry: start again when refilled
+                            video.stats.overruns += 1;
                         } else {
                             video.completed(event.param, event.code(), left);
                         }
@@ -974,7 +996,9 @@ impl Xhci {
             }
         };
         let interface = camera.streaming_interface;
+        usb::note(&format!("start: {:?} {}x{} (format {}, frame {})", kind, frame.width, frame.height, format.index, frame.index));
         self.control(index, 0x00, 9, camera.configuration as u16, 0, 0)?;
+        usb::note("configuration set");
         // Probe: propose; the camera answers with what it will really do. Then commit.
         let mut block = uvc::probe(camera.version, format.index, frame.index, frame.default_interval);
         let len = block.len() as u16;
@@ -983,12 +1007,15 @@ impl Xhci {
         let got = self.control(index, 0xA1, 0x81, 0x0100, interface as u16, len)?;
         let answer = self.devices[index].buffer.bytes(got);
         let (max_frame, payload) = uvc::negotiated(&answer).ok_or("the camera's answer is cut short")?;
+        usb::note(&format!("probe: {got} bytes back, largest picture {max_frame}, payload {payload}"));
         let n = got.min(block.len()).min(answer.len());
         block[..n].copy_from_slice(&answer[..n]);
         self.devices[index].buffer.write_bytes(&block);
         self.control(index, 0x21, 0x01, 0x0200, interface as u16, len)?;
+        usb::note("committed");
         let alt = camera.alt_for(payload).ok_or("the camera has no isochronous setting")?;
         self.control(index, 0x01, 11, alt.setting as u16, interface as u16, 0)?;
+        usb::note(&format!("setting {} ({} x {} bytes)", alt.setting, alt.per_frame, alt.packet));
 
         let td_len = alt.bandwidth() as usize;
         let per_page = (PAGE / td_len.max(1)).max(1);
@@ -1015,9 +1042,11 @@ impl Xhci {
         device.input.write32(at + 16, bandwidth & 0xFFFF | (bandwidth & 0xFFFF) << 16);
         let input_addr = device.input.addr();
         if let Err(e) = self.command(Trb::new(TRB_CONFIGURE_ENDPOINT, input_addr, 0, (slot as u32) << 24)) {
+            usb::note(&format!("configure endpoint: {e}"));
             let _ = self.control(index, 0x01, 11, 0, interface as u16, 0);
             return Err(String::from(e));
         }
+        usb::note(&format!("endpoint {dci} configured, {VIDEO_TDS} transfers of {td_len} bytes"));
         let mut video = Video {
             slot,
             dci,
@@ -1034,6 +1063,7 @@ impl Xhci {
             height: frame.height,
             seq: 0,
             ring_bell: false,
+            stats: usb::CameraStats::default(),
         };
         for n in 0..VIDEO_TDS {
             video.queue(n);
@@ -1054,19 +1084,31 @@ impl Xhci {
 
     /// Switch the camera off: back to its zero-bandwidth setting, and the
     /// endpoint dropped (the controller lets go of our buffers).
+    /// The buffers are given back only when the controller confirmed it let
+    /// go of them; otherwise they are kept for ever (memory the controller
+    /// may still write into must never be handed out again).
     fn stop_video(&mut self) {
         let Some(video) = self.video.take() else { return };
-        let Some(index) = self.devices.iter().position(|d| d.slot == video.slot) else { return };
+        let Some(index) = self.devices.iter().position(|d| d.slot == video.slot) else {
+            self.kept.push(video);
+            return;
+        };
+        let (slot, dci) = (video.slot, video.dci);
+        let stopped = self.command(Trb::new(TRB_STOP_ENDPOINT, 0, 0, (slot as u32) << 24 | (dci as u32) << 16)).is_ok();
+        usb::note(&format!("stop: endpoint stopped {stopped}; {}", video.stats.describe()));
         let _ = self.control(index, 0x01, 11, 0, video.interface as u16, 0);
         let cs = self.context_size;
         let device = &self.devices[index];
         let entries = device.context.read32(0) >> 27;
         self.write_input(device, 0, entries, max_packet_of(device, cs));
-        device.input.write32(0, 1 << video.dci);
+        device.input.write32(0, 1 << dci);
         device.input.write32(4, 1);
-        let (slot, input_addr) = (device.slot, device.input.addr());
-        let _ = self.command(Trb::new(TRB_CONFIGURE_ENDPOINT, input_addr, 0, (slot as u32) << 24));
-        drop(video);
+        let input_addr = device.input.addr();
+        let dropped = self.command(Trb::new(TRB_CONFIGURE_ENDPOINT, input_addr, 0, (slot as u32) << 24)).is_ok();
+        usb::note(&format!("stop: endpoint dropped {dropped}"));
+        if !(stopped || dropped) {
+            self.kept.push(video);
+        }
     }
 
     /// Follow `usb::CAMERA_WANT`.
@@ -1076,6 +1118,7 @@ impl Xhci {
             (Some(size), false) if !self.video_failed || *usb::CAMERA_STATE.get() == usb::CameraState::Off => {
                 self.video_failed = false;
                 *usb::CAMERA_PICTURE.get() = None;
+                *usb::CAMERA_STATS.get() = usb::CameraStats::default();
                 match self.start_video(size) {
                     Ok(what) => *usb::CAMERA_STATE.get() = usb::CameraState::On(what),
                     Err(why) => {
@@ -1097,6 +1140,7 @@ impl Xhci {
             _ => {}
         }
         if let Some(video) = self.video.as_mut() {
+            *usb::CAMERA_STATS.get() = video.stats;
             if video.ring_bell {
                 video.ring_bell = false;
                 let (slot, dci) = (video.slot, video.dci);
@@ -1112,8 +1156,8 @@ impl Xhci {
         self.failed.retain(|(p, _)| *p != port);
         let Some(index) = self.devices.iter().position(|d| d.port == port) else { return };
         let slot = self.devices[index].slot;
-        if self.video.as_ref().is_some_and(|v| v.slot == slot) {
-            self.video = None; // unplugged: the slot goes, and the buffers with it
+        let video = if self.video.as_ref().is_some_and(|v| v.slot == slot) { self.video.take() } else { None };
+        if video.is_some() {
             *usb::CAMERA_STATE.get() = usb::CameraState::Failed(String::from("the camera was unplugged"));
             self.video_failed = true;
         }
@@ -1122,7 +1166,13 @@ impl Xhci {
                 keyboard::push_scancode(code);
             }
         }
-        let _ = self.command(Trb::new(TRB_DISABLE_SLOT, 0, 0, (slot as u32) << 24));
+        let disabled = self.command(Trb::new(TRB_DISABLE_SLOT, 0, 0, (slot as u32) << 24)).is_ok();
+        if let Some(video) = video {
+            // The slot is gone, and with it the endpoint: only then are the buffers free.
+            if !disabled {
+                self.kept.push(video);
+            }
+        }
         self.dcbaa.write64(slot as usize * 8, 0);
         self.devices.remove(index);
     }
@@ -1138,6 +1188,9 @@ impl Xhci {
             let connected = status & PORT_CONNECTED != 0;
             let known = self.devices.iter().any(|d| d.port == port) || self.failed.iter().any(|(p, _)| *p == port);
             if known && (!connected || status & PORT_CONNECT_CHANGE != 0) {
+                if usb::CAMERAS.get().iter().any(|c| c.port == port) {
+                    usb::note(&format!("port {port}: camera gone (port status {status:#x})"));
+                }
                 self.detach(port);
             }
             let known = self.devices.iter().any(|d| d.port == port) || self.failed.iter().any(|(p, _)| *p == port);
@@ -1241,13 +1294,12 @@ pub fn start() -> Option<String> {
             }
             controller.tick(now);
             *usb::READY.get() = true;
-            if controller.video.is_some() {
-                // A camera fills thousands of transfers a second: look again
-                // as soon as the other threads had their turn.
-                thread::yield_now();
-            } else {
-                thread::wait_until(|| time::uptime_ms() != now || usb::CAMERA_WANT.get().is_some());
-            }
+            // Wait for the next tick, also while a camera sends: its ring holds
+            // an eighth of a second. (Never `yield_now` in a loop: with nothing
+            // else to run it does not switch, and the watchdog rightly calls
+            // that a hang. It restarted the HP twice.)
+            let want = usb::CAMERA_WANT.get().is_some();
+            thread::wait_until(|| time::uptime_ms() != now || usb::CAMERA_WANT.get().is_some() != want);
         }
     })?;
     // Wait for the first look at the ports, so a USB keyboard works when the

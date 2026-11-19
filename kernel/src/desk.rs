@@ -90,6 +90,17 @@ pub fn open_video(path: &str) -> Result<(usize, usize, usize, usize, bool), Stri
     Ok((window, w, h, n, sound))
 }
 
+/// Open the camera window: what the USB camera sees, live. Saved pictures
+/// go to the home folder.
+pub fn open_camera() -> Result<usize, &'static str> {
+    if crate::usb::CAMERAS.get().is_empty() {
+        return Err("no camera plugged in ('lsusb' lists the devices)");
+    }
+    let storage = storage::handle().ok_or("no file system is mounted")?;
+    let folder = String::from(home());
+    open("Camera", "camera", false, move |window| crate::webcam::run(window, folder, storage))
+}
+
 /// Open the system monitor in a window.
 pub fn open_monitor() -> Result<usize, &'static str> {
     open("Monitor", "monitor", false, crate::monitor::run)

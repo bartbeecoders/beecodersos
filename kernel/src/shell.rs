@@ -594,15 +594,32 @@ impl Shell {
         result
     }
 
-    /// A camera picture as pixels, or `None` when it is damaged.
-    fn camera_pixels(picture: &crate::usb::Picture) -> Option<crate::image::Image> {
-        match picture.kind {
-            beenet::uvc::Kind::Mjpeg => crate::image::decode(&picture.data).ok(),
-            _ => {
-                let (w, h) = (picture.width as usize, picture.height as usize);
-                (picture.data.len() >= w * h * 2)
-                    .then(|| crate::image::Image { width: w, height: h, pixels: beenet::uvc::yuy2_to_rgb(&picture.data, w, h) })
-            }
+    /// `camera on` / `camera off`: leave the camera sending (to watch what
+    /// arrives with `camera`), or stop it.
+    fn camera_switch(&mut self, size: Option<(u16, u16)>) {
+        use crate::usb::{CameraState, CAMERAS, CAMERA_STATE, CAMERA_WANT};
+        if size.is_some() && CAMERAS.get().is_empty() {
+            error("camera: no camera plugged in ('lsusb' lists the devices)");
+            return;
+        }
+        if size.is_some() {
+            *CAMERA_STATE.get() = CameraState::Off;
+        }
+        *CAMERA_WANT.get() = size;
+        let until = crate::time::uptime_ms() + 3000;
+        crate::thread::pause(|| {
+            let state = CAMERA_STATE.get();
+            crate::time::uptime_ms() >= until
+                || match size {
+                    Some(_) => *state != CameraState::Off,
+                    None => *state == CameraState::Off,
+                }
+        });
+        match CAMERA_STATE.get().clone() {
+            CameraState::On(what) => println!("camera on: {what}"),
+            CameraState::Failed(why) => error(&format!("camera: {why}")),
+            CameraState::Off if size.is_none() => println!("camera off"),
+            CameraState::Off => error("camera: the usb thread did not answer"),
         }
     }
 
@@ -620,7 +637,7 @@ impl Shell {
             if seen <= SKIP {
                 return true;
             }
-            match Self::camera_pixels(&picture) {
+            match crate::webcam::pixels(&picture) {
                 Some(image) => {
                     got = Some((picture, image));
                     false
@@ -643,10 +660,8 @@ impl Shell {
             crate::image::encode_png(w, h, &pixel)
         } else if name.ends_with(".bmp") {
             crate::image::encode_bmp(w, h, pixel)
-        } else if picture.kind == beenet::uvc::Kind::Mjpeg {
-            beenet::jpeg::with_tables(&picture.data)
         } else {
-            crate::image::encode_jpeg(w, h, 90, &pixel)
+            crate::webcam::as_jpeg(&picture, &image)
         };
         match self.storage.fs().write_file(&path, &data) {
             Ok(()) => println!("saved a {w} x {h} picture from the camera to {path} ({} KiB)", data.len().div_ceil(1024)),
@@ -667,7 +682,7 @@ impl Shell {
             let now = crate::time::uptime_ms();
             let jpeg = match picture.kind {
                 beenet::uvc::Kind::Mjpeg => beenet::jpeg::with_tables(&picture.data),
-                _ => match Self::camera_pixels(&picture) {
+                _ => match crate::webcam::pixels(&picture) {
                     Some(image) => {
                         let w = image.width;
                         crate::image::encode_jpeg(image.width, image.height, 80, &|x, y| image.pixels[y * w + x])
@@ -1495,6 +1510,29 @@ impl Shell {
                     crate::usb::CameraState::On(what) => println!("sending: {what}"),
                     crate::usb::CameraState::Failed(why) => println!("last attempt failed: {why}"),
                     crate::usb::CameraState::Off => {}
+                }
+                let stats = *crate::usb::CAMERA_STATS.get();
+                if stats != crate::usb::CameraStats::default() {
+                    println!("{}", stats.describe());
+                }
+            }
+            ("camera", ["on"]) => self.camera_switch(Some((640, 480))),
+            ("camera", ["on", size]) => match parse_size(size) {
+                Some(size) => self.camera_switch(Some(size)),
+                None => error("usage: camera on [WIDTHxHEIGHT]"),
+            },
+            ("camera", ["off"]) => self.camera_switch(None),
+            ("camera", ["view"]) => match crate::desk::open_camera() {
+                Ok(_) => println!("the camera in a new window: s saves a picture, m mirrors, q leaves"),
+                Err(why) => error(&format!("camera: {why}")),
+            },
+            ("camera", ["log"]) => {
+                let lines: Vec<String> = crate::usb::LOG.get().iter().cloned().collect();
+                if lines.is_empty() {
+                    println!("nothing noted yet");
+                }
+                for line in lines {
+                    println!("{line}");
                 }
             }
             ("camera", ["snap", file]) => self.camera_snap(file, (640, 480)),
@@ -2918,7 +2956,9 @@ const COMMANDS: &[(&str, &str)] = &[
     ("lspci [-v]", "list PCI devices (-v: what each one can do)"),
     ("install [DISK]", "put the OS on a disk, or upgrade it (alone: list the disks)"),
     ("lsusb", "USB controller and devices"),
-    ("camera [raw]", "USB cameras: the picture formats and sizes they offer ('raw': the description as the camera gave it)"),
+    ("camera [raw|log]", "USB cameras: the picture formats and sizes they offer ('raw': the description as the camera gave it; 'log': what the driver noted)"),
+    ("camera view", "the camera live in a window, as in a mirror: s saves a picture, m mirrors, q leaves"),
+    ("camera on [WxH] | off", "leave the camera sending (then 'camera' counts what arrives), or stop it"),
     ("camera snap FILE [WxH]", "take a picture with the USB camera (640x480 unless asked): JPEG, PNG or BMP by the name"),
     ("camera record FILE.avi SECS", "film with the USB camera into a Motion JPEG video (play it with 'play')"),
     ("threads", "what runs side by side inside the kernel"),
