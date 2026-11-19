@@ -205,7 +205,7 @@ kernel/
   src/fat.rs           read-only FAT16, for the boot partition (boot settings, kernel slots)
   src/bootmods.rs      files the bootloader loaded with the kernel (the install image)
   src/xhci.rs          USB host controller (xHCI): rings, ports, devices; polled by the usb thread
-  src/usb.rs           USB descriptors, keyboard and mouse boot protocol (`lsusb`)
+  src/usb.rs           USB descriptors, keyboard and mouse boot protocol (`lsusb`), cameras (`camera`)
   src/e1000.rs         Intel network cards: e1000, e1000e, I217 (descriptor rings; interrupt + poll)
   src/net.rs           card + beenet stack: polling, settings, TCP streams, HTTP / time / TFTP transfers
   src/thread.rs        cooperative kernel threads: stacks, switching, waiting
@@ -332,7 +332,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `whoami`, `users`, `useradd`, `userdel`, `passwd`, `login`, `logout`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `head`, `tail`, `wc`, `grep`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `timezone`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `do`, `ai`,
-`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `cpu`, `monitor`, `view`, `screenshot`, `record`, `sound`, `beep`, `play`, `tune`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `vnc`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `cpu`, `monitor`, `view`, `screenshot`, `record`, `sound`, `beep`, `play`, `tune`, `lsusb`, `camera`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `vnc`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash panic|exception|hang`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Text tools** (`kernel/src/textops.rs`, self-tested; `text-tools.scn`):
 `head` / `tail [-n N | -N] FILE` show the first or last lines (10 unless N
@@ -458,8 +458,9 @@ found and fixed (by a person or, later, an AI):
   (the good slot then boots: a rollback without anyone at the machine), and a
   machine driven from the host (`ai control on` or `update auto on`) that had
   been running for at least a minute.
-  `crash` crashes the kernel on purpose with a panic, `crash exception` with
-  a CPU exception (to test this).
+  `crash panic` crashes the kernel on purpose with a panic, `crash exception`
+  with a CPU exception (to test this); a bare `crash` only shows its usage,
+  so it cannot stop a machine by accident (it once did, typed from afar).
 - **Host report:** `make report` reads the VM's disk (`build/beecoders.img` if
   it exists, else `build/disk.img`; the VM should be off) and beehive's
   signals. By hand: `tools/bee_report.py --disk IMAGE --beehive [--json]`.
@@ -1133,7 +1134,10 @@ machine's own console.
   (`beehive.py offer`), downloads it, checks its SHA-256, writes it into the
   spare kernel slot and marks it on trial. The A/B rollback decides at the
   next boot, and the machine reports "healthy" or "failed" back to beehive.
-  A build that failed on a machine is not fetched there again.
+  A build that failed on a machine is not fetched there again. The kernel
+  comes in pieces, 32 asked for at once; only as much of the slot is
+  written and read back as the longer of the old and new kernel reaches
+  (the old one's ELF header says where it ends; past it the slot is zeros).
 - **`update auto on`** (saved): the machine asks every minute by itself and
   restarts to try what it fetched.
 - **`ai control on`** (saved): beehive may run shell commands on the machine
@@ -1639,6 +1643,47 @@ port 6: 0627:0001 mouse, high speed (in use, 2 reports)
   dragging. Scenarios `usb*.scn` attach QEMU's USB keyboard, mouse, tablet,
   hub and stick, type on the USB keyboard and move the mouse through QEMU
   (`@usb`, `@keys`, `@mouse`, `@button`) and check the screen.
+
+## USB camera (UVC) 🚧 written for the HP's webcam, being tried there
+
+```
+bee:/$ camera
+port 4: 1bcf:2281, UVC 1.00
+MJPEG: 640x480 (30/s), 320x240 (30/s), ...
+bee:/$ camera snap /data/me.jpg
+saved a 640 x 480 picture from the camera to /data/me.jpg (38 KiB)
+bee:/$ camera record /data/hello.avi 10
+filmed 297 pictures in 9.9 s to /data/hello.avi (11520 KiB)
+```
+
+- **What a camera offers** (`beenet/src/uvc.rs`): its configuration
+  descriptor is read when it is plugged in (a USB Video Class "video control"
+  and "video streaming" interface; MJPEG and YUY2 formats with their sizes and
+  picture rates; the alternate settings of the streaming interface, each with
+  an isochronous endpoint of another packet size). `camera` lists it;
+  `camera raw` shows the descriptor itself.
+- **Switching it on** (`kernel/src/xhci.rs`, the usb thread): the "probe" and
+  "commit" requests agree on a format, size and rate with the camera; the
+  alternate setting with the least bandwidth that still carries the camera's
+  largest payload is selected; the isochronous endpoint gets a ring of 1000
+  transfers (an eighth of a second at 8000 a second, on several pages linked
+  together) and the event ring holds 4096 events. While the camera sends, the
+  usb thread looks at the events whenever the other threads had their turn.
+- **Pictures**: every packet starts with a small header (a frame id that
+  flips with every picture, end-of-frame and error bits); `uvc::Frames` puts
+  the packets back together and drops damaged pictures. Cameras send Motion
+  JPEG without Huffman tables: the decoder then uses the standard ones, and a
+  saved picture gets them written in (`jpeg::with_tables`), so other programs
+  open it too. YUY2 is turned into RGB.
+- **`camera snap FILE [WxH]`** skips the first ten pictures (the camera is
+  still finding its exposure) and saves JPEG, PNG or BMP by the name.
+  **`camera record FILE.avi SECONDS`** puts the camera's JPEGs straight into
+  a Motion JPEG AVI (no re-encoding), which `play` and the file manager show.
+  Ctrl+C stops either; the camera is switched off afterwards.
+- **Tests:** `beenet` unit tests for descriptors (also cut short), size and
+  bandwidth choice, probe blocks, packet assembly, YUY2 colours, and JPEGs
+  without tables; self-tests for the linked ring; `camera.scn` for the
+  commands without a camera (QEMU has no USB camera to attach).
 
 ## Installing on the hard disk ✅ (works on the HP)
 

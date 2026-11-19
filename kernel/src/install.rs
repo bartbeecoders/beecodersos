@@ -392,7 +392,17 @@ pub fn write_trial<D: BlockDevice>(disk: &mut D, kernel: &[u8], build: u32, mut 
             real.div_ceil(1024)
         ));
     }
-    let target = boot.sectors(disk, &old).ok_or("the spare kernel slot on the disk is damaged")?;
+    let mut target = boot.sectors(disk, &old).ok_or("the spare kernel slot on the disk is damaged")?;
+    // Past the end of the kernel already in the slot there are only zeros
+    // (every write fills the rest of what it covers with zeros): write and
+    // check only as far as the longer of the two kernels reaches.
+    if let Some(&first) = target.first() {
+        disk.read_block(first, &mut sector).map_err(|e| fail("reading the spare kernel slot", e))?;
+        if let Some(old_end) = elf_end(&sector) {
+            let reach = old_end.max(real).div_ceil(BLOCK_SIZE);
+            target.truncate(reach.max(1));
+        }
+    }
 
     step(&format!("writing the new kernel (b{build}) into slot {}", spare as char));
     let content = |i: usize| -> Block {
@@ -436,6 +446,37 @@ pub fn write_trial<D: BlockDevice>(disk: &mut D, kernel: &[u8], build: u32, mut 
     bootslots::render(&mut sector, &state);
     disk.write_block(conf, &sector).and_then(|_| disk.flush()).map_err(|e| fail("writing the boot settings", e))?;
     Ok(spare)
+}
+
+/// Where an ELF file ends, from its first sector: the end of its section
+/// header table or of its last program segment, whichever is later (a
+/// linker puts the section headers last). `None` when the sector holds no
+/// ELF header, or numbers that make no sense.
+pub fn elf_end(first: &[u8]) -> Option<usize> {
+    if first.len() < 64 || &first[..4] != b"\x7fELF" {
+        return None;
+    }
+    let u16_at = |at: usize| u16::from_le_bytes([first[at], first[at + 1]]) as usize;
+    let u32_at = |at: usize| u32::from_le_bytes(first[at..at + 4].try_into().unwrap()) as usize;
+    let u64_at = |at: usize| u64::from_le_bytes(first[at..at + 8].try_into().unwrap()) as usize;
+    // (program headers at, their size and number, section headers likewise)
+    let (phoff, phsize, phnum, shoff, shsize, shnum, wide) = match first[4] {
+        1 => (u32_at(0x1C), u16_at(0x2A), u16_at(0x2C), u32_at(0x20), u16_at(0x2E), u16_at(0x30), false),
+        2 => (u64_at(0x20), u16_at(0x36), u16_at(0x38), u64_at(0x28), u16_at(0x3A), u16_at(0x3C), true),
+        _ => return None,
+    };
+    let mut end = shoff.checked_add(shsize.checked_mul(shnum)?)?;
+    for i in 0..phnum {
+        let at = phoff.checked_add(i.checked_mul(phsize)?)?;
+        let (offset, size) = if wide {
+            (first.get(at + 8..at + 16)?, first.get(at + 32..at + 40)?)
+        } else {
+            (first.get(at + 4..at + 8)?, first.get(at + 16..at + 20)?)
+        };
+        let number = |b: &[u8]| b.iter().rev().fold(0usize, |n, x| n << 8 | *x as usize);
+        end = end.max(number(offset).checked_add(number(size))?);
+    }
+    (end >= 64 && end < 1 << 30).then_some(end)
 }
 
 /// Write the boot area and the os partition again; keep the data partition

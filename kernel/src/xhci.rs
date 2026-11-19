@@ -21,7 +21,9 @@ use crate::{console, keyboard, thread, time};
 use alloc::alloc::{alloc_zeroed, dealloc, Layout};
 use alloc::format;
 use alloc::string::String;
+use alloc::collections::VecDeque;
 use alloc::vec::Vec;
+use beenet::uvc;
 
 const PAGE: usize = 4096;
 const BELOW_4G: u64 = 1 << 32;
@@ -61,12 +63,57 @@ impl Page {
     }
 
     fn bytes(&self, len: usize) -> Vec<u8> {
-        let len = len.min(PAGE);
-        (0..len).map(|i| unsafe { self.0.add(i).read_volatile() }).collect()
+        self.bytes_at(0, len)
+    }
+
+    fn bytes_at(&self, from: usize, len: usize) -> Vec<u8> {
+        let end = (from + len).min(PAGE);
+        (from.min(end)..end).map(|i| unsafe { self.0.add(i).read_volatile() }).collect()
+    }
+
+    fn write_bytes(&self, data: &[u8]) {
+        for (i, b) in data.iter().take(PAGE).enumerate() {
+            unsafe { self.0.add(i).write_volatile(*b) };
+        }
     }
 
     fn clear(&self) {
         unsafe { self.0.write_bytes(0, PAGE) };
+    }
+}
+
+/// A zeroed block of `EVENT_TRBS` events, aligned to its size, below 4 GiB:
+/// the event ring. A camera alone reports up to 8000 transfers a second.
+pub struct EventBlock(*mut u8);
+
+pub const EVENT_TRBS: usize = 4096;
+const EVENT_BYTES: usize = EVENT_TRBS * 16;
+
+impl EventBlock {
+    fn new() -> Option<EventBlock> {
+        let p = unsafe { alloc_zeroed(Layout::from_size_align(EVENT_BYTES, EVENT_BYTES).ok()?) };
+        if p.is_null() {
+            return None;
+        }
+        let block = EventBlock(p);
+        (block.addr() + EVENT_BYTES as u64 <= BELOW_4G).then_some(block)
+    }
+
+    fn addr(&self) -> u64 {
+        self.0 as u64
+    }
+
+    fn read32(&self, at: usize) -> u32 {
+        assert!(at + 4 <= EVENT_BYTES);
+        unsafe { (self.0.add(at) as *const u32).read_volatile() }
+    }
+}
+
+impl Drop for EventBlock {
+    fn drop(&mut self) {
+        if let Ok(layout) = Layout::from_size_align(EVENT_BYTES, EVENT_BYTES) {
+            unsafe { dealloc(self.0, layout) };
+        }
     }
 }
 
@@ -92,6 +139,9 @@ const TRB_SETUP: u32 = 2;
 const TRB_DATA: u32 = 3;
 const TRB_STATUS: u32 = 4;
 const TRB_LINK: u32 = 6;
+const TRB_ISOCH: u32 = 5;
+/// Isochronous TRB: start at the next chance (no frame number given).
+const START_ASAP: u32 = 1 << 31;
 const TRB_ENABLE_SLOT: u32 = 9;
 const TRB_DISABLE_SLOT: u32 = 10;
 const TRB_ADDRESS_DEVICE: u32 = 11;
@@ -109,6 +159,8 @@ const DIRECTION_IN: u32 = 1 << 16;
 
 const CODE_SUCCESS: u8 = 1;
 const CODE_SHORT_PACKET: u8 = 13;
+const CODE_RING_UNDERRUN: u8 = 14;
+const CODE_RING_OVERRUN: u8 = 15;
 
 impl Trb {
     pub fn new(kind: u32, param: u64, status: u32, flags: u32) -> Trb {
@@ -196,6 +248,67 @@ impl Ring {
             status: self.page.read32(at + 8),
             control: self.page.read32(at + 12),
         }
+    }
+}
+
+/// A transfer ring of several pages, for a camera: each page holds 255
+/// TRBs and a link to the next; the last page links back to the first.
+pub struct IsoRing {
+    pages: Vec<Page>,
+    page: usize,
+    next: usize,
+    cycle: bool,
+}
+
+impl IsoRing {
+    pub fn new(pages: usize) -> Option<IsoRing> {
+        let mut list = Vec::new();
+        for _ in 0..pages.max(1) {
+            list.push(Page::new()?);
+        }
+        Some(IsoRing { pages: list, page: 0, next: 0, cycle: true })
+    }
+
+    pub fn addr(&self) -> u64 {
+        self.pages[0].addr()
+    }
+
+    /// How many TRBs it holds at most.
+    pub fn capacity(&self) -> usize {
+        self.pages.len() * (RING_TRBS - 1)
+    }
+
+    /// A TRB as it is in memory: for the tests.
+    pub fn peek(&self, page: usize, at: usize) -> Trb {
+        let p = &self.pages[page % self.pages.len()];
+        let at = at % RING_TRBS * 16;
+        Trb { param: p.read32(at) as u64 | (p.read32(at + 4) as u64) << 32, status: p.read32(at + 8), control: p.read32(at + 12) }
+    }
+
+    fn write(&self, page: usize, at: usize, trb: Trb) {
+        let p = &self.pages[page];
+        p.write64(at * 16, trb.param);
+        p.write32(at * 16 + 8, trb.status);
+        p.write32(at * 16 + 12, trb.control & !CYCLE | self.cycle as u32);
+    }
+
+    /// Add a TRB; returns its address.
+    pub fn push(&mut self, trb: Trb) -> u64 {
+        let (page, at) = (self.page, self.next);
+        self.write(page, at, trb);
+        self.next += 1;
+        if self.next == RING_TRBS - 1 {
+            let last = self.page + 1 == self.pages.len();
+            let to = if last { 0 } else { self.page + 1 };
+            let link = Trb::new(TRB_LINK, self.pages[to].addr(), 0, if last { TOGGLE_CYCLE } else { 0 });
+            self.write(page, self.next, link);
+            if last {
+                self.cycle = !self.cycle;
+            }
+            self.page = to;
+            self.next = 0;
+        }
+        self.pages[page].addr() + at as u64 * 16
     }
 }
 
@@ -300,6 +413,71 @@ struct Device {
     reports: u32,
 }
 
+/// A camera sending pictures: an isochronous endpoint kept full of transfers.
+struct Video {
+    slot: u8,
+    dci: u8,
+    interface: u8,
+    ring: IsoRing,
+    pages: Vec<Page>,
+    /// Bytes per transfer (one (micro)frame), and how many fit in a page.
+    td_len: usize,
+    per_page: usize,
+    /// Packets per transfer, minus one (for the TRB).
+    burst: u32,
+    /// Transfers handed to the controller, oldest first: (TRB address, buffer).
+    queued: VecDeque<(u64, usize)>,
+    frames: uvc::Frames,
+    kind: uvc::Kind,
+    width: u16,
+    height: u16,
+    seq: u32,
+    /// New transfers were queued: ring the doorbell.
+    ring_bell: bool,
+}
+
+/// Transfers kept queued for a camera: at 8000 a second, an eighth of a second.
+const VIDEO_TDS: usize = 1000;
+
+impl Video {
+    fn buffer(&self, n: usize) -> (u64, &Page, usize) {
+        let page = &self.pages[n / self.per_page];
+        let offset = n % self.per_page * self.td_len;
+        (page.addr() + offset as u64, page, offset)
+    }
+
+    fn queue(&mut self, n: usize) {
+        let (addr, _, _) = self.buffer(n);
+        let flags = INTERRUPT_ON_COMPLETION | START_ASAP | self.burst << 16;
+        let trb = self.ring.push(Trb::new(TRB_ISOCH, addr, self.td_len as u32, flags));
+        self.queued.push_back((trb, n));
+        self.ring_bell = true;
+    }
+
+    /// A transfer finished (and the ones before it, if they gave no event).
+    fn completed(&mut self, trb: u64, code: u8, left: u32) {
+        let Some(pos) = self.queued.iter().position(|q| q.0 == trb) else { return };
+        for i in 0..=pos {
+            let Some((_, n)) = self.queued.pop_front() else { break };
+            if i == pos && (code == CODE_SUCCESS || code == CODE_SHORT_PACKET) {
+                let got = self.td_len.saturating_sub(left as usize);
+                let (_, page, offset) = self.buffer(n);
+                let packet = page.bytes_at(offset, got);
+                self.frames.push(&packet);
+            }
+            self.queue(n);
+        }
+        if let Some(data) = self.frames.take() {
+            if self.kind == uvc::Kind::Mjpeg && !beenet::jpeg::is_jpeg(&data) {
+                return;
+            }
+            self.seq += 1;
+            *usb::CAMERA_PICTURE.get() =
+                Some(usb::Picture { seq: self.seq, kind: self.kind, width: self.width, height: self.height, data });
+        }
+    }
+}
+
 struct Xhci {
     op: u64,
     runtime: u64,
@@ -309,7 +487,7 @@ struct Xhci {
     dcbaa: Page,
     _scratchpad: Vec<Page>,
     commands: Ring,
-    events: Page,
+    events: EventBlock,
     _event_table: Page,
     event_next: usize,
     event_cycle: bool,
@@ -325,6 +503,9 @@ struct Xhci {
     mouse: Option<(u8, i32, i32)>,
     /// The list `lsusb` shows is out of date.
     stale: bool,
+    video: Option<Video>,
+    /// Switching the camera on failed: not tried again until it is switched off.
+    video_failed: bool,
 }
 
 fn read32(addr: u64) -> u32 {
@@ -437,11 +618,11 @@ impl Xhci {
         let commands = Ring::new().ok_or_else(no_memory)?;
         write64(op + CRCR, commands.addr() | 1);
 
-        // The event ring: one page, described by a one-line table.
-        let events = Page::new().ok_or_else(no_memory)?;
+        // The event ring: one block, described by a one-line table.
+        let events = EventBlock::new().ok_or_else(no_memory)?;
         let event_table = Page::new().ok_or_else(no_memory)?;
         event_table.write64(0, events.addr());
-        event_table.write32(8, RING_TRBS as u32);
+        event_table.write32(8, EVENT_TRBS as u32);
         let interrupter = runtime + 0x20;
         write32(interrupter + 0x08, 1);
         write64(interrupter + 0x18, events.addr());
@@ -477,6 +658,8 @@ impl Xhci {
             ports_changed: true,
             mouse: None,
             stale: true,
+            video: None,
+            video_failed: false,
         })
     }
 
@@ -492,7 +675,7 @@ impl Xhci {
     fn process_events(&mut self) {
         let mut seen = false;
         // At most one lap: a controller gone wrong cannot keep us here.
-        for _ in 0..RING_TRBS {
+        for _ in 0..EVENT_TRBS {
             let at = self.event_next * 16;
             let control = self.events.read32(at + 12);
             if (control & CYCLE != 0) != self.event_cycle {
@@ -505,7 +688,7 @@ impl Xhci {
             };
             seen = true;
             self.event_next += 1;
-            if self.event_next == RING_TRBS {
+            if self.event_next == EVENT_TRBS {
                 self.event_next = 0;
                 self.event_cycle = !self.event_cycle;
             }
@@ -514,7 +697,14 @@ impl Xhci {
                 EVENT_PORT => self.ports_changed = true,
                 EVENT_TRANSFER => {
                     let (endpoint, left) = ((event.control >> 16 & 0x1F) as u8, event.status & 0xFF_FFFF);
-                    if endpoint != 1 {
+                    let video = self.video.as_mut().filter(|v| v.slot == event.slot() && v.dci == endpoint);
+                    if let Some(video) = video {
+                        if event.code() == CODE_RING_UNDERRUN || event.code() == CODE_RING_OVERRUN {
+                            video.ring_bell = true; // ran dry: start again when refilled
+                        } else {
+                            video.completed(event.param, event.code(), left);
+                        }
+                    } else if endpoint != 1 {
                         self.on_report(event.slot(), endpoint, event.code(), left);
                     } else if event.code() == CODE_SHORT_PACKET && self.control_short.is_none() {
                         // The data stage came up short; the status stage follows.
@@ -704,8 +894,13 @@ impl Xhci {
         if head.len() < 9 {
             return Err(("the device's configuration is cut short", info));
         }
-        let total = u16::from_le_bytes([head[2], head[3]]).clamp(9, 1024);
-        let config = usb::parse_config(&check!(self.descriptor(index, 2, total)));
+        let total = u16::from_le_bytes([head[2], head[3]]).clamp(9, PAGE as u16);
+        let raw = check!(self.descriptor(index, 2, total));
+        let config = usb::parse_config(&raw);
+        if let Some(camera) = beenet::uvc::parse(&raw) {
+            usb::CAMERAS.get().retain(|c| c.port != port);
+            usb::CAMERAS.get().push(usb::CameraInfo { port, vendor: info.vendor, product: info.product, camera, raw });
+        }
         let mut names: Vec<&str> = config.classes.iter().map(|&(c, s, p)| usb::class_name(c, s, p)).collect();
         names.dedup();
         info.what = match (names.is_empty(), device_class) {
@@ -764,12 +959,164 @@ impl Xhci {
         Ok(())
     }
 
+    /// Switch the first camera on: agree on a format and size with it,
+    /// pick the alternate setting with enough bandwidth, and fill its
+    /// endpoint with transfers. Returns what it sends.
+    fn start_video(&mut self, want: (u16, u16)) -> Result<String, String> {
+        let info = usb::CAMERAS.get().first().cloned().ok_or("no camera plugged in")?;
+        let index = self.devices.iter().position(|d| d.port == info.port).ok_or("the camera is not set up")?;
+        let camera = &info.camera;
+        let (kind, format, frame) = match camera.pick(uvc::Kind::Mjpeg, want.0, want.1) {
+            Some((f, fr)) => (uvc::Kind::Mjpeg, f.clone(), fr.clone()),
+            None => {
+                let (f, fr) = camera.pick(uvc::Kind::Yuy2, want.0, want.1).ok_or("the camera offers neither MJPEG nor YUY2")?;
+                (uvc::Kind::Yuy2, f.clone(), fr.clone())
+            }
+        };
+        let interface = camera.streaming_interface;
+        self.control(index, 0x00, 9, camera.configuration as u16, 0, 0)?;
+        // Probe: propose; the camera answers with what it will really do. Then commit.
+        let mut block = uvc::probe(camera.version, format.index, frame.index, frame.default_interval);
+        let len = block.len() as u16;
+        self.devices[index].buffer.write_bytes(&block);
+        self.control(index, 0x21, 0x01, 0x0100, interface as u16, len)?;
+        let got = self.control(index, 0xA1, 0x81, 0x0100, interface as u16, len)?;
+        let answer = self.devices[index].buffer.bytes(got);
+        let (max_frame, payload) = uvc::negotiated(&answer).ok_or("the camera's answer is cut short")?;
+        let n = got.min(block.len()).min(answer.len());
+        block[..n].copy_from_slice(&answer[..n]);
+        self.devices[index].buffer.write_bytes(&block);
+        self.control(index, 0x21, 0x01, 0x0200, interface as u16, len)?;
+        let alt = camera.alt_for(payload).ok_or("the camera has no isochronous setting")?;
+        self.control(index, 0x01, 11, alt.setting as u16, interface as u16, 0)?;
+
+        let td_len = alt.bandwidth() as usize;
+        let per_page = (PAGE / td_len.max(1)).max(1);
+        let mut pages = Vec::new();
+        for _ in 0..VIDEO_TDS.div_ceil(per_page) {
+            pages.push(Page::new().ok_or("no memory below 4 GiB")?);
+        }
+        let ring = IsoRing::new(VIDEO_TDS.div_ceil(RING_TRBS - 1) + 1).ok_or("no memory below 4 GiB")?;
+        let dci = (alt.endpoint & 0x0F) * 2 + 1;
+        let cs = self.context_size;
+        let device = &self.devices[index];
+        let (slot, speed) = (device.slot, device.speed);
+        let entries = (device.context.read32(0) >> 27).max(dci as u32);
+        self.write_input(device, 0, entries, max_packet_of(device, cs));
+        // Drop the endpoint first if a previous run left it enabled.
+        let enabled = device.context.read32(cs * dci as usize) & 7 != 0;
+        device.input.write32(0, if enabled { 1 << dci } else { 0 });
+        device.input.write32(4, 1 | 1 << dci);
+        let at = cs * (dci as usize + 1);
+        let bandwidth = alt.bandwidth();
+        device.input.write32(at, endpoint_interval(speed, alt.interval) << 16 | (bandwidth >> 16) << 24);
+        device.input.write32(at + 4, 5 << 3 | (alt.per_frame as u32 - 1) << 8 | (alt.packet as u32) << 16);
+        device.input.write64(at + 8, ring.addr() | 1);
+        device.input.write32(at + 16, bandwidth & 0xFFFF | (bandwidth & 0xFFFF) << 16);
+        let input_addr = device.input.addr();
+        if let Err(e) = self.command(Trb::new(TRB_CONFIGURE_ENDPOINT, input_addr, 0, (slot as u32) << 24)) {
+            let _ = self.control(index, 0x01, 11, 0, interface as u16, 0);
+            return Err(String::from(e));
+        }
+        let mut video = Video {
+            slot,
+            dci,
+            interface,
+            ring,
+            pages,
+            td_len,
+            per_page,
+            burst: alt.per_frame as u32 - 1,
+            queued: VecDeque::new(),
+            frames: uvc::Frames::new((max_frame as usize).clamp(64 * 1024, 8 * 1024 * 1024)),
+            kind,
+            width: frame.width,
+            height: frame.height,
+            seq: 0,
+            ring_bell: false,
+        };
+        for n in 0..VIDEO_TDS {
+            video.queue(n);
+        }
+        self.ring_doorbell(slot, dci as u32);
+        video.ring_bell = false;
+        self.video = Some(video);
+        let name = if kind == uvc::Kind::Mjpeg { "MJPEG" } else { "YUY2" };
+        Ok(format!(
+            "{}x{} {name}, {}/s, setting {} ({} bytes per microframe)",
+            frame.width,
+            frame.height,
+            uvc::frame_rate(frame.default_interval),
+            alt.setting,
+            bandwidth
+        ))
+    }
+
+    /// Switch the camera off: back to its zero-bandwidth setting, and the
+    /// endpoint dropped (the controller lets go of our buffers).
+    fn stop_video(&mut self) {
+        let Some(video) = self.video.take() else { return };
+        let Some(index) = self.devices.iter().position(|d| d.slot == video.slot) else { return };
+        let _ = self.control(index, 0x01, 11, 0, video.interface as u16, 0);
+        let cs = self.context_size;
+        let device = &self.devices[index];
+        let entries = device.context.read32(0) >> 27;
+        self.write_input(device, 0, entries, max_packet_of(device, cs));
+        device.input.write32(0, 1 << video.dci);
+        device.input.write32(4, 1);
+        let (slot, input_addr) = (device.slot, device.input.addr());
+        let _ = self.command(Trb::new(TRB_CONFIGURE_ENDPOINT, input_addr, 0, (slot as u32) << 24));
+        drop(video);
+    }
+
+    /// Follow `usb::CAMERA_WANT`.
+    fn video_tick(&mut self) {
+        let want = *usb::CAMERA_WANT.get();
+        match (want, self.video.is_some()) {
+            (Some(size), false) if !self.video_failed || *usb::CAMERA_STATE.get() == usb::CameraState::Off => {
+                self.video_failed = false;
+                *usb::CAMERA_PICTURE.get() = None;
+                match self.start_video(size) {
+                    Ok(what) => *usb::CAMERA_STATE.get() = usb::CameraState::On(what),
+                    Err(why) => {
+                        self.video_failed = true;
+                        *usb::CAMERA_STATE.get() = usb::CameraState::Failed(why);
+                    }
+                }
+            }
+            (None, true) => {
+                self.stop_video();
+                *usb::CAMERA_STATE.get() = usb::CameraState::Off;
+            }
+            (None, false) => {
+                self.video_failed = false;
+                if *usb::CAMERA_STATE.get() != usb::CameraState::Off {
+                    *usb::CAMERA_STATE.get() = usb::CameraState::Off;
+                }
+            }
+            _ => {}
+        }
+        if let Some(video) = self.video.as_mut() {
+            if video.ring_bell {
+                video.ring_bell = false;
+                let (slot, dci) = (video.slot, video.dci);
+                self.ring_doorbell(slot, dci as u32);
+            }
+        }
+    }
+
     /// Give a device's slot back and forget it; keys it held are released.
     fn detach(&mut self, port: u8) {
         self.infos.retain(|i| i.port != port);
+        usb::CAMERAS.get().retain(|c| c.port != port);
         self.failed.retain(|(p, _)| *p != port);
         let Some(index) = self.devices.iter().position(|d| d.port == port) else { return };
         let slot = self.devices[index].slot;
+        if self.video.as_ref().is_some_and(|v| v.slot == slot) {
+            self.video = None; // unplugged: the slot goes, and the buffers with it
+            *usb::CAMERA_STATE.get() = usb::CameraState::Failed(String::from("the camera was unplugged"));
+            self.video_failed = true;
+        }
         for ep in self.devices[index].endpoints.iter() {
             for code in usb::keyboard_changes(&ep.last_keys, &[0; 8]) {
                 keyboard::push_scancode(code);
@@ -826,6 +1173,7 @@ impl Xhci {
     /// Once per timer tick.
     fn tick(&mut self, now: u64) {
         self.process_events();
+        self.video_tick();
         if self.ports_changed {
             self.ports_changed = false;
             self.scan_ports();
@@ -893,7 +1241,13 @@ pub fn start() -> Option<String> {
             }
             controller.tick(now);
             *usb::READY.get() = true;
-            thread::wait_until(|| time::uptime_ms() != now);
+            if controller.video.is_some() {
+                // A camera fills thousands of transfers a second: look again
+                // as soon as the other threads had their turn.
+                thread::yield_now();
+            } else {
+                thread::wait_until(|| time::uptime_ms() != now || usb::CAMERA_WANT.get().is_some());
+            }
         }
     })?;
     // Wait for the first look at the ports, so a USB keyboard works when the

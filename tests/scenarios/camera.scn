@@ -1,0 +1,16 @@
+# camera: USB cameras (UVC). QEMU has none, so this checks the empty case;
+# the descriptor parser and picture assembly are tested in beenet/src/uvc.rs.
+$ camera
+no camera (USB video class) plugged in; 'lsusb' lists the devices
+$ camera raw
+no camera plugged in
+$ lsusb
+~ xHCI|no USB controller
+$ camera snap /me.jpg
+camera: no camera plugged in ('lsusb' lists the devices)
+$ camera record /me.avi 5
+camera: no camera plugged in ('lsusb' lists the devices)
+$ camera record /me.gif 5
+usage: camera record FILE.avi SECONDS   (1 to 600; Ctrl+C stops early)
+$ camera snap /me.jpg big
+usage: camera snap FILE [WIDTHxHEIGHT]
