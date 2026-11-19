@@ -277,3 +277,32 @@ pub fn encode_png(width: usize, height: usize, pixel: &(dyn Fn(usize, usize) -> 
     let z = beenet::deflate::zlib_from_pieces(&pieces, beenet::inflate::adler32(&raw));
     beenet::png::from_zlib(width, height, &z)
 }
+
+/// The picture made smaller to fit in `max_w` x `max_h` (never larger),
+/// its shape kept: each pixel the average of those it covers.
+pub fn shrunk(picture: &Image, max_w: usize, max_h: usize) -> Image {
+    let (w, h) = (picture.width.max(1), picture.height.max(1));
+    let (max_w, max_h) = (max_w.max(1), max_h.max(1));
+    // The scale that fits both ways, as a fraction tw/w or th/h.
+    let (tw, th) = if w * max_h >= h * max_w { (max_w.min(w), (h * max_w.min(w) / w).max(1)) } else { ((w * max_h.min(h) / h).max(1), max_h.min(h)) };
+    let mut pixels = Vec::with_capacity(tw * th);
+    for ty in 0..th {
+        let (y0, y1) = (ty * h / th, ((ty + 1) * h / th).max(ty * h / th + 1));
+        for tx in 0..tw {
+            let (x0, x1) = (tx * w / tw, ((tx + 1) * w / tw).max(tx * w / tw + 1));
+            let (mut r, mut g, mut b, mut n) = (0u32, 0u32, 0u32, 0u32);
+            for y in y0..y1.min(h) {
+                for &p in &picture.pixels[y * w + x0..y * w + x1.min(w)] {
+                    r += p >> 16 & 0xFF;
+                    g += p >> 8 & 0xFF;
+                    b += p & 0xFF;
+                    n += 1;
+                }
+            }
+            let n = n.max(1);
+            pixels.push((r / n) << 16 | (g / n) << 8 | b / n);
+        }
+    }
+    Image { width: tw, height: th, pixels }
+}
+

@@ -70,6 +70,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("file manager icons: grid, moving, clicks, thumbnails", file_icons),
     ("crypto for TLS: X25519, HKDF, AES-128-GCM (published vectors)", tls_crypto),
     ("certificates: real RSA and ECDSA chains to trusted roots, wrong names and dates refused", certificates),
+    ("web pictures: lines kept for them, where they are drawn", web_pictures),
     ("remote desktop: a viewer's keys, the tiles that changed", vnc_parts),
     ("accounts: the file, passwords, what needs an admin", accounts),
     ("heap: alloc and free", heap_alloc_free),
@@ -3231,6 +3232,36 @@ fn certificates() -> TestResult {
     let start = crate::time::micros();
     check!(matches!(verify(&chain, "en.wikipedia.org", at, ROOTS), Ok(Trust::Verified { .. })));
     check!((crate::time::micros() - start) / 1000 < 2000);
+    Ok(())
+}
+
+fn web_pictures() -> TestResult {
+    use crate::web::Viewer;
+    use beenet::html::{render, render_with, PageImage};
+    let html = "<p>before<img src=a.png alt=Bee><p>after<img src='data:x'><img src=b.jpg>";
+    // Not loaded yet: the alt text stands there, the picture is noted.
+    let page = render(html, 40);
+    check_eq!(page.text(0), "before[Bee]");
+    check_eq!(page.images.iter().map(|i| (i.src.as_str(), i.rows)).collect::<Vec<_>>(), alloc::vec![("a.png", 0), ("b.jpg", 0)]);
+    // Loaded (3 lines for a.png): empty lines kept for it, the text goes on below.
+    let page = render_with(html, 40, &[(String::from("a.png"), 3)]);
+    check_eq!(page.images[0], PageImage { src: String::from("a.png"), line: 1, rows: 3 });
+    check!((1..4).all(|l| page.text(l).is_empty()));
+    check!((0..page.lines.len()).position(|l| page.text(l).starts_with("after")).is_some_and(|l| l >= 4));
+    // A picture at the very end keeps its lines.
+    let page = render_with("<p>x<img src=a.png>", 40, &[(String::from("a.png"), 2)]);
+    check_eq!(page.lines.len(), 3);
+    // The viewer: the pictures not loaded yet, then where it draws them.
+    let mut v = Viewer::new();
+    v.show("/site/p.html", html, false, false);
+    check_eq!(v.missing_images(40), alloc::vec![String::from("a.png"), String::from("b.jpg")]);
+    v.add_image("a.png", crate::image::Image { width: 10, height: 40, pixels: alloc::vec![0; 400] }); // 40 px: 3 lines + 1
+    v.image_failed("b.jpg");
+    check!(v.missing_images(40).is_empty());
+    let _ = v.render(40, 12);
+    let spots = v.image_spots(12);
+    check_eq!(spots.len(), 1);
+    check_eq!(spots[0].1, 2 * 16); // line 1 of the page, below the status line
     Ok(())
 }
 

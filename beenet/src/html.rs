@@ -43,6 +43,21 @@ pub struct Page {
     pub links: Vec<String>,
     /// The page was longer than `MAX_LINES`.
     pub cut: bool,
+    /// The pictures (`<img>`), in order.
+    pub images: Vec<PageImage>,
+}
+
+/// Pictures after this many are left out.
+pub const MAX_IMAGES: usize = 50;
+
+/// A picture on the page: where it is, and how many empty lines were kept
+/// for it (0: its size was not known, its `alt` text stands there).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageImage {
+    /// The address as the page wrote it.
+    pub src: String,
+    pub line: usize,
+    pub rows: usize,
 }
 
 impl Page {
@@ -68,6 +83,12 @@ pub fn plain(text: &str, width: usize) -> Page {
 
 /// Lay out an HTML page in lines of at most `width` characters.
 pub fn render(html: &str, width: usize) -> Page {
+    render_with(html, width, &[])
+}
+
+/// `render`, keeping `rows` empty lines for each picture whose address is
+/// in `known` (src as the page writes it, rows): the viewer draws it there.
+pub fn render_with(html: &str, width: usize, known: &[(String, usize)]) -> Page {
     let mut layout = Layout::new(width);
     let mut rest = html;
     // Inside <script>, <style>, ...: skip to the closing tag.
@@ -182,6 +203,23 @@ pub fn render(html: &str, width: usize) -> Page {
             }
             ("a", true) => layout.link = None,
             ("img", _) => {
+                let src = tag.attr("src").map(|s| decode(s.trim())).filter(|s| !s.is_empty() && s.len() <= MAX_HREF && !s.starts_with("data:"));
+                let rows = src.as_ref().and_then(|s| known.iter().find(|(k, _)| k == s)).map_or(0, |(_, r)| (*r).min(200));
+                if let Some(src) = src.filter(|_| layout.page.images.len() < MAX_IMAGES) {
+                    if rows > 0 {
+                        // Its own lines, empty: the picture is drawn there.
+                        layout.new_line();
+                        let line = layout.page.lines.len();
+                        for _ in 0..rows {
+                            layout.push_line();
+                        }
+                        layout.page.images.push(PageImage { src, line, rows });
+                        layout.space = false;
+                        continue;
+                    }
+                    let line = layout.page.lines.len();
+                    layout.page.images.push(PageImage { src, line, rows: 0 });
+                }
                 if let Some(alt) = tag.attr("alt").map(decode).filter(|a| !a.trim().is_empty()) {
                     layout.text("[");
                     layout.text(alt.trim());
@@ -513,7 +551,9 @@ impl Layout {
 
     fn finish(mut self) -> Page {
         self.new_line();
-        while self.page.lines.last().is_some_and(|l| l.is_empty()) {
+        // Empty lines at the end go, but not those kept for a picture.
+        let keep = self.page.images.iter().map(|i| i.line + i.rows).max().unwrap_or(0);
+        while self.page.lines.len() > keep && self.page.lines.last().is_some_and(|l| l.is_empty()) {
             self.page.lines.pop();
         }
         self.page

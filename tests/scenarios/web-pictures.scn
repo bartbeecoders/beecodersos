@@ -1,0 +1,26 @@
+# Pictures in web pages: `browse` loads a page's <img> pictures (from the
+# disk here; from the web the same way), makes them fit the window and
+# draws them where the page keeps lines for them. At 800x600 the viewer's
+# window is the first extra one: content 640x400 at 38,62, lines of 16
+# pixels, the page from its second line; pictures at 8 pixels from the left.
+@ai
+$ ai control on
+$ display mode 800x600
+~ ^mode: 800x600
+$ mkdir /site
+$ screenshot /site/shot.png
+~ ^saved the screen
+$ echo "<title>Pictures</title><h1>Pictures</h1><p>above<img src=shot.png alt=desk><img src=missing.png alt=gone><p>below" > /site/p.html
+$ browse /site/p.html
+/site/p.html in a new window: Tab picks a link, Enter follows it, q leaves
+$ sleep 2
+# Inside the picture (the screen's light blue desktop, scaled down to
+# 427x320 from x=46) and to its right (the page's black background); the
+# picture that is not there shows its alt text.
+@screenshot 800x600 pixels 60,200=a8d0f0 600,200=000000
+# Further down: the alt text of the picture that is not there, and the text after.
+@ctl keys {machine} "{pagedown}"
+@ctl text {machine}
+~ ^\[gone\]$
+~ ^below$
+@ctl keys {machine} "q"
