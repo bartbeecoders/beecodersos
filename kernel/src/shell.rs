@@ -1183,12 +1183,37 @@ impl Shell {
                 }
             }
             ("beep", _) => error("usage: beep [HZ|NOTE [MS]]   (e.g. beep 440 500, beep c5; 20-20000 Hz, at most 10000 ms)"),
+            ("tune", ["save", file, notes @ ..]) if !notes.is_empty() => {
+                let path = self.abs(file);
+                if !path.to_ascii_lowercase().ends_with(".wav") {
+                    error("usage: tune save FILE.wav NOTE[:MS]...");
+                    return;
+                }
+                if !self.may_change(&path) {
+                    return;
+                }
+                match crate::sound::parse_tune(notes) {
+                    Ok(tune) => {
+                        let wav = crate::sound::encode_wav(&crate::sound::render_tune(&tune, 50));
+                        match self.storage.fs().write_file(&path, &wav) {
+                            Ok(()) => println!("saved {} notes to {path} ({} KiB)", tune.len(), wav.len().div_ceil(1024)),
+                            Err(e) => error(&format!("tune: {e}")),
+                        }
+                    }
+                    Err(why) => error(&format!("tune: {why}")),
+                }
+            }
+            ("tune", notes) if !notes.is_empty() && notes[0] != "save" => match crate::sound::parse_tune(notes) {
+                Ok(tune) => self.play_frames(&crate::sound::render_tune(&tune, 50), "tune"),
+                Err(why) => error(&format!("tune: {why}")),
+            },
+            ("tune", _) => error("usage: tune NOTE[:MS]...  or  tune save FILE.wav NOTE[:MS]...   (e.g. tune c5 e5 g5 c6:500; r is a rest)"),
             ("play", [file]) => {
                 let path = self.abs(file);
                 let data = self.storage.fs().read_file(&path);
                 match data.map_err(|e| format!("{e}")).and_then(|d| crate::sound::parse_wav(&d).map_err(String::from)) {
                     Ok(wav) => {
-                        println!("{path}: {} Hz, {} bits, {}, {} (Ctrl+C stops)", wav.rate, wav.bits, if wav.channels == 1 { "mono" } else { "stereo" }, crate::time::format_duration(wav.duration_ms()));
+                        println!("{path}: {} Hz, {} bits, {}, {} (Ctrl+C stops)", wav.rate, wav.bits, if wav.channels == 1 { "mono" } else { "stereo" }, wav.duration_text());
                         self.play_frames(&wav.to_48k(), "play");
                     }
                     Err(why) => error(&format!("play {file}: {why}")),
@@ -2630,6 +2655,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("sound [volume N]", "the sound card, its outputs and volume (0-100)"),
     ("beep [HZ|NOTE [MS]]", "play a tone (default 880 Hz, 300 ms; notes like a4, c#5)"),
     ("play FILE.wav", "play a WAV file (PCM, 8 or 16 bits)"),
+    ("tune [save FILE.wav] NOTES", "play notes like c5 e5 g5 c6:500 (r rests), or save them as a WAV file"),
     ("record FILE.gif SECS", "film the screen for SECS seconds (1-60) into an animated GIF"),
     ("screenshot FILE", "save the screen as a picture (FILE.png: PNG, FILE.gif: GIF, otherwise BMP)"),
     ("display [mode WxH]", "screen: driver, resolution; 'display font 1|2|auto'; 'display test'; 'display speed'"),

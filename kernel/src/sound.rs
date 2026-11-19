@@ -78,6 +78,12 @@ impl Wav {
         self.frames() as u64 * 1000 / self.rate as u64
     }
 
+    /// The length as `1.4 s` (tenths, rounded).
+    pub fn duration_text(&self) -> alloc::string::String {
+        let tenths = (self.duration_ms() + 50) / 100;
+        alloc::format!("{}.{} s", tenths / 10, tenths % 10)
+    }
+
     /// Sample `i` of `channel` as 16 bits.
     fn sample(&self, i: usize, channel: usize) -> i32 {
         let ch = channel.min(self.channels as usize - 1);
@@ -292,4 +298,66 @@ pub fn connections(length_param: u32, entry: impl Fn(u32) -> u32) -> Vec<u8> {
     }
     out.truncate(32);
     out
+}
+
+// --- tunes and writing WAV files -----------------------------------------------------------
+
+/// The notes of a tune: `NOTE[:MS]` words (`c5`, `a#4:500`, `440:100`), `r`
+/// or `-` for a rest; 250 ms when no length is given. At most 200 notes and
+/// `MAX_SECONDS` in all. `None` is a rest.
+pub fn parse_tune(words: &[&str]) -> Result<Vec<(Option<u32>, u32)>, &'static str> {
+    let mut notes = Vec::new();
+    let mut total = 0u32;
+    for word in words {
+        let (name, ms) = match word.split_once(':') {
+            Some((n, ms)) => (n, ms.parse::<u32>().ok().filter(|ms| (10..=10_000).contains(ms)).ok_or("a note length is 10-10000 ms")?),
+            None => (*word, 250),
+        };
+        let hz = match name {
+            "r" | "-" => None,
+            _ => Some(frequency(name).ok_or("not a note (like c5, a#4, 440, or r for a rest)")?),
+        };
+        total += ms;
+        if notes.len() == 200 || total > MAX_SECONDS * 1000 {
+            return Err("a tune is at most 200 notes and 60 seconds");
+        }
+        notes.push((hz, ms));
+    }
+    if notes.is_empty() {
+        return Err("no notes");
+    }
+    Ok(notes)
+}
+
+/// A tune as 48k frames: each note a tone that fades in and out, so
+/// repeated notes are heard apart.
+pub fn render_tune(notes: &[(Option<u32>, u32)], volume: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    for &(hz, ms) in notes {
+        match hz {
+            Some(hz) => out.extend_from_slice(&tone(hz, ms, volume)),
+            None => out.resize(out.len() + (RATE as usize * ms as usize / 1000) * 4, 0),
+        }
+    }
+    out
+}
+
+/// A WAV file (PCM, 16 bits, stereo, 48 kHz) of 48k frames.
+pub fn encode_wav(frames: &[u8]) -> Vec<u8> {
+    let data = &frames[..frames.len() & !3];
+    let mut f = Vec::with_capacity(44 + data.len());
+    f.extend_from_slice(b"RIFF");
+    f.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+    f.extend_from_slice(b"WAVEfmt ");
+    f.extend_from_slice(&16u32.to_le_bytes());
+    f.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    f.extend_from_slice(&2u16.to_le_bytes());
+    f.extend_from_slice(&RATE.to_le_bytes());
+    f.extend_from_slice(&(RATE * 4).to_le_bytes());
+    f.extend_from_slice(&4u16.to_le_bytes());
+    f.extend_from_slice(&16u16.to_le_bytes());
+    f.extend_from_slice(b"data");
+    f.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    f.extend_from_slice(data);
+    f
 }
