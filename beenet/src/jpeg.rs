@@ -250,6 +250,18 @@ pub fn parse(data: &[u8]) -> Result<Jpeg, &'static str> {
             0xC0..=0xC2 => frame = Some(read_frame(seg)?),
             0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF => return Err("a kind of JPEG this OS cannot show (lossless or arithmetic coding)"),
             0xDA => {
+                // Motion JPEG (USB cameras, AVI) leaves the Huffman tables
+                // out: then the standard ones of Annex K are meant.
+                if dc.iter().chain(ac.iter()).all(|t| t.is_none()) {
+                    for (i, t) in [STD_DC0, STD_AC0, STD_DC1, STD_AC1].iter().enumerate() {
+                        let table = Huffman::new(t[1..17].try_into().map_err(|_| bad)?, &t[17..]).ok_or(bad)?;
+                        if i % 2 == 0 {
+                            dc[i / 2] = Some(table);
+                        } else {
+                            ac[i / 2] = Some(table);
+                        }
+                    }
+                }
                 let jpeg = frame.as_mut().ok_or(bad)?;
                 let used = read_scan(jpeg, seg, &data[at + len..], &dc, &ac, restart_interval)?;
                 scans += 1;
@@ -588,6 +600,34 @@ impl Jpeg {
 }
 
 /// The whole picture (one row of MCUs after the other).
+/// A Motion JPEG frame (no Huffman tables of its own) as a JPEG file any
+/// program can open: the standard tables written in before the scan.
+/// Pictures that have tables, or that cannot be read, come back unchanged.
+pub fn with_tables(data: &[u8]) -> Vec<u8> {
+    if !is_jpeg(data) {
+        return data.to_vec();
+    }
+    let mut at = 2;
+    while at + 4 <= data.len() && data[at] == 0xFF {
+        let marker = data[at + 1];
+        if marker == 0xC4 {
+            return data.to_vec();
+        }
+        if marker == 0xDA {
+            let mut out = data[..at].to_vec();
+            for t in [STD_DC0, STD_AC0, STD_DC1, STD_AC1] {
+                out.extend_from_slice(&[0xFF, 0xC4]);
+                out.extend_from_slice(&((t.len() + 2) as u16).to_be_bytes());
+                out.extend_from_slice(t);
+            }
+            out.extend_from_slice(&data[at..]);
+            return out;
+        }
+        at += 2 + u16::from_be_bytes([data[at + 2], data[at + 3]]) as usize;
+    }
+    data.to_vec()
+}
+
 pub fn decode(data: &[u8]) -> Result<(usize, usize, Vec<u32>), &'static str> {
     let jpeg = parse(data)?;
     let mut pixels = vec![0u32; jpeg.width * jpeg.height];
@@ -890,6 +930,31 @@ mod tests {
             }
         }
         assert!(worst <= 4, "differs by up to {worst}");
+    }
+
+    #[test]
+    fn motion_jpeg_without_tables() {
+        // A camera frame: the encoder's output with its DHT segments taken out.
+        let whole = encode(40, 24, 80, |x, y| (x * 6) as u32 * 0x10000 | (y * 10) as u32 * 0x100 | 0x40);
+        let mut bare = whole[..2].to_vec();
+        let mut at = 2;
+        while whole[at + 1] != 0xDA {
+            let len = u16::from_be_bytes([whole[at + 2], whole[at + 3]]) as usize;
+            if whole[at + 1] != 0xC4 {
+                bare.extend_from_slice(&whole[at..at + 2 + len]);
+            }
+            at += 2 + len;
+        }
+        bare.extend_from_slice(&whole[at..]);
+        assert!(bare.len() < whole.len() - 400);
+        assert_eq!(decode(&bare).unwrap(), decode(&whole).unwrap());
+        // Saved as a file: the tables are written back in.
+        let fixed = with_tables(&bare);
+        assert_eq!(fixed.len(), whole.len());
+        assert_eq!(decode(&fixed).unwrap(), decode(&whole).unwrap());
+        assert_eq!(with_tables(&whole), whole);
+        assert_eq!(with_tables(&bare[..10]), bare[..10].to_vec());
+        assert_eq!(with_tables(b"nope"), b"nope".to_vec());
     }
 
     #[test]

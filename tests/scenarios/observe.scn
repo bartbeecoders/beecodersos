@@ -25,7 +25,7 @@ $ log 20
 ~ "ev":"cmd","cmd":"cat","status":"error"
 ~ "ev":"wish","text":"a text editor"
 !~ /nope
-$! crash
+$! crash panic
 ~ \[crash\] the previous boot crashed \(b\d+, panic\): .*deliberate kernel panic
 ~ type 'explain' to ask the AI
 $ cat /system/crash/history.jsonl
@@ -34,8 +34,10 @@ $ log 30
 ~ "ev":"crash","kind":"panic"
 ~ "ev":"boot",.*"boot":2
 # A CPU exception is reported the same way.
+$ crash
+usage: crash panic|exception|hang (deliberately stops the machine)
 $ crash now
-usage: crash [exception|hang]
+usage: crash panic|exception|hang (deliberately stops the machine)
 $! crash exception
 ~ \[crash\] the previous boot crashed \(b\d+, exception\): CPU exception 6: Invalid opcode at rip=0x[0-9a-f]+
 $ cat /system/crash/history.jsonl

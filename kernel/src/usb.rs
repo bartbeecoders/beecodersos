@@ -67,10 +67,13 @@ pub fn parse_config(data: &[u8]) -> Config {
         match kind {
             4 if len >= 9 => {
                 current = None;
-                if config.classes.len() >= MAX_INTERFACES {
-                    break;
+                // An alternate setting of an interface already counted is not counted again.
+                if d[3] == 0 {
+                    if config.classes.len() >= MAX_INTERFACES {
+                        break;
+                    }
+                    config.classes.push((d[5], d[6], d[7]));
                 }
-                config.classes.push((d[5], d[6], d[7]));
                 if d[5] == CLASS_HID && d[6] == SUBCLASS_BOOT && d[3] == 0 {
                     current = match d[7] {
                         1 => Some((d[2], Kind::Keyboard)),
@@ -234,6 +237,62 @@ pub struct DeviceInfo {
 /// The controller in one line, and the devices: written by the usb thread.
 pub static STATUS: Global<Option<String>> = Global::new(None);
 pub static DEVICES: Global<Vec<DeviceInfo>> = Global::new(Vec::new());
+/// A camera plugged in: what it offers (read when it was plugged in).
+#[derive(Debug, Clone)]
+pub struct CameraInfo {
+    pub port: u8,
+    pub vendor: u16,
+    pub product: u16,
+    pub camera: beenet::uvc::Camera,
+    /// Its whole configuration descriptor, for `camera raw`.
+    pub raw: Vec<u8>,
+}
+
+pub static CAMERAS: Global<Vec<CameraInfo>> = Global::new(Vec::new());
+
+/// A picture from the camera, as it came (a JPEG, or YUY2 pixels).
+#[derive(Debug, Clone)]
+pub struct Picture {
+    /// Counts up with every picture since the camera was switched on.
+    pub seq: u32,
+    pub kind: beenet::uvc::Kind,
+    pub width: u16,
+    pub height: u16,
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CameraState {
+    Off,
+    /// Sending pictures: what it sends ("640x480 MJPEG ...").
+    On(String),
+    /// Could not be switched on: why.
+    Failed(String),
+}
+
+/// The picture size wanted from the first camera; `None` switches it off.
+/// The usb thread does the switching.
+pub static CAMERA_WANT: Global<Option<(u16, u16)>> = Global::new(None);
+/// The latest picture.
+pub static CAMERA_PICTURE: Global<Option<Picture>> = Global::new(None);
+pub static CAMERA_STATE: Global<CameraState> = Global::new(CameraState::Off);
+
+/// What `camera` shows: every camera and what it can send.
+pub fn describe_cameras() -> String {
+    let cameras = CAMERAS.get();
+    if cameras.is_empty() {
+        return String::from("no camera (USB video class) plugged in; 'lsusb' lists the devices");
+    }
+    let mut text = String::new();
+    for c in cameras.iter() {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text += &alloc::format!("port {}: {:04x}:{:04x}, {}", c.port, c.vendor, c.product, c.camera.describe());
+    }
+    text
+}
+
 /// Set once the controller has looked at all its ports for the first time
 /// (or turned out not to work).
 pub static READY: Global<bool> = Global::new(false);

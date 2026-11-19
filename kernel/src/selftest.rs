@@ -1509,6 +1509,20 @@ fn usb_descriptors() -> TestResult {
     }
     check!(parse_config(&many).classes.len() <= 16 && parse_config(&many).interfaces.len() <= 16);
     check_eq!((class_name(3, 1, 1), class_name(3, 1, 2), class_name(9, 0, 0), class_name(8, 6, 0x50)), ("keyboard", "mouse", "hub", "storage"));
+    // A camera: alternate settings of its streaming interface are walked
+    // past and counted once (a skipped step here once looped for ever).
+    let camera: &[u8] = &[
+        9, 2, 52, 0, 2, 1, 0, 0x80, 50, //
+        9, 4, 0, 0, 1, 0x0E, 1, 0, 0, // video control
+        9, 4, 1, 0, 0, 0x0E, 2, 0, 0, // video streaming, alt 0
+        9, 4, 1, 1, 1, 0x0E, 2, 0, 0, // alt 1
+        7, 5, 0x81, 5, 0x00, 0x14, 1, // isochronous, 3 x 1024 bytes
+        9, 4, 2, 0, 0, 1, 1, 0, 0, // a microphone
+    ];
+    let config = parse_config(camera);
+    check_eq!(config.classes, vec![(0x0E, 1, 0), (0x0E, 2, 0), (1, 1, 0)]);
+    check!(config.interfaces.is_empty());
+    check_eq!(class_name(0x0E, 1, 0), "camera");
     Ok(())
 }
 
@@ -1560,7 +1574,7 @@ fn usb_reports() -> TestResult {
 }
 
 fn xhci_rings() -> TestResult {
-    use crate::xhci::{control_trbs, default_max_packet, endpoint_interval, is_xhci, port_write, Ring, Trb, RING_TRBS};
+    use crate::xhci::{control_trbs, default_max_packet, endpoint_interval, is_xhci, port_write, IsoRing, Ring, Trb, RING_TRBS};
     check!(is_xhci(0x0C, 0x03, 0x30) && !is_xhci(0x0C, 0x03, 0x20) && !is_xhci(0x0C, 0x05, 0x30));
     // A ring: each TRB gets the cycle bit; the last place links back and flips it.
     let mut ring = Ring::new().ok_or("no page for a ring")?;
@@ -1577,6 +1591,24 @@ fn xhci_rings() -> TestResult {
     check_eq!(ring.push(Trb::new(1, 0x77, 0, 1)), ring.addr()); // second lap: at the start again
     check_eq!(ring.peek(0).control & 1, 0); // with the cycle bit flipped
     check_eq!(ring.peek(0).param, 0x77);
+    // A camera's ring of several pages: each page links on to the next, the
+    // last one back to the first (and only that link flips the cycle bit).
+    let mut iso = IsoRing::new(3).ok_or("no pages for a ring")?;
+    check_eq!(iso.capacity(), 3 * (RING_TRBS - 1));
+    let mut addrs = Vec::new();
+    for i in 0..iso.capacity() + 2 {
+        addrs.push(iso.push(Trb::new(5, i as u64, 3072, 1 << 31)));
+    }
+    check_eq!(addrs[0], iso.addr());
+    check_eq!(addrs[iso.capacity()], iso.addr()); // second lap
+    check!(addrs[RING_TRBS - 1] != addrs[RING_TRBS - 2] + 16); // the next page
+    let (p0, p1, p2) = (iso.peek(0, RING_TRBS - 1), iso.peek(1, RING_TRBS - 1), iso.peek(2, RING_TRBS - 1));
+    check_eq!((p0.kind(), p0.param, p0.control & 3), (6, addrs[RING_TRBS - 1], 1));
+    check_eq!((p1.kind(), p1.param, p1.control & 3), (6, addrs[2 * (RING_TRBS - 1)], 1));
+    check_eq!((p2.kind(), p2.param, p2.control & 3), (6, iso.addr(), 3));
+    check_eq!(iso.peek(0, 0).control & 1, 0); // second lap: cycle flipped
+    check_eq!(iso.peek(0, 2).control & 1, 1); // not reached again yet
+    check_eq!(iso.peek(1, 0).control, 5 << 10 | 1 << 31 | 1);
     // GET_DESCRIPTOR(device, 18 bytes): setup, data in, status out.
     let trbs = control_trbs(0x80, 6, 0x0100, 0, 0x5000, 18);
     check_eq!(trbs.len(), 3);
@@ -1784,6 +1816,34 @@ fn install_layout() -> TestResult {
     check_eq!(crate::install::build_in(b"timeout: 0"), None);
     // A boot area that cannot be read as FAT is written whole.
     check_eq!(crate::install::used_ranges(&[0u8; 2048]), vec![(1, 17 * MIB - 1)]);
+    // Where the kernel in a slot ends (an update writes only that far).
+    use crate::install::elf_end;
+    let mut elf32 = [0u8; 512];
+    elf32[..5].copy_from_slice(b"\x7fELF\x01");
+    elf32[0x1C..0x20].copy_from_slice(&0x34u32.to_le_bytes()); // program headers
+    elf32[0x20..0x24].copy_from_slice(&2_302_672u32.to_le_bytes()); // section headers
+    elf32[0x2A] = 32;
+    elf32[0x2C] = 2;
+    elf32[0x2E] = 40;
+    elf32[0x30] = 10;
+    elf32[0x34 + 4..0x34 + 8].copy_from_slice(&0x1000u32.to_le_bytes()); // a segment at 4 KiB,
+    elf32[0x34 + 16..0x34 + 20].copy_from_slice(&0x1000u32.to_le_bytes()); // 4 KiB long
+    check_eq!(elf_end(&elf32), Some(2_303_072)); // the section headers come last
+    elf32[0x54 + 4..0x54 + 8].copy_from_slice(&0x30_0000u32.to_le_bytes()); // a segment past them
+    elf32[0x54 + 16..0x54 + 20].copy_from_slice(&0x100u32.to_le_bytes());
+    check_eq!(elf_end(&elf32), Some(0x30_0100));
+    let mut elf64 = [0u8; 512];
+    elf64[..5].copy_from_slice(b"\x7fELF\x02");
+    elf64[0x28..0x30].copy_from_slice(&5000u64.to_le_bytes());
+    elf64[0x3A] = 64;
+    elf64[0x3C] = 3;
+    check_eq!(elf_end(&elf64), Some(5192));
+    check_eq!(elf_end(&[0u8; 512]), None); // zeros: no kernel there
+    check_eq!(elf_end(&elf64[..40]), None);
+    elf64[0x28..0x30].copy_from_slice(&u64::MAX.to_le_bytes()); // nonsense: no answer, no panic
+    check_eq!(elf_end(&elf64), None);
+    elf32[0x2C] = 200; // program headers past the sector
+    check_eq!(elf_end(&elf32), None);
     Ok(())
 }
 

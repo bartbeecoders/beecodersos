@@ -550,6 +550,165 @@ impl Shell {
     /// made on every processor, into a Motion-JPEG video. The time per frame
     /// in the file is the one really measured, so it plays at the right pace
     /// even if a picture took longer than a tenth of a second.
+    /// Pictures from the camera: `each` gets every new one until it says
+    /// stop (false), Ctrl+C is pressed, the camera fails, or no picture
+    /// comes for 5 seconds. The camera is switched off afterwards.
+    fn camera_pictures(&mut self, size: (u16, u16), mut each: impl FnMut(crate::usb::Picture) -> bool) -> Result<(), String> {
+        use crate::usb::{CameraState, CAMERAS, CAMERA_PICTURE, CAMERA_STATE, CAMERA_WANT};
+        use crate::{input, thread, time};
+        if CAMERAS.get().is_empty() {
+            return Err(String::from("no camera plugged in ('lsusb' lists the devices)"));
+        }
+        *CAMERA_STATE.get() = CameraState::Off;
+        *CAMERA_PICTURE.get() = None;
+        *CAMERA_WANT.get() = Some(size);
+        let mut last = 0;
+        let mut deadline = time::uptime_ms() + 5000;
+        let result = loop {
+            thread::pause(|| {
+                input::pending()
+                    || time::uptime_ms() >= deadline
+                    || CAMERA_PICTURE.get().as_ref().is_some_and(|p| p.seq != last)
+                    || matches!(*CAMERA_STATE.get(), CameraState::Failed(_))
+            });
+            if input::poll_key() == Some(input::Key::Ctrl('c')) {
+                break Err(String::from("stopped"));
+            }
+            if let CameraState::Failed(why) = CAMERA_STATE.get().clone() {
+                break Err(why);
+            }
+            let picture = CAMERA_PICTURE.get().as_ref().filter(|p| p.seq != last).cloned();
+            match picture {
+                Some(picture) => {
+                    last = picture.seq;
+                    deadline = time::uptime_ms() + 5000;
+                    if !each(picture) {
+                        break Ok(());
+                    }
+                }
+                None if time::uptime_ms() >= deadline => break Err(String::from("the camera sent no picture for 5 seconds")),
+                None => {}
+            }
+        };
+        *CAMERA_WANT.get() = None;
+        result
+    }
+
+    /// A camera picture as pixels, or `None` when it is damaged.
+    fn camera_pixels(picture: &crate::usb::Picture) -> Option<crate::image::Image> {
+        match picture.kind {
+            beenet::uvc::Kind::Mjpeg => crate::image::decode(&picture.data).ok(),
+            _ => {
+                let (w, h) = (picture.width as usize, picture.height as usize);
+                (picture.data.len() >= w * h * 2)
+                    .then(|| crate::image::Image { width: w, height: h, pixels: beenet::uvc::yuy2_to_rgb(&picture.data, w, h) })
+            }
+        }
+    }
+
+    fn camera_snap(&mut self, file: &str, size: (u16, u16)) {
+        let path = self.abs(file);
+        if !self.may_change(&path) {
+            return;
+        }
+        // The first pictures are dark while the camera finds its exposure.
+        const SKIP: u32 = 10;
+        let mut got: Option<(crate::usb::Picture, crate::image::Image)> = None;
+        let mut seen = 0;
+        let result = self.camera_pictures(size, |picture| {
+            seen += 1;
+            if seen <= SKIP {
+                return true;
+            }
+            match Self::camera_pixels(&picture) {
+                Some(image) => {
+                    got = Some((picture, image));
+                    false
+                }
+                None => seen < SKIP + 30, // damaged: try the next one
+            }
+        });
+        if let Err(why) = result {
+            error(&format!("camera: {why}"));
+            return;
+        }
+        let Some((picture, image)) = got else {
+            error("camera: no undamaged picture came");
+            return;
+        };
+        let name = path.to_ascii_lowercase();
+        let (w, h) = (image.width, image.height);
+        let pixel = |x: usize, y: usize| image.pixels[y * w + x];
+        let data = if name.ends_with(".png") {
+            crate::image::encode_png(w, h, &pixel)
+        } else if name.ends_with(".bmp") {
+            crate::image::encode_bmp(w, h, pixel)
+        } else if picture.kind == beenet::uvc::Kind::Mjpeg {
+            beenet::jpeg::with_tables(&picture.data)
+        } else {
+            crate::image::encode_jpeg(w, h, 90, &pixel)
+        };
+        match self.storage.fs().write_file(&path, &data) {
+            Ok(()) => println!("saved a {w} x {h} picture from the camera to {path} ({} KiB)", data.len().div_ceil(1024)),
+            Err(e) => error(&format!("camera snap {file}: {e}")),
+        }
+    }
+
+    fn camera_record(&mut self, file: &str, secs: u32) {
+        const MAX_BYTES: usize = 256 * 1024 * 1024;
+        let path = self.abs(file);
+        if !self.may_change(&path) {
+            return;
+        }
+        let mut writer: Option<beenet::avi::Writer> = None;
+        let mut start = 0;
+        let mut end = 0;
+        let result = self.camera_pictures((640, 480), |picture| {
+            let now = crate::time::uptime_ms();
+            let jpeg = match picture.kind {
+                beenet::uvc::Kind::Mjpeg => beenet::jpeg::with_tables(&picture.data),
+                _ => match Self::camera_pixels(&picture) {
+                    Some(image) => {
+                        let w = image.width;
+                        crate::image::encode_jpeg(image.width, image.height, 80, &|x, y| image.pixels[y * w + x])
+                    }
+                    None => return true,
+                },
+            };
+            let video = writer.get_or_insert_with(|| {
+                start = now;
+                beenet::avi::Writer::new(picture.width as usize, picture.height as usize, 33_333)
+            });
+            video.frame(&jpeg);
+            end = now;
+            video.len() < MAX_BYTES && now < start + secs as u64 * 1000
+        });
+        if let Err(why) = &result {
+            if why != "stopped" || writer.is_none() {
+                error(&format!("camera: {why}"));
+                if writer.is_none() {
+                    return;
+                }
+            }
+        }
+        let Some(mut video) = writer else { return };
+        let frames = video.frames();
+        let ms = (end - start).max(1);
+        if frames > 1 {
+            video.set_frame_us((ms * 1000 / (frames as u64 - 1)) as u32);
+        }
+        let data = video.finish();
+        match self.storage.fs().write_file(&path, &data) {
+            Ok(()) => println!(
+                "filmed {frames} pictures in {}.{} s to {path} ({} KiB)",
+                ms / 1000,
+                ms % 1000 / 100,
+                data.len().div_ceil(1024)
+            ),
+            Err(e) => error(&format!("camera record {file}: {e}")),
+        }
+    }
+
     fn record_avi(&mut self, path: &str, file: &str, secs: u32) {
         const FRAME_MS: u64 = 100;
         const MAX_BYTES: usize = 128 * 1024 * 1024;
@@ -1330,11 +1489,42 @@ impl Shell {
             ("install", [disk, option @ ("--erase" | "--reinstall")]) => self.install(disk, option),
             ("install", _) => error("usage: install [DISK [--reinstall | --erase]]   (install alone lists the disks)"),
             ("lsusb", []) => println!("{}", crate::usb::describe()),
+            ("camera", []) => {
+                println!("{}", crate::usb::describe_cameras());
+                match crate::usb::CAMERA_STATE.get().clone() {
+                    crate::usb::CameraState::On(what) => println!("sending: {what}"),
+                    crate::usb::CameraState::Failed(why) => println!("last attempt failed: {why}"),
+                    crate::usb::CameraState::Off => {}
+                }
+            }
+            ("camera", ["snap", file]) => self.camera_snap(file, (640, 480)),
+            ("camera", ["snap", file, size]) => match parse_size(size) {
+                Some(size) => self.camera_snap(file, size),
+                None => error("usage: camera snap FILE [WIDTHxHEIGHT]"),
+            },
+            ("camera", ["record", file, secs]) => match secs.parse::<u32>() {
+                Ok(secs @ 1..=600) if file.to_ascii_lowercase().ends_with(".avi") => self.camera_record(file, secs),
+                _ => error("usage: camera record FILE.avi SECONDS   (1 to 600; Ctrl+C stops early)"),
+            },
+            ("camera", ["raw"]) => {
+                let raw = crate::usb::CAMERAS.get().first().map(|c| c.raw.clone());
+                match raw {
+                    Some(raw) => {
+                        for line in raw.chunks(32) {
+                            let hex: String = line.iter().map(|b| alloc::format!("{b:02x}")).collect();
+                            println!("{hex}");
+                        }
+                    }
+                    None => error("no camera plugged in"),
+                }
+            }
             ("slots", []) => match bootslots::describe() {
                 Some(text) => println!("{text}"),
                 None => println!("not booted from a boot disk with A/B slots (see tools/bootdisk.py)"),
             },
-            ("crash", []) => panic!("'crash' command: deliberate kernel panic (tests crash reports)"),
+            // A bare `crash` only explains itself: typed by accident (or from
+            // afar) it must not stop a machine nobody is sitting at.
+            ("crash", ["panic"]) => panic!("'crash' command: deliberate kernel panic (tests crash reports)"),
             // An instruction the CPU refuses: the other way a kernel dies.
             ("crash", ["exception"]) => unsafe { core::arch::asm!("ud2", options(nomem, nostack)) },
             // A thread that never lets the others run (as the first video
@@ -1342,7 +1532,7 @@ impl Shell {
             ("crash", ["hang"]) => loop {
                 crate::thread::pause(|| true);
             },
-            ("crash", _) => error("usage: crash [exception|hang]"),
+            ("crash", _) => error("usage: crash panic|exception|hang (deliberately stops the machine)"),
             ("reboot", []) => {
                 self.log_power("reboot");
                 power::reboot()
@@ -2728,6 +2918,9 @@ const COMMANDS: &[(&str, &str)] = &[
     ("lspci [-v]", "list PCI devices (-v: what each one can do)"),
     ("install [DISK]", "put the OS on a disk, or upgrade it (alone: list the disks)"),
     ("lsusb", "USB controller and devices"),
+    ("camera [raw]", "USB cameras: the picture formats and sizes they offer ('raw': the description as the camera gave it)"),
+    ("camera snap FILE [WxH]", "take a picture with the USB camera (640x480 unless asked): JPEG, PNG or BMP by the name"),
+    ("camera record FILE.avi SECS", "film with the USB camera into a Motion JPEG video (play it with 'play')"),
     ("threads", "what runs side by side inside the kernel"),
     ("monitor", "system monitor in a window: work per processor, memory, network, threads"),
     ("view FILE", "show a picture (JPEG, PNG, GIF, BMP or PPM) in a window; animated GIFs play"),
@@ -2746,7 +2939,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("terminal", "one more terminal window on the desktop, with a shell of its own"),
     ("desktop [on|off]", "graphical desktop: the terminal in a window (on by default; saved); 'desktop wallpaper FILE|none'"),
     ("slots", "A/B kernel slots: which one runs, last trial"),
-    ("crash [exception]", "deliberately crash the kernel: a panic, or a CPU exception (tests crash reports)"),
+    ("crash panic|exception|hang", "deliberately crash the kernel: a panic, a CPU exception, or a hang the watchdog ends (tests crash reports)"),
     ("reboot, shutdown", "restart / power off"),
 ];
 
@@ -3019,4 +3212,11 @@ impl Calc<'_> {
         }
         Ok(v)
     }
+}
+
+/// "640x480" -> (640, 480).
+fn parse_size(text: &str) -> Option<(u16, u16)> {
+    let (w, h) = text.split_once(['x', 'X'])?;
+    let (w, h) = (w.parse::<u16>().ok()?, h.parse::<u16>().ok()?);
+    (w > 0 && h > 0).then_some((w, h))
 }
