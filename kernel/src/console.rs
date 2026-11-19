@@ -385,17 +385,26 @@ pub fn pane_show(window: usize, lines: &[Vec<u16>], cursor: (usize, usize)) {
 /// scaled on every processor in use. Returns the size it is shown at, in
 /// percent.
 pub fn pane_picture(window: usize, image: &crate::image::Image) -> Option<usize> {
+    pane_pixels(window, image.width, image.height, &image.pixels)
+}
+
+/// `pane_picture` for a picture of `width` x `height` pixels in `pixels`
+/// (a frame of an animation).
+pub fn pane_pixels(window: usize, width: usize, height: usize, pixels: &[u32]) -> Option<usize> {
+    if pixels.len() < width * height {
+        return None;
+    }
     let pane = PANES.get().iter_mut().find(|p| p.window == window)?;
     let canvas = pane.surface.canvas();
     let (room_w, room_h) = (canvas.width(), canvas.height());
-    let (w, h, percent) = crate::image::fit(image.width, image.height, room_w, room_h);
+    let (w, h, percent) = crate::image::fit(width, height, room_w, room_h);
     canvas.fill_rect(canvas.bounds(), 0x202020);
     let (left, top) = ((room_w - w) / 2, (room_h - h) / 2);
     let shared = crate::smp::Disjoint(canvas);
     crate::smp::run(h, &|y| {
         // Nearest neighbour: each shown pixel takes the picture's pixel under it.
-        let from = y * image.height / h;
-        let row: Vec<u32> = (0..w).map(|x| image.pixels[from * image.width + x * image.width / w]).collect();
+        let from = y * height / h;
+        let row: Vec<u32> = (0..w).map(|x| pixels[from * width + x * width / w]).collect();
         shared.get().put_row(left, top + y, &row);
     });
     pane.picture = true;

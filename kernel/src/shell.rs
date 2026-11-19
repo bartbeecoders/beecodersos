@@ -484,6 +484,59 @@ impl Shell {
         }
     }
 
+    /// `record`: five pictures of the screen a second into an animated
+    /// GIF, each turned into the GIF's colors on all processors; a
+    /// picture like the one before only makes that one last longer.
+    fn record(&mut self, path: &str, file: &str, secs: u32) {
+        const FRAME_MS: u64 = 200;
+        /// A recording stops growing here (a still desktop takes far less).
+        const MAX_BYTES: usize = 32 * 1024 * 1024;
+        let mut writer: Option<beenet::gif::Writer> = None;
+        let start = crate::time::uptime_ms();
+        let (mut taken, mut stopped) = (0u32, false);
+        for i in 0..secs as u64 * 1000 / FRAME_MS {
+            let shot = console::with_screen(|w, h, pixel| {
+                let mut indices = alloc::vec![0u8; w * h];
+                let rows = crate::smp::Disjoint(indices.as_mut_ptr());
+                let pixel = crate::smp::Disjoint(pixel);
+                crate::smp::run(h, &|y| {
+                    // SAFETY: each job writes its own line of `indices`.
+                    let line = unsafe { core::slice::from_raw_parts_mut(rows.get().add(y * w), w) };
+                    for (x, out) in line.iter_mut().enumerate() {
+                        *out = beenet::gif::color_index(pixel.get()(x, y));
+                    }
+                });
+                (w, h, indices)
+            });
+            let Some((w, h, indices)) = shot else {
+                error("record: needs a graphics screen");
+                return;
+            };
+            writer.get_or_insert_with(|| beenet::gif::Writer::new(w, h)).frame_indices(FRAME_MS as u32, indices);
+            taken += 1;
+            if writer.as_ref().is_some_and(|g| g.len() > MAX_BYTES) {
+                break;
+            }
+            // Until the next picture: Ctrl+C stops (other keys are ignored).
+            let due = start + (i + 1) * FRAME_MS;
+            while crate::time::uptime_ms() < due && !stopped {
+                crate::thread::pause(|| crate::input::pending() || crate::time::uptime_ms() >= due);
+                stopped = crate::input::poll_key() == Some(crate::input::Key::Ctrl('c'));
+            }
+            if stopped {
+                break;
+            }
+        }
+        let Some(writer) = writer else { return };
+        let frames = writer.frames;
+        let data = writer.finish();
+        let seconds = (crate::time::uptime_ms() - start).div_ceil(1000);
+        match self.storage.fs().write_file(path, &data) {
+            Ok(()) => println!("recorded {taken} pictures in {seconds} s ({frames} different) to {path} ({} KiB)", data.len().div_ceil(1024)),
+            Err(e) => error(&format!("record {file}: {e}")),
+        }
+    }
+
     /// At boot: the saved wallpaper, if its picture is still there.
     pub fn load_wallpaper(&mut self) {
         let data = self.storage.fs().read_file(WALLPAPER_FILE).ok();
@@ -1052,20 +1105,30 @@ impl Shell {
             ("view", [file]) => {
                 let path = self.abs(file);
                 match crate::desk::open_picture(&path) {
-                    Ok((_, w, h)) => println!("{path} ({w} x {h} pixels) in a new window: q leaves"),
+                    Ok((_, w, h, 1)) => println!("{path} ({w} x {h} pixels) in a new window: q leaves"),
+                    Ok((_, w, h, n)) => println!("{path} ({w} x {h} pixels, {n} frames) in a new window: space pauses, n steps, q leaves"),
                     Err(why) => error(&format!("view {file}: {why}")),
                 }
             }
-            ("view", _) => error("usage: view FILE   (a PNG, BMP or PPM picture)"),
+            ("view", _) => error("usage: view FILE   (a PNG, GIF, BMP or PPM picture; an animated GIF plays)"),
             ("screenshot", [file]) => {
                 let path = self.abs(file);
                 if !self.may_change(&path) {
                     return;
                 }
-                // PNG when the name says so, BMP otherwise.
-                let png = path.to_ascii_lowercase().ends_with(".png");
+                // PNG or GIF when the name says so, BMP otherwise.
+                let name = path.to_ascii_lowercase();
                 let picture = console::with_screen(|w, h, pixel| {
-                    (w, h, if png { beenet::png::encode(w, h, pixel) } else { crate::image::encode_bmp(w, h, pixel) })
+                    let data = if name.ends_with(".png") {
+                        beenet::png::encode(w, h, pixel)
+                    } else if name.ends_with(".gif") {
+                        let mut gif = beenet::gif::Writer::new(w, h);
+                        gif.frame(100, pixel);
+                        gif.finish()
+                    } else {
+                        crate::image::encode_bmp(w, h, pixel)
+                    };
+                    (w, h, data)
                 });
                 match picture {
                     Some((w, h, bmp)) => {
@@ -1078,7 +1141,19 @@ impl Shell {
                     None => error("screenshot: needs a graphics screen"),
                 }
             }
-            ("screenshot", _) => error("usage: screenshot FILE   (saves the screen as a picture: PNG if FILE ends in .png, BMP otherwise)"),
+            ("screenshot", _) => error("usage: screenshot FILE   (saves the screen as a picture: PNG or GIF if FILE ends in .png or .gif, BMP otherwise)"),
+            ("record", [file, secs]) => {
+                let path = self.abs(file);
+                match secs.parse::<u32>() {
+                    Ok(secs @ 1..=60) if path.to_ascii_lowercase().ends_with(".gif") => {
+                        if self.may_change(&path) {
+                            self.record(&path, file, secs);
+                        }
+                    }
+                    _ => error("usage: record FILE.gif SECONDS   (1 to 60; Ctrl+C stops early)"),
+                }
+            }
+            ("record", _) => error("usage: record FILE.gif SECONDS   (1 to 60; Ctrl+C stops early)"),
             ("monitor", []) => match crate::desk::open_monitor() {
                 Ok(_) => println!("the system monitor in a new window: q leaves"),
                 Err(why) => error(&format!("monitor: {why}")),
@@ -2509,8 +2584,9 @@ const COMMANDS: &[(&str, &str)] = &[
     ("lsusb", "USB controller and devices"),
     ("threads", "what runs side by side inside the kernel"),
     ("monitor", "system monitor in a window: work per processor, memory, network, threads"),
-    ("view FILE", "show a picture (PNG, BMP or PPM) in a window"),
-    ("screenshot FILE", "save the screen as a picture (FILE.png: PNG, otherwise BMP)"),
+    ("view FILE", "show a picture (PNG, GIF, BMP or PPM) in a window; animated GIFs play"),
+    ("record FILE.gif SECS", "film the screen for SECS seconds (1-60) into an animated GIF"),
+    ("screenshot FILE", "save the screen as a picture (FILE.png: PNG, FILE.gif: GIF, otherwise BMP)"),
     ("display [mode WxH]", "screen: driver, resolution; 'display font 1|2|auto'; 'display test'; 'display speed'"),
     ("edit FILE", "text editor in a window on the desktop (Ctrl+S saves, Ctrl+Q leaves)"),
     ("browse URL|FILE|WORDS", "web page viewer in a window: http:// pages, HTML files, or a search; Tab/Enter/click follow links"),

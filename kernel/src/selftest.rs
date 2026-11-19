@@ -2868,6 +2868,11 @@ fn pictures() -> TestResult {
     let png = decode(include_bytes!("../../beenet/testdata/pal.png")).map_err(String::from)?;
     check_eq!((png.width, png.height), (37, 23));
     check!(decode(&include_bytes!("../../beenet/testdata/pal.png")[..100]).is_err());
+    // An animated GIF (ImageMagick): the first frame, through the same door.
+    let gif = decode(include_bytes!("../../beenet/testdata/anim.gif")).map_err(String::from)?;
+    check_eq!((gif.width, gif.height), (40, 30));
+    check_eq!(gif.pixels[0], 0x000080); // navy
+    check_eq!(beenet::gif::decode(include_bytes!("../../beenet/testdata/anim.gif")).map(|g| g.frames.len()), Ok(5));
     Ok(())
 }
 

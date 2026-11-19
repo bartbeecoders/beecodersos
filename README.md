@@ -331,7 +331,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `whoami`, `users`, `useradd`, `userdel`, `passwd`, `login`, `logout`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `head`, `tail`, `wc`, `grep`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `timezone`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `do`, `ai`,
-`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `cpu`, `monitor`, `view`, `screenshot`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `vnc`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `cpu`, `monitor`, `view`, `screenshot`, `record`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `vnc`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Text tools** (`kernel/src/textops.rs`, self-tested; `text-tools.scn`):
 `head` / `tail [-n N | -N] FILE` show the first or last lines (10 unless N
@@ -1352,7 +1352,25 @@ desktop.
   flipped at every byte; the PNGs it writes are read by ImageMagick. A
   1280x1024 wallpaper is 22 KB as PNG instead of 3.9 MB as BMP. `pictures.scn` saves the screen at 800x600, views it
   on a 4-processor VM and checks the pixels of the window.
-- **Wallpaper:** `desktop wallpaper FILE` puts a PNG, BMP or PPM picture behind
+- **GIF and screen recordings:** `view` also shows GIF pictures and plays
+  animated GIFs at the speed the file asks for, round and round (space
+  pauses, `n` steps a frame, `q` leaves). `beenet/src/gif.rs` reads
+  GIF87a/89a (LZW, global and local color tables, transparency,
+  interlacing, all three ways of clearing a frame); frames stay as the
+  rectangles of color indices the file holds, and a `Player` paints them
+  one by one, so a long animation costs about a byte per changed pixel.
+  `screenshot FILE.gif` saves one picture, and `record FILE.gif SECONDS`
+  (1-60, Ctrl+C stops early) films the screen at five pictures a second:
+  each picture is turned into a fixed 252-color palette on every processor
+  in use, only the rectangle that changed since the picture before is
+  stored, and a picture without changes makes the one before last longer.
+  On the HP, 5 s of the 1280x1024 desktop with the monitor open is 35 KB
+  (11 different pictures out of 25). Host tests compare every frame of
+  ImageMagick-made GIFs (offsets, transparency, every disposal, interlaced)
+  with ImageMagick's own `-coalesce`, round-trip LZW around every code
+  width change and table reset, and feed cut and flipped files;
+  `pictures.scn` records the screen with the monitor open and plays it.
+- **Wallpaper:** `desktop wallpaper FILE` puts a PNG, GIF, BMP or PPM picture behind
   the windows, scaled to cover the whole screen (cut off evenly where its
   shape differs; made on every processor in use, and again when the screen
   changes size); `desktop wallpaper none` brings back the plain color. The

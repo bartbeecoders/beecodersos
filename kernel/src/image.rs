@@ -1,5 +1,5 @@
-//! Pictures: reading PNG (beenet::png), BMP and PPM files (`view`), writing
-//! BMP or PNG (`screenshot`),
+//! Pictures: reading PNG (beenet::png), GIF (beenet::gif: the first frame;
+//! `view` plays the rest), BMP and PPM files, writing BMP or PNG (`screenshot`),
 //! and fitting a picture into a window. A file is untrusted data: every
 //! size is checked before use, and pictures are at most `MAX_SIDE` pixels
 //! wide and high.
@@ -36,16 +36,21 @@ fn checked_size(width: usize, height: usize) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// A PNG, a BMP (uncompressed, 24 or 32 bits per pixel) or a binary PPM (P6, 8 bits).
+/// A PNG, a GIF (its first frame), a BMP (uncompressed, 24 or 32 bits per
+/// pixel) or a binary PPM (P6, 8 bits).
 pub fn decode(data: &[u8]) -> Result<Image, &'static str> {
     if beenet::png::is_png(data) {
         let png = beenet::png::decode(data)?;
         return Ok(Image { width: png.width, height: png.height, pixels: png.pixels });
     }
+    if beenet::gif::is_gif(data) {
+        let gif = beenet::gif::decode(data)?;
+        return Ok(Image { width: gif.width, height: gif.height, pixels: gif.first() });
+    }
     match data.get(..2) {
         Some(b"BM") => decode_bmp(data),
         Some(b"P6") => decode_ppm(data),
-        _ => Err("not a picture this OS can show (PNG, BMP or PPM)"),
+        _ => Err("not a picture this OS can show (PNG, GIF, BMP or PPM)"),
     }
 }
 

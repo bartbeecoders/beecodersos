@@ -1,4 +1,4 @@
-# Pictures: `screenshot` saves the screen as a BMP, `view` shows a picture
+# Pictures: `screenshot` saves the screen as a BMP, PNG or GIF, `record` films it, `view` shows a picture
 # in a window, scaled on all processors. At 800x600 the viewer's window is
 # the first extra one: content 640x400 at 38,62; the 800x600 screen fits as
 # 533x400 (66%) with dark bands of 53 pixels left and right.
@@ -28,13 +28,46 @@ $ sleep 1
 @screenshot 800x600 pixels 60,200=202020 660,200=202020 95,66=a8d0f0
 @ctl keys {machine} "q"
 $ sleep 1
+# GIF: one picture of the screen, read back by the viewer (beenet::gif).
+$ screenshot /screen.gif
+~ ^saved the screen \(800 x 600\) to /screen\.gif \(\d+ KiB\)$
+$ view /screen.gif
+/screen.gif (800 x 600 pixels) in a new window: q leaves
+$ sleep 1
+@screenshot 800x600 pixels 60,200=202020 660,200=202020
+@ctl keys {machine} "q"
+$ sleep 1
+# A recording of the screen while the monitor (new numbers every second)
+# is open: several different pictures, and the viewer plays them.
+$ monitor
+the system monitor in a new window: q leaves
+$ record /clip.gif 3
+~ ^recorded 1[0-5] pictures in [34] s \([2-9]\d* different\) to /clip\.gif \(\d+ KiB\)$
+@ctl keys {machine} "q"
+$ sleep 1
+$ view /clip.gif
+~ ^/clip\.gif \(800 x 600 pixels, [2-9]\d* frames\) in a new window: space pauses, n steps, q leaves$
+$ sleep 1
+@screenshot 800x600 pixels 60,200=202020 660,200=202020
+$ threads
+~ view +(waiting|ready)
+@ctl keys {machine} " "
+@ctl keys {machine} "n"
+@ctl keys {machine} "q"
+$ sleep 1
+$ threads
+!~ view
+$ record /clip.txt 3
+usage: record FILE.gif SECONDS   (1 to 60; Ctrl+C stops early)
+$ record /clip.gif 0
+usage: record FILE.gif SECONDS   (1 to 60; Ctrl+C stops early)
 # What is no picture opens no window.
 $ echo hello > /note.txt
 $ view /note.txt
-view /note.txt: not a picture this OS can show (PNG, BMP or PPM)
+view /note.txt: not a picture this OS can show (PNG, GIF, BMP or PPM)
 $ view /missing.bmp
 view /missing.bmp: no such file or directory
 $ view
-usage: view FILE   (a PNG, BMP or PPM picture)
+usage: view FILE   (a PNG, GIF, BMP or PPM picture; an animated GIF plays)
 $ screenshot
-usage: screenshot FILE   (saves the screen as a picture: PNG if FILE ends in .png, BMP otherwise)
+usage: screenshot FILE   (saves the screen as a picture: PNG or GIF if FILE ends in .png or .gif, BMP otherwise)

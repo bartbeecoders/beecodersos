@@ -25,6 +25,7 @@ pub mod html;
 pub mod rfb;
 pub mod inflate;
 pub mod png;
+pub mod gif;
 pub mod http;
 pub mod sha256;
 pub mod sntp;
