@@ -27,3 +27,12 @@ the Space Grotesk / Inter / JetBrains Mono fonts from Google Fonts.
   git history and measurements on the HP (`cpu test`, `make check`). The hero
   terminal is a transcript of a real `do` run (`img/do-command.webp`). Update
   the version/build pill and the numbers when they change.
+
+## The commands page
+
+`commands.html` is made from the OS's own help text (`COMMANDS` in
+`kernel/src/shell.rs`): run `python3 website/scripts/commands.py` after
+commands change, then deploy. The stylesheet is linked as
+`style.css?v=BUILD` so that Cloudflare (which caches it for a day) fetches
+the new one when the build number changes; `deploy-k3s.sh check` checks
+both pages.
