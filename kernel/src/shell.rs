@@ -484,6 +484,15 @@ impl Shell {
         }
     }
 
+    /// Play 48k frames on the sound card; Ctrl+C stops.
+    fn play_frames(&mut self, frames: &[u8], name: &str) {
+        let stop = || crate::input::pending() && crate::input::poll_key() == Some(crate::input::Key::Ctrl('c'));
+        match crate::hda::play(frames, stop) {
+            Ok((ms, moved)) => println!("played {ms} ms ({} KiB taken by the sound card)", moved / 1024),
+            Err(why) => error(&format!("{name}: {why}")),
+        }
+    }
+
     /// `record`: five pictures of the screen a second into an animated
     /// GIF, each turned into the GIF's colors on all processors; a
     /// picture like the one before only makes that one last longer.
@@ -1153,6 +1162,39 @@ impl Shell {
                     _ => error("usage: record FILE.gif SECONDS   (1 to 60; Ctrl+C stops early)"),
                 }
             }
+            ("sound", []) => match crate::hda::describe() {
+                Ok(lines) => lines.iter().for_each(|l| println!("{l}")),
+                Err(why) => error(&format!("sound: {why}")),
+            },
+            ("sound", ["volume", n]) => match n.trim_end_matches('%').parse::<u32>() {
+                Ok(v @ 0..=100) => match crate::hda::set_volume(v) {
+                    Ok(()) => println!("volume {v} %"),
+                    Err(why) => error(&format!("sound: {why}")),
+                },
+                _ => error("usage: sound volume 0-100"),
+            },
+            ("sound", _) => error("usage: sound [volume 0-100]"),
+            ("beep", args) if args.len() <= 2 => {
+                let hz = args.first().map_or(Some(880), |w| crate::sound::frequency(w));
+                let ms = args.get(1).map_or(Some(300), |w| w.parse::<u32>().ok().filter(|ms| (1..=10_000).contains(ms)));
+                match (hz, ms) {
+                    (Some(hz), Some(ms)) => self.play_frames(&crate::sound::tone(hz, ms, 50), "beep"),
+                    _ => error("usage: beep [HZ|NOTE [MS]]   (e.g. beep 440 500, beep c5; 20-20000 Hz, at most 10000 ms)"),
+                }
+            }
+            ("beep", _) => error("usage: beep [HZ|NOTE [MS]]   (e.g. beep 440 500, beep c5; 20-20000 Hz, at most 10000 ms)"),
+            ("play", [file]) => {
+                let path = self.abs(file);
+                let data = self.storage.fs().read_file(&path);
+                match data.map_err(|e| format!("{e}")).and_then(|d| crate::sound::parse_wav(&d).map_err(String::from)) {
+                    Ok(wav) => {
+                        println!("{path}: {} Hz, {} bits, {}, {} (Ctrl+C stops)", wav.rate, wav.bits, if wav.channels == 1 { "mono" } else { "stereo" }, crate::time::format_duration(wav.duration_ms()));
+                        self.play_frames(&wav.to_48k(), "play");
+                    }
+                    Err(why) => error(&format!("play {file}: {why}")),
+                }
+            }
+            ("play", _) => error("usage: play FILE.wav"),
             ("record", _) => error("usage: record FILE.gif SECONDS   (1 to 60; Ctrl+C stops early)"),
             ("monitor", []) => match crate::desk::open_monitor() {
                 Ok(_) => println!("the system monitor in a new window: q leaves"),
@@ -2585,6 +2627,9 @@ const COMMANDS: &[(&str, &str)] = &[
     ("threads", "what runs side by side inside the kernel"),
     ("monitor", "system monitor in a window: work per processor, memory, network, threads"),
     ("view FILE", "show a picture (PNG, GIF, BMP or PPM) in a window; animated GIFs play"),
+    ("sound [volume N]", "the sound card, its outputs and volume (0-100)"),
+    ("beep [HZ|NOTE [MS]]", "play a tone (default 880 Hz, 300 ms; notes like a4, c#5)"),
+    ("play FILE.wav", "play a WAV file (PCM, 8 or 16 bits)"),
     ("record FILE.gif SECS", "film the screen for SECS seconds (1-60) into an animated GIF"),
     ("screenshot FILE", "save the screen as a picture (FILE.png: PNG, FILE.gif: GIF, otherwise BMP)"),
     ("display [mode WxH]", "screen: driver, resolution; 'display font 1|2|auto'; 'display test'; 'display speed'"),

@@ -65,6 +65,8 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("time zones: UTC, offsets, CET with summer time, the desktop clock", time_zones),
     ("pictures: BMP and PPM in and out, damaged files, fitting", pictures),
     ("wallpaper: covering the screen, behind the windows", wallpaper),
+    ("sound: WAV files, tones, notes", sound_files),
+    ("sound: the way from a speaker to a converter", sound_routes),
     ("remote desktop: a viewer's keys, the tiles that changed", vnc_parts),
     ("accounts: the file, passwords, what needs an admin", accounts),
     ("heap: alloc and free", heap_alloc_free),
@@ -2979,5 +2981,125 @@ fn accounts() -> TestResult {
     check_eq!(owner_blocking(None, false, "/home/bob/x"), Some(String::from("bob")));
     check_eq!(owner_blocking(some(&alice).as_ref(), true, "/home/bob/x"), None);
     check_eq!(owner_blocking(some(&alice).as_ref(), true, "/system/users"), None);
+    Ok(())
+}
+
+/// A WAV file as a test makes it: `fmt ` then other chunks then `data`.
+fn wav_file(channels: u16, rate: u32, bits: u16, data: &[u8], extra: &[u8]) -> Vec<u8> {
+    let mut f = b"RIFF\0\0\0\0WAVEfmt ".to_vec();
+    f.extend_from_slice(&16u32.to_le_bytes());
+    f.extend_from_slice(&1u16.to_le_bytes());
+    f.extend_from_slice(&channels.to_le_bytes());
+    f.extend_from_slice(&rate.to_le_bytes());
+    f.extend_from_slice(&(rate * channels as u32 * bits as u32 / 8).to_le_bytes());
+    f.extend_from_slice(&(channels * bits / 8).to_le_bytes());
+    f.extend_from_slice(&bits.to_le_bytes());
+    f.extend_from_slice(extra);
+    f.extend_from_slice(b"data");
+    f.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    f.extend_from_slice(data);
+    let size = (f.len() - 8) as u32;
+    f[4..8].copy_from_slice(&size.to_le_bytes());
+    f
+}
+
+fn sound_files() -> TestResult {
+    use crate::sound::{frequency, parse_wav, sin_turns, tone};
+    // 16-bit mono at 24 kHz, after a LIST chunk of odd size (padded).
+    let samples: Vec<u8> = [0i16, 1000, -1000, 2000].iter().flat_map(|v| v.to_le_bytes()).collect();
+    let file = wav_file(1, 24_000, 16, &samples, b"LIST\x03\0\0\0abc\0");
+    let wav = parse_wav(&file).map_err(String::from)?;
+    check_eq!((wav.rate, wav.channels, wav.bits, wav.frames()), (24_000, 1, 16, 4));
+    // Twice the rate: every other frame lies halfway; mono goes to both sides.
+    let out = wav.to_48k();
+    check_eq!(out.len(), 8 * 4);
+    let left = |i: usize| i16::from_le_bytes([out[i * 4], out[i * 4 + 1]]);
+    let right = |i: usize| i16::from_le_bytes([out[i * 4 + 2], out[i * 4 + 3]]);
+    check_eq!((left(0), left(1), left(2), left(3), left(4)), (0, 500, 1000, 0, -1000));
+    check_eq!(right(2), 1000);
+    // 8-bit stereo: 128 is silence, 255 nearly full.
+    let wav = parse_wav(&wav_file(2, 48_000, 8, &[128, 255, 0, 128], &[])).map_err(String::from)?;
+    let out = wav.to_48k();
+    check_eq!(out.len(), 8);
+    check_eq!(i16::from_le_bytes([out[0], out[1]]), 0);
+    check_eq!(i16::from_le_bytes([out[2], out[3]]), 127 << 8);
+    check_eq!(i16::from_le_bytes([out[4], out[5]]), -32768);
+    // Refused: not a WAV, float samples, 24 bits; cut anywhere: never a panic.
+    check!(parse_wav(b"hello").is_err());
+    let mut float = wav_file(1, 8000, 16, &samples, &[]);
+    float[20] = 3;
+    check!(parse_wav(&float).is_err());
+    check!(parse_wav(&wav_file(1, 8000, 24, &samples, &[])).is_err());
+    let file = wav_file(2, 44_100, 16, &samples, &[]);
+    for end in 0..file.len() {
+        if let Ok(w) = parse_wav(&file[..end]) {
+            check!(w.frames() <= 2);
+            let _ = w.to_48k();
+        }
+    }
+    // Sine: right at the quarter turns, close in between.
+    for (t, want) in [(0.0f32, 0.0f32), (0.25, 1.0), (0.5, 0.0), (0.75, -1.0), (1.0 / 12.0, 0.5), (-0.25, -1.0), (2.125, 0.707_107)] {
+        check!((sin_turns(t) - want).abs() < 0.002);
+    }
+    // A tone: the right length, silent at both ends, as many waves as asked.
+    let t = tone(1000, 100, 50);
+    check_eq!(t.len(), 4800 * 4);
+    let sample = |i: usize| i16::from_le_bytes([t[i * 4], t[i * 4 + 1]]);
+    check!(sample(0).abs() < 100 && sample(4799).abs() < 300);
+    let peak = (0..4800).map(|i| sample(i).unsigned_abs()).max().unwrap_or(0);
+    check!((16_000..=16_400).contains(&peak));
+    let crossings = (1..4800).filter(|&i| (sample(i - 1) < 0) != (sample(i) < 0)).count();
+    check!((198..=202).contains(&crossings)); // 100 waves, two crossings each
+    // Notes.
+    check_eq!(frequency("a4"), Some(440));
+    check_eq!(frequency("A5"), Some(880));
+    check_eq!(frequency("c5"), Some(523));
+    check_eq!(frequency("a#4"), frequency("bb4"));
+    check_eq!(frequency("a#4"), Some(466));
+    check_eq!(frequency("c0"), Some(16));
+    check_eq!(frequency("1000"), Some(1000));
+    check_eq!(frequency("5"), None);
+    check_eq!(frequency("h4"), None);
+    check_eq!(frequency("a9"), None);
+    check_eq!(frequency("b"), None);
+    Ok(())
+}
+
+fn sound_routes() -> TestResult {
+    use crate::sound::{connections, output_use, route, verb, verb16, Kind, Node};
+    let node = |nid: u8, kind: Kind, caps: u32, inputs: &[u8], config: u32| Node { nid, kind, caps, inputs: inputs.to_vec(), config, pin_caps: 1 << 4 };
+    // Like a laptop codec: the speaker through a mixer, the headphones
+    // through a selector that offers a digital converter first, and a
+    // mixer that feeds itself through another.
+    let nodes = [
+        node(0x02, Kind::Output, 0, &[], 0),
+        node(0x03, Kind::Output, 0, &[], 0),
+        node(0x06, Kind::Output, 1 << 9, &[], 0), // digital
+        node(0x0c, Kind::Mixer, 0, &[0x0b, 0x02], 0),
+        node(0x0b, Kind::Mixer, 0, &[0x0c], 0),
+        node(0x0d, Kind::Selector, 0, &[0x06, 0x0e], 0),
+        node(0x0e, Kind::Mixer, 0, &[0x03], 0),
+        node(0x14, Kind::Pin, 0, &[0x0c], 0x9017_0110),
+        node(0x21, Kind::Pin, 0, &[0x0d], 0x0221_1020),
+        node(0x1e, Kind::Pin, 0, &[0x06], 0x4000_0000),
+        node(0x1f, Kind::Pin, 0, &[0x0b], 0x0000_0000),
+    ];
+    check_eq!(route(&nodes, 0x14), Some(alloc::vec![(0x14, 0), (0x0c, 1), (0x02, 0)]));
+    check_eq!(route(&nodes, 0x21), Some(alloc::vec![(0x21, 0), (0x0d, 1), (0x0e, 0), (0x03, 0)]));
+    check_eq!(route(&nodes, 0x1e), None); // only a digital converter
+    check_eq!(route(&nodes, 0x1f), Some(alloc::vec![(0x1f, 0), (0x0b, 0), (0x0c, 1), (0x02, 0)]));
+    check_eq!(output_use(0x9017_0110), Some("speaker"));
+    check_eq!(output_use(0x0221_1020), Some("headphones"));
+    check_eq!(output_use(0x0000_4010), Some("line out"));
+    check_eq!(output_use(0x4000_0000), None); // no connection
+    check_eq!(output_use(0x02a1_1030), None); // a microphone
+    check_eq!(Kind::from_caps(0x0040_0000), Kind::Pin);
+    // Connection lists: short form with a range (2, 5..7, 10, 9), long form.
+    check_eq!(connections(5, |o| if o == 0 { 0x0a87_0502 } else { 0x0000_0009 }), alloc::vec![2, 5, 6, 7, 10, 9]);
+    check_eq!(connections(0x80 | 3, |o| if o == 0 { 0x0014_0013 } else { 0x0000_0015 }), alloc::vec![0x13, 0x14, 0x15]);
+    check_eq!(connections(0x7F, |_| 0x8181_8181).len() <= 32, true);
+    // Verbs as the specification lays them out.
+    check_eq!(verb(0, 0x14, 0x707, 0x40), 0x0147_0740);
+    check_eq!(verb16(2, 0x02, 0x3, 0xB04A), 0x2023_B04A);
     Ok(())
 }

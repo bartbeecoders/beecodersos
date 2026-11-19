@@ -331,7 +331,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `whoami`, `users`, `useradd`, `userdel`, `passwd`, `login`, `logout`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `head`, `tail`, `wc`, `grep`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `timezone`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `do`, `ai`,
-`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `cpu`, `monitor`, `view`, `screenshot`, `record`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `vnc`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `cpu`, `monitor`, `view`, `screenshot`, `record`, `sound`, `beep`, `play`, `lsusb`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `vnc`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Text tools** (`kernel/src/textops.rs`, self-tested; `text-tools.scn`):
 `head` / `tail [-n N | -N] FILE` show the first or last lines (10 unless N
@@ -1370,6 +1370,26 @@ desktop.
   with ImageMagick's own `-coalesce`, round-trip LZW around every code
   width change and table reset, and feed cut and flipped files;
   `pictures.scn` records the screen with the monitor open and plays it.
+- **Sound (HD Audio):** `sound` shows the sound card, its codecs, every
+  pin and the way found from a converter (DAC) to each speaker, headphone
+  and line-out pin; `sound volume 0-100` sets the DACs' amplifiers;
+  `beep [HZ|NOTE [MS]]` plays a sine tone (notes like `a4`, `c#5`), and
+  `play FILE.wav` a PCM WAV file (8 or 16 bits, mono or stereo, any rate:
+  converted to 48 kHz stereo). `kernel/src/hda.rs` is only touched by
+  these commands: it resets the controller, talks to the codecs through
+  the CORB/RIRB rings, finds the ways (`sound::route`, breadth first
+  through mixers and selectors, skipping digital converters), unmutes and
+  powers them, and plays one output stream from a buffer list, polled (the
+  card's interrupt line stays off). `kernel/src/sound.rs` holds what needs
+  no hardware (WAV reading, tones, notes, routes, connection lists), with
+  self-tests. Checked by hand on QEMU's `intel-hda` with its output
+  written to a WAV file: `beep 440 1000` comes out as 1.000 s at 439.7 Hz,
+  and the volume scales it. On the HP (8086:8c20, Realtek ALC221) the
+  codec, the speaker, the headphone jack and the line out are found and set
+  up, but the output stream does not start yet: the card never fetches the
+  sound (position and FIFO-ready stay 0 although the command rings, the
+  link and the codec all work); `beep` then reports the stream's
+  registers. `sound.scn` checks the commands on a machine without a card.
 - **Wallpaper:** `desktop wallpaper FILE` puts a PNG, GIF, BMP or PPM picture behind
   the windows, scaled to cover the whole screen (cut off evenly where its
   shape differs; made on every processor in use, and again when the screen
