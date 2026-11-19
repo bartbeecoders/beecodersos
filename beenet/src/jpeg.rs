@@ -1,7 +1,9 @@
-//! JPEG pictures (baseline, ITU T.81): Huffman-coded 8x8 blocks, restart
-//! markers, grayscale or YCbCr with 4:4:4, 4:2:2 or 4:2:0 color
-//! subsampling (colors are taken from the nearest chroma sample).
-//! Progressive and arithmetic-coded JPEGs are refused with a clear message.
+//! JPEG pictures (ITU T.81), baseline and progressive: Huffman-coded 8x8
+//! blocks, restart markers, grayscale or YCbCr with 4:4:4, 4:2:2 or 4:2:0
+//! color subsampling (colors are taken from the nearest chroma sample).
+//! Progressive files come in several scans that each add to the blocks'
+//! coefficients (DC and AC bands, refined bit by bit). Lossless,
+//! arithmetic-coded and CMYK JPEGs are refused with a clear message.
 //!
 //! Decoding has two halves: `parse` reads the file and the Huffman codes
 //! into the blocks' coefficients (one pass, in order), and `render_rows`
@@ -151,6 +153,7 @@ impl<'a> Bits<'a> {
 
 #[derive(Clone)]
 struct Component {
+    id: u8,
     h: usize,
     v: usize,
     quant: usize,
@@ -187,6 +190,7 @@ pub fn parse(data: &[u8]) -> Result<Jpeg, &'static str> {
     let mut ac: [Option<Huffman>; 4] = Default::default();
     let mut frame: Option<Jpeg> = None;
     let mut restart_interval = 0usize;
+    let mut scans = 0;
     let mut at = 2;
     loop {
         // Markers may be padded with extra 0xFF bytes.
@@ -200,6 +204,9 @@ pub fn parse(data: &[u8]) -> Result<Jpeg, &'static str> {
         at += 2;
         if marker == 0xD9 {
             break; // end of image
+        }
+        if (0xD0..=0xD7).contains(&marker) {
+            continue; // a stray restart marker
         }
         let len = u16_at(data, at).ok_or(bad)?;
         let seg = data.get(at + 2..at + len).ok_or(bad)?;
@@ -240,20 +247,34 @@ pub fn parse(data: &[u8]) -> Result<Jpeg, &'static str> {
                 }
             }
             0xDD => restart_interval = u16_at(seg, 0).ok_or(bad)?,
-            0xC0 | 0xC1 => frame = Some(read_frame(seg)?),
-            0xC2 | 0xC6 | 0xCA | 0xCE => return Err("a progressive JPEG (not supported yet)"),
-            0xC3 | 0xC5 | 0xC7 | 0xC9..=0xCB | 0xCD | 0xCF => return Err("a kind of JPEG this OS cannot show (lossless or arithmetic coding)"),
+            0xC0..=0xC2 => frame = Some(read_frame(seg)?),
+            0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF => return Err("a kind of JPEG this OS cannot show (lossless or arithmetic coding)"),
             0xDA => {
                 let jpeg = frame.as_mut().ok_or(bad)?;
-                // Baseline images have all components in the first scan: done after it.
-                read_scan(jpeg, seg, &data[at + len..], &dc, &ac, restart_interval)?;
-                break;
+                let used = read_scan(jpeg, seg, &data[at + len..], &dc, &ac, restart_interval)?;
+                scans += 1;
+                if scans > 1000 {
+                    return Err(bad);
+                }
+                // On to the next marker (not a stuffed byte, not a restart).
+                let mut next = at + len + used;
+                while next + 1 < data.len() && !(data[next] == 0xFF && data[next + 1] != 0 && !(0xD0..=0xD7).contains(&data[next + 1])) {
+                    next += 1;
+                }
+                at = next;
+                if at + 1 >= data.len() {
+                    break; // no end marker: what came is shown
+                }
+                continue;
             }
             _ => {} // APPn, comments: skipped
         }
         at += len;
     }
     let mut jpeg = frame.ok_or(bad)?;
+    if scans == 0 {
+        return Err(bad);
+    }
     jpeg.quant = quant;
     Ok(jpeg)
 }
@@ -282,7 +303,7 @@ fn read_frame(seg: &[u8]) -> Result<Jpeg, &'static str> {
         if !(1..=2).contains(&h) || !(1..=2).contains(&v) || c[2] > 3 {
             return Err("a JPEG with a color layout this OS cannot show");
         }
-        comps.push(Component { h, v, quant: c[2] as usize, bw: 0, bh: 0, coef: Vec::new() });
+        comps.push(Component { id: c[0], h, v, quant: c[2] as usize, bw: 0, bh: 0, coef: Vec::new() });
     }
     if n == 1 {
         comps[0].h = 1; // one component: blocks in plain order whatever it says
@@ -299,62 +320,186 @@ fn read_frame(seg: &[u8]) -> Result<Jpeg, &'static str> {
     Ok(Jpeg { width, height, comps, quant: [[1; 64]; 4], hmax, vmax, mcus_x, mcus_y })
 }
 
-/// Read a scan's coefficients from the entropy-coded `data` after its header.
-fn read_scan(jpeg: &mut Jpeg, seg: &[u8], data: &[u8], dc: &[Option<Huffman>; 4], ac: &[Option<Huffman>; 4], restart_interval: usize) -> Result<(), &'static str> {
+/// What a scan adds to the blocks.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Band {
+    /// The first and last coefficient (zigzag order) of the scan.
+    ss: usize,
+    se: usize,
+    /// Successive approximation: a refining scan (ah > 0) adds bit `al`.
+    ah: u8,
+    al: u8,
+}
+
+/// Decode one block's part of a scan.
+fn decode_block(bits: &mut Bits, block: &mut [i16], dct: Option<&Huffman>, act: Option<&Huffman>, pred: &mut i32, eobrun: &mut u32, b: Band) -> Result<(), &'static str> {
+    let bad = "a damaged JPEG file";
+    let put = |v: i32| v.clamp(-32768, 32767) as i16;
+    if b.ss == 0 {
+        if b.ah == 0 {
+            let s = bits.decode(dct.ok_or(bad)?).ok_or(bad)? as u32;
+            *pred += bits.signed(s);
+            block[0] = put(*pred << b.al);
+        } else if bits.bit() == 1 {
+            block[0] |= 1 << b.al;
+        }
+        if b.se == 0 {
+            return Ok(());
+        }
+    }
+    let act = act.ok_or(bad)?;
+    let first = b.ss.max(1);
+    if b.ah == 0 {
+        // The first scan of a band (baseline: all of it at once).
+        if *eobrun > 0 {
+            *eobrun -= 1;
+            return Ok(());
+        }
+        let mut k = first;
+        while k <= b.se {
+            let rs = bits.decode(act).ok_or(bad)?;
+            let (r, s) = ((rs >> 4) as usize, (rs & 15) as u32);
+            if s == 0 {
+                if r < 15 {
+                    *eobrun = (1u32 << r) - 1; // this block and r more bits' worth
+                    if r > 0 {
+                        *eobrun += bits.bits(r as u32);
+                    }
+                    break;
+                }
+                k += 16;
+                continue;
+            }
+            k += r;
+            if k > 63 {
+                return Err(bad);
+            }
+            block[ZIGZAG[k]] = put(bits.signed(s) << b.al);
+            k += 1;
+        }
+        return Ok(());
+    }
+    // Refining a band: one more bit for the coefficients already there,
+    // and new coefficients of +-1 in between (as libjpeg reads them).
+    let (p1, m1) = (1i32 << b.al, -1i32 << b.al);
+    let mut k = first;
+    if *eobrun == 0 {
+        while k <= b.se {
+            let rs = bits.decode(act).ok_or(bad)?;
+            let (mut r, s) = ((rs >> 4) as i32, rs & 15);
+            let mut value = 0;
+            if s != 0 {
+                if s != 1 {
+                    return Err(bad);
+                }
+                value = if bits.bit() == 1 { p1 } else { m1 };
+            } else if r != 15 {
+                *eobrun = 1 << r;
+                if r > 0 {
+                    *eobrun += bits.bits(r as u32);
+                }
+                break;
+            }
+            while k <= b.se {
+                let z = ZIGZAG[k];
+                let c = block[z] as i32;
+                if c != 0 {
+                    if bits.bit() == 1 && c & p1 == 0 {
+                        block[z] = put(if c >= 0 { c + p1 } else { c + m1 });
+                    }
+                } else {
+                    if r == 0 {
+                        break;
+                    }
+                    r -= 1;
+                }
+                k += 1;
+            }
+            if value != 0 && k <= b.se {
+                block[ZIGZAG[k]] = put(value);
+            }
+            k += 1;
+        }
+    }
+    if *eobrun > 0 {
+        while k <= b.se {
+            let z = ZIGZAG[k];
+            let c = block[z] as i32;
+            if c != 0 && bits.bit() == 1 && c & p1 == 0 {
+                block[z] = put(if c >= 0 { c + p1 } else { c + m1 });
+            }
+            k += 1;
+        }
+        *eobrun -= 1;
+    }
+    Ok(())
+}
+
+/// Read a scan from the entropy-coded `data` after its header into the
+/// blocks' coefficients; returns how many bytes of `data` it used.
+fn read_scan(jpeg: &mut Jpeg, seg: &[u8], data: &[u8], dc: &[Option<Huffman>; 4], ac: &[Option<Huffman>; 4], restart_interval: usize) -> Result<usize, &'static str> {
     let bad = "a damaged JPEG file";
     let n = *seg.first().ok_or(bad)? as usize;
-    if n != jpeg.comps.len() {
-        return Err("a JPEG with its colors in separate scans (not supported yet)");
+    if n == 0 || n > jpeg.comps.len() {
+        return Err(bad);
     }
-    let mut tables = Vec::new();
+    let mut scomps = Vec::new();
     for i in 0..n {
         let s = seg.get(1 + i * 2..3 + i * 2).ok_or(bad)?;
-        let (d, a) = ((s[1] >> 4) as usize, (s[1] & 15) as usize);
-        let dct = dc.get(d).and_then(|t| t.as_ref()).ok_or(bad)?;
-        let act = ac.get(a).and_then(|t| t.as_ref()).ok_or(bad)?;
-        tables.push((dct, act));
+        let ci = jpeg.comps.iter().position(|c| c.id == s[0]).ok_or(bad)?;
+        let dct = dc.get((s[1] >> 4) as usize).and_then(|t| t.as_ref());
+        let act = ac.get((s[1] & 15) as usize).and_then(|t| t.as_ref());
+        scomps.push((ci, dct, act));
+    }
+    let p = 1 + 2 * n;
+    let tail = seg.get(p..p + 3).ok_or(bad)?;
+    let band = Band { ss: tail[0] as usize, se: tail[1] as usize, ah: tail[2] >> 4, al: tail[2] & 15 };
+    let fits = band.ss <= band.se && band.se <= 63 && band.al <= 13 && (band.ss > 0 || band.se == 0 || (band.se == 63 && band.ah == 0 && band.al == 0));
+    if !fits || (band.ss > 0 && n != 1) {
+        return Err(bad);
     }
     let mut bits = Bits { data, pos: 0, acc: 0, n: 0, marker: false };
     let mut pred = vec![0i32; n];
-    let total = jpeg.mcus_x * jpeg.mcus_y;
-    for mcu in 0..total {
-        if restart_interval > 0 && mcu > 0 && mcu % restart_interval == 0 {
+    let mut eobrun = 0u32;
+    // One component: its blocks in plain order (only the ones in the
+    // picture); several: whole MCUs.
+    let single = n == 1;
+    let (hmax, vmax, width, height) = (jpeg.hmax, jpeg.vmax, jpeg.width, jpeg.height);
+    let blocks_across = |c: &Component| (width * c.h).div_ceil(hmax).div_ceil(8);
+    let units = if single {
+        let c = &jpeg.comps[scomps[0].0];
+        blocks_across(c) * (height * c.v).div_ceil(vmax).div_ceil(8)
+    } else {
+        jpeg.mcus_x * jpeg.mcus_y
+    };
+    for unit in 0..units {
+        if restart_interval > 0 && unit > 0 && unit % restart_interval == 0 {
             bits.restart();
             pred.iter_mut().for_each(|p| *p = 0);
+            eobrun = 0;
         }
-        let (mx, my) = (mcu % jpeg.mcus_x, mcu / jpeg.mcus_x);
-        for (ci, comp) in jpeg.comps.iter_mut().enumerate() {
-            let (dct, act) = tables[ci];
-            for by in 0..comp.v {
-                for bx in 0..comp.h {
-                    let (x, y) = (mx * comp.h + bx, my * comp.v + by);
-                    let block = &mut comp.coef[(y * comp.bw + x) * 64..][..64];
-                    let s = bits.decode(dct).ok_or(bad)? as u32;
-                    pred[ci] += bits.signed(s);
-                    block[0] = pred[ci].clamp(-32768, 32767) as i16;
-                    let mut k = 1;
-                    while k < 64 {
-                        let rs = bits.decode(act).ok_or(bad)?;
-                        let (r, s) = ((rs >> 4) as usize, (rs & 15) as u32);
-                        if s == 0 {
-                            if r != 15 {
-                                break; // end of block
-                            }
-                            k += 16;
-                            continue;
-                        }
-                        k += r;
-                        if k > 63 {
-                            return Err(bad);
-                        }
-                        block[ZIGZAG[k]] = bits.signed(s).clamp(-32768, 32767) as i16;
-                        k += 1;
-                    }
+        if single {
+            let (ci, dct, act) = scomps[0];
+            let c = &mut jpeg.comps[ci];
+            let across = blocks_across(c);
+            let (x, y) = (unit % across, unit / across);
+            let block = &mut c.coef[(y * c.bw + x) * 64..][..64];
+            decode_block(&mut bits, block, dct, act, &mut pred[0], &mut eobrun, band)?;
+            continue;
+        }
+        let (mx, my) = (unit % jpeg.mcus_x, unit / jpeg.mcus_x);
+        for (si, &(ci, dct, act)) in scomps.iter().enumerate() {
+            let c = &mut jpeg.comps[ci];
+            for by in 0..c.v {
+                for bx in 0..c.h {
+                    let (x, y) = (mx * c.h + bx, my * c.v + by);
+                    let block = &mut c.coef[(y * c.bw + x) * 64..][..64];
+                    decode_block(&mut bits, block, dct, act, &mut pred[si], &mut eobrun, band)?;
                 }
             }
         }
     }
-    Ok(())
+    Ok(bits.pos)
 }
 
 /// The inverse DCT of one block of dequantized coefficients: 64 samples.
@@ -507,8 +652,25 @@ mod tests {
     }
 
     #[test]
+    fn progressive() {
+        // Several scans each: DC first, then AC bands, refined bit by bit.
+        same_as_magick(include_bytes!("../testdata/jprog.jpg"), include_bytes!("../testdata/jprog.rgb"), (37, 23));
+        same_as_magick(include_bytes!("../testdata/jprog420.jpg"), include_bytes!("../testdata/jprog420.rgb"), (37, 23));
+        same_as_magick(include_bytes!("../testdata/jproggray.jpg"), include_bytes!("../testdata/jproggray.rgb"), (37, 23));
+        same_as_magick(include_bytes!("../testdata/jprogphoto.jpg"), include_bytes!("../testdata/jprogphoto.rgb"), (160, 120));
+        let jpg: &[u8] = include_bytes!("../testdata/jprogphoto.jpg");
+        for end in (0..jpg.len()).step_by(13) {
+            let _ = decode(&jpg[..end]); // never a panic
+        }
+        for i in (2..jpg.len()).step_by(5) {
+            let mut d = jpg.to_vec();
+            d[i] ^= 0x21;
+            let _ = decode(&d);
+        }
+    }
+
+    #[test]
     fn what_is_refused() {
-        assert_eq!(decode(include_bytes!("../testdata/jprog.jpg")).err(), Some("a progressive JPEG (not supported yet)"));
         assert_eq!(dimensions(include_bytes!("../testdata/jprog.jpg")), Some((37, 23)));
         assert_eq!(decode(b"GIF89a").err(), Some("not a JPEG file"));
         let jpg: &[u8] = include_bytes!("../testdata/j420.jpg");
