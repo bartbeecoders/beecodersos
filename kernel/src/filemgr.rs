@@ -449,7 +449,7 @@ pub fn opener(name: &str) -> Opener {
     let lower = name.to_ascii_lowercase();
     let ext = lower.rsplit_once('.').map_or("", |(_, e)| e);
     match ext {
-        "png" | "gif" | "bmp" | "ppm" => Opener::Picture,
+        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "ppm" => Opener::Picture,
         "wav" => Opener::Sound,
         _ => Opener::Text,
     }

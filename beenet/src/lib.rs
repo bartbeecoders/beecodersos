@@ -33,6 +33,7 @@ pub mod x509;
 pub mod tls;
 pub mod png;
 pub mod gif;
+pub mod jpeg;
 pub mod http;
 pub mod sha256;
 pub mod sntp;
