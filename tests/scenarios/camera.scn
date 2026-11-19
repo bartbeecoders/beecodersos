@@ -22,3 +22,10 @@ $ camera watch /
 ~ watching: a picture goes to / when something moves
 camera: no camera plugged in ('lsusb' lists the devices)
 ~ watched for 0m 00s \(0 pictures\): 0 saved
+$ camera timelapse /t.avi 0
+usage: camera timelapse FILE.avi SECONDS [MINUTES]   (a picture every 1-3600 s, for up to a week; Ctrl+C stops)
+$ camera timelapse /t.gif 5
+usage: camera timelapse FILE.avi SECONDS [MINUTES]   (a picture every 1-3600 s, for up to a week; Ctrl+C stops)
+$ camera timelapse /t.avi 5 60
+~ a picture every 5 s into /t.avi
+camera: no camera plugged in ('lsusb' lists the devices)

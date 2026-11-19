@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=233">
+<link rel="stylesheet" href="style.css?v=238">
 </head>
 <body>
 
@@ -30,7 +30,7 @@
   <section class="wrap commands">
     <p class="kicker">BeeShell</p>
     <h2>Every <em>command</em>.</h2>
-    <p class="sub">What <code>help</code> shows in BeeCodersOs build 233: 76 entries, taken from the
+    <p class="sub">What <code>help</code> shows in BeeCodersOs build 238: 77 entries, taken from the
       OS's own source (<code>COMMANDS</code> in <code>kernel/src/shell.rs</code>), so this page says what the OS says.
       Paths can be relative; <code>"quotes"</code> group words.</p>
     <dl class="cmds">
@@ -85,6 +85,7 @@
       <div class="cmd"><dt><code>install [DISK]</code></dt><dd>put the OS on a disk, or upgrade it (alone: list the disks)</dd></div>
       <div class="cmd"><dt><code>lsusb</code></dt><dd>USB controller and devices</dd></div>
       <div class="cmd"><dt><code>camera [raw|log]</code></dt><dd>USB cameras: the picture formats and sizes they offer (&#x27;raw&#x27;: the description as the camera gave it; &#x27;log&#x27;: what the driver noted)</dd></div>
+      <div class="cmd"><dt><code>camera timelapse FILE.avi SECS [MIN]</code></dt><dd>a time-lapse video: a picture every SECS seconds, played back at 10 a second</dd></div>
       <div class="cmd"><dt><code>camera watch FOLDER [MIN]</code></dt><dd>a security camera: saves a picture in FOLDER whenever something moves (Ctrl+C stops)</dd></div>
       <div class="cmd"><dt><code>camera view</code></dt><dd>the camera live in a window, as in a mirror: s saves a picture, m mirrors, q leaves</dd></div>
       <div class="cmd"><dt><code>camera on [WxH] | off</code></dt><dd>leave the camera sending (then &#x27;camera&#x27; counts what arrives), or stop it</dd></div>
