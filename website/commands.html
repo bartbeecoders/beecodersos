@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Commands — BeeCodersOs</title>
+<meta name="description" content="Every command of BeeShell, the terminal of BeeCodersOs, as the OS's own help describes it.">
+<meta name="theme-color" content="#0d0b07">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cpolygon points='50,4 92,27 92,73 50,96 8,73 8,27' fill='%23f5b301'/%3E%3Cpolygon points='50,30 70,41 70,63 50,74 30,63 30,41' fill='%230d0b07'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css?v=209">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="top">
+  <a class="brand" href="index.html"><span class="logo" aria-hidden="true"></span>BeeCoders<b>Os</b></a>
+  <nav aria-label="Main">
+    <a href="index.html#features">Features</a>
+    <a href="index.html#progress">Progress</a>
+    <a href="commands.html" aria-current="page">Commands</a>
+    <a class="gh" href="https://github.com/bartbeecoders/beecodersos">GitHub</a>
+  </nav>
+</header>
+
+<main id="main">
+  <section class="wrap commands">
+    <p class="kicker">BeeShell</p>
+    <h2>Every <em>command</em>.</h2>
+    <p class="sub">What <code>help</code> shows in BeeCodersOs build 209: 70 entries, taken from the
+      OS's own source (<code>COMMANDS</code> in <code>kernel/src/shell.rs</code>), so this page says what the OS says.
+      Paths can be relative; <code>"quotes"</code> group words.</p>
+    <dl class="cmds">
+      <div class="cmd"><dt><code>help</code></dt><dd>show this help</dd></div>
+      <div class="cmd"><dt><code>whoami, users</code></dt><dd>who is logged in; the accounts (none: no login, everyone may do everything)</dd></div>
+      <div class="cmd"><dt><code>useradd NAME [admin]</code></dt><dd>make an account (the first is an admin); userdel NAME; passwd [NAME]</dd></div>
+      <div class="cmd"><dt><code>login, logout</code></dt><dd>log in at the console / log out (with accounts, the console asks at boot)</dd></div>
+      <div class="cmd"><dt><code>clear</code></dt><dd>clear the screen (or Ctrl+L)</dd></div>
+      <div class="cmd"><dt><code>echo TEXT [&gt; FILE]</code></dt><dd>print text, or write (&gt;) / append (&gt;&gt;) to a file</dd></div>
+      <div class="cmd"><dt><code>ls [DIR]</code></dt><dd>list a directory</dd></div>
+      <div class="cmd"><dt><code>cd [DIR], pwd</code></dt><dd>change / show the current directory</dd></div>
+      <div class="cmd"><dt><code>cat FILE</code></dt><dd>show a file</dd></div>
+      <div class="cmd"><dt><code>head|tail [-n N] FILE</code></dt><dd>the first / last N lines of a file (10 unless N is given)</dd></div>
+      <div class="cmd"><dt><code>wc FILE</code></dt><dd>count the lines, words and bytes of a file</dd></div>
+      <div class="cmd"><dt><code>grep [-i] TEXT PATH</code></dt><dd>lines that contain TEXT, in a file or every file of a folder</dd></div>
+      <div class="cmd"><dt><code>touch FILE</code></dt><dd>create an empty file</dd></div>
+      <div class="cmd"><dt><code>mkdir DIR</code></dt><dd>create a directory (with parents)</dd></div>
+      <div class="cmd"><dt><code>rm PATH</code></dt><dd>remove a file or empty directory</dd></div>
+      <div class="cmd"><dt><code>mv FROM TO</code></dt><dd>move / rename</dd></div>
+      <div class="cmd"><dt><code>cp FROM TO</code></dt><dd>copy a file</dd></div>
+      <div class="cmd"><dt><code>tree [DIR]</code></dt><dd>show a directory tree</dd></div>
+      <div class="cmd"><dt><code>df</code></dt><dd>filesystem usage</dd></div>
+      <div class="cmd"><dt><code>layout [us|be]</code></dt><dd>show / change the keyboard layout</dd></div>
+      <div class="cmd"><dt><code>history</code></dt><dd>previous commands (Up/Down to recall)</dd></div>
+      <div class="cmd"><dt><code>mem, about</code></dt><dd>memory usage, system info</dd></div>
+      <div class="cmd"><dt><code>calc EXPR</code></dt><dd>integer arithmetic: + - * / % ( )</dd></div>
+      <div class="cmd"><dt><code>date, uptime</code></dt><dd>current date and time (in the time zone, and UTC), time since boot</dd></div>
+      <div class="cmd"><dt><code>timezone [ZONE]</code></dt><dd>the time zone for date and the desktop clock: UTC, CET, +HH:MM (saved)</dd></div>
+      <div class="cmd"><dt><code>log [N]</code></dt><dd>last N events from the event log</dd></div>
+      <div class="cmd"><dt><code>wish TEXT</code></dt><dd>tell the OS what you&#x27;d like it to do</dd></div>
+      <div class="cmd"><dt><code>feedback TEXT</code></dt><dd>tell the OS what could be better</dd></div>
+      <div class="cmd"><dt><code>ask QUESTION</code></dt><dd>ask the AI (needs beehive on the host)</dd></div>
+      <div class="cmd"><dt><code>explain</code></dt><dd>ask the AI about the last error or crash</dd></div>
+      <div class="cmd"><dt><code>do TASK</code></dt><dd>the AI suggests commands for a task in plain words; they run if you say y</dd></div>
+      <div class="cmd"><dt><code>update [auto on|off]</code></dt><dd>fetch a new kernel from the AI host and put it on trial</dd></div>
+      <div class="cmd"><dt><code>ai control [on|off]</code></dt><dd>let the AI host run commands here and see the screen</dd></div>
+      <div class="cmd"><dt><code>ai connect HOST NAME KEY</code></dt><dd>reach beehive over the network (ai disconnect: stop)</dd></div>
+      <div class="cmd"><dt><code>ai [on|off]</code></dt><dd>AI bridge status; switch AI features on/off</dd></div>
+      <div class="cmd"><dt><code>selftest</code></dt><dd>run the kernel self-tests</dd></div>
+      <div class="cmd"><dt><code>net</code></dt><dd>network status; net dhcp | static IP/PREFIX [GW] | dns ADDR | off</dd></div>
+      <div class="cmd"><dt><code>ping [-c N] HOST</code></dt><dd>check that a machine answers</dd></div>
+      <div class="cmd"><dt><code>nslookup NAME</code></dt><dd>look up the address of a host name</dd></div>
+      <div class="cmd"><dt><code>nc HOST PORT [TEXT]</code></dt><dd>open a TCP connection: type lines, see the answers</dd></div>
+      <div class="cmd"><dt><code>httpd [on [PORT]|off]</code></dt><dd>status page for the local network (off by default)</dd></div>
+      <div class="cmd"><dt><code>vnc [on|off|password]</code></dt><dd>remote desktop: see and use this screen from a VNC viewer (off by default; not encrypted)</dd></div>
+      <div class="cmd"><dt><code>remote [on|off]</code></dt><dd>remote shell with a password, not encrypted (off by default)</dd></div>
+      <div class="cmd"><dt><code>wget URL [FILE]</code></dt><dd>fetch a web address (http://): show it or save it</dd></div>
+      <div class="cmd"><dt><code>ntp [SERVER]</code></dt><dd>set the clock from a time server</dd></div>
+      <div class="cmd"><dt><code>tftp get|put HOST FILE</code></dt><dd>copy a file from / to a TFTP server</dd></div>
+      <div class="cmd"><dt><code>arp</code></dt><dd>neighbours learned on the local network</dd></div>
+      <div class="cmd"><dt><code>lspci [-v]</code></dt><dd>list PCI devices (-v: what each one can do)</dd></div>
+      <div class="cmd"><dt><code>install [DISK]</code></dt><dd>put the OS on a disk, or upgrade it (alone: list the disks)</dd></div>
+      <div class="cmd"><dt><code>lsusb</code></dt><dd>USB controller and devices</dd></div>
+      <div class="cmd"><dt><code>threads</code></dt><dd>what runs side by side inside the kernel</dd></div>
+      <div class="cmd"><dt><code>monitor</code></dt><dd>system monitor in a window: work per processor, memory, network, threads</dd></div>
+      <div class="cmd"><dt><code>view FILE</code></dt><dd>show a picture (JPEG, PNG, GIF, BMP or PPM) in a window; animated GIFs play</dd></div>
+      <div class="cmd"><dt><code>sound [volume N]</code></dt><dd>the sound card, its outputs and volume (0-100)</dd></div>
+      <div class="cmd"><dt><code>beep [HZ|NOTE [MS]]</code></dt><dd>play a tone (default 880 Hz, 300 ms; notes like a4, c#5)</dd></div>
+      <div class="cmd"><dt><code>play FILE.wav|.avi</code></dt><dd>play a WAV file, or a Motion-JPEG AVI video in a window</dd></div>
+      <div class="cmd"><dt><code>tune [save FILE.wav] NOTES</code></dt><dd>play notes like c5 e5 g5 c6:500 (r rests), or save them as a WAV file</dd></div>
+      <div class="cmd"><dt><code>record FILE.gif|.avi SECS</code></dt><dd>film the screen for SECS seconds (1-60): an animated GIF, or an MJPEG video</dd></div>
+      <div class="cmd"><dt><code>screenshot FILE</code></dt><dd>save the screen as a picture (FILE.jpg: JPEG, .png: PNG, .gif: GIF, otherwise BMP)</dd></div>
+      <div class="cmd"><dt><code>display [mode WxH]</code></dt><dd>screen: driver, resolution; &#x27;display font 1|2|auto&#x27;; &#x27;display test&#x27;; &#x27;display speed&#x27;</dd></div>
+      <div class="cmd"><dt><code>edit FILE</code></dt><dd>text editor in a window on the desktop (Ctrl+S saves, Ctrl+Q leaves)</dd></div>
+      <div class="cmd"><dt><code>browse URL|FILE|WORDS</code></dt><dd>web page viewer in a window: http:// pages, HTML files, or a search; Tab/Enter/click follow links</dd></div>
+      <div class="cmd"><dt><code>files [FOLDER]</code></dt><dd>file manager in a window: browse, open in the editor, new folder, rename, delete</dd></div>
+      <div class="cmd"><dt><code>cpu [start|test|auto on|off]</code></dt><dd>the processor: name, how many, clock, features; start the others; measure; at boot or not (saved)</dd></div>
+      <div class="cmd"><dt><code>sleep SECONDS</code></dt><dd>wait (Ctrl+C ends it)</dd></div>
+      <div class="cmd"><dt><code>terminal</code></dt><dd>one more terminal window on the desktop, with a shell of its own</dd></div>
+      <div class="cmd"><dt><code>desktop [on|off]</code></dt><dd>graphical desktop: the terminal in a window (on by default; saved); &#x27;desktop wallpaper FILE|none&#x27;</dd></div>
+      <div class="cmd"><dt><code>slots</code></dt><dd>A/B kernel slots: which one runs, last trial</dd></div>
+      <div class="cmd"><dt><code>crash [exception]</code></dt><dd>deliberately crash the kernel: a panic, or a CPU exception (tests crash reports)</dd></div>
+      <div class="cmd"><dt><code>reboot, shutdown</code></dt><dd>restart / power off</dd></div>
+    </dl>
+  </section>
+</main>
+
+<footer class="wrap foot">
+  <span class="brand small"><span class="logo" aria-hidden="true"></span>BeeCoders<b>Os</b></span>
+  <p>A <a href="https://beecoders.com">BeeCoders</a> project. Written with AI, reviewed by people.</p>
+  <a href="https://github.com/bartbeecoders/beecodersos">GitHub</a>
+</footer>
+
+</body>
+</html>

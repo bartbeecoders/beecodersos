@@ -92,17 +92,20 @@ check_remote_deps() { command -v ssh >/dev/null 2>&1 || { echo "ssh not found"; 
 check_site() {
   echo "==> Checking the site"
   local f missing=0
-  for f in index.html style.css site.js Dockerfile deploy/nginx.conf; do
+  for f in index.html commands.html style.css site.js Dockerfile deploy/nginx.conf; do
     [[ -s "$HOME_DIR/$f" ]] || { echo "missing: $f"; missing=1; }
   done
-  # Every local src/href in the page must exist (external links and #anchors are skipped).
-  while read -r f; do
-    [[ -e "$HOME_DIR/$f" ]] || { echo "index.html refers to a missing file: $f"; missing=1; }
-  done < <(grep -oE '(src|href)="[^"#:]+"' "$HOME_DIR/index.html" | sed -E 's/^[a-z]+="//; s/"$//' | sort -u)
-  # The Content-Security-Policy forbids inline styles and scripts.
-  if grep -qE ' style="|<script>' "$HOME_DIR/index.html"; then
-    echo "index.html has an inline style or script: the CSP in deploy/nginx.conf blocks it"; missing=1
-  fi
+  local page
+  for page in index.html commands.html; do
+    # Every local src/href in the page must exist (external links and #anchors are skipped).
+    while read -r f; do
+      [[ -e "$HOME_DIR/$f" ]] || { echo "$page refers to a missing file: $f"; missing=1; }
+    done < <(grep -oE '(src|href)="[^"#:]+"' "$HOME_DIR/$page" | sed -E 's/^[a-z]+="//; s/"$//; s/[#?].*//' | sort -u)
+    # The Content-Security-Policy forbids inline styles and scripts.
+    if grep -qE ' style="|<script>' "$HOME_DIR/$page"; then
+      echo "$page has an inline style or script: the CSP in deploy/nginx.conf blocks it"; missing=1
+    fi
+  done
   [[ $missing == 0 ]] || exit 1
   echo "    ok"
 }

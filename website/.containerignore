@@ -2,6 +2,7 @@
 !Dockerfile
 !deploy/nginx.conf
 !index.html
+!commands.html
 !style.css
 !site.js
 !img/
