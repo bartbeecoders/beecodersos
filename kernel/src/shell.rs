@@ -546,6 +546,57 @@ impl Shell {
         }
     }
 
+    /// `record FILE.avi`: ten pictures of the screen a second, each a JPEG
+    /// made on every processor, into a Motion-JPEG video. The time per frame
+    /// in the file is the one really measured, so it plays at the right pace
+    /// even if a picture took longer than a tenth of a second.
+    fn record_avi(&mut self, path: &str, file: &str, secs: u32) {
+        const FRAME_MS: u64 = 100;
+        const MAX_BYTES: usize = 128 * 1024 * 1024;
+        let mut writer: Option<beenet::avi::Writer> = None;
+        let start = crate::time::uptime_ms();
+        let mut stopped = false;
+        for i in 0..secs as u64 * 1000 / FRAME_MS {
+            let shot = console::with_screen(|w, h, pixel| {
+                let pixel = crate::smp::Disjoint(pixel);
+                (w, h, crate::image::encode_jpeg(w, h, 75, &|x, y| pixel.get()(x, y)))
+            });
+            let Some((w, h, jpeg)) = shot else {
+                error("record: needs a graphics screen");
+                return;
+            };
+            let video = writer.get_or_insert_with(|| beenet::avi::Writer::new(w, h, FRAME_MS as u32 * 1000));
+            video.frame(&jpeg);
+            if video.len() > MAX_BYTES {
+                break;
+            }
+            // Until the next picture (Ctrl+C stops; other keys are ignored).
+            let due = start + (i + 1) * FRAME_MS;
+            while crate::time::uptime_ms() < due && !stopped {
+                crate::thread::pause(|| crate::input::pending() || crate::time::uptime_ms() >= due);
+                stopped = crate::input::poll_key() == Some(crate::input::Key::Ctrl('c'));
+            }
+            if stopped {
+                break;
+            }
+        }
+        let Some(mut video) = writer else { return };
+        let ms = crate::time::uptime_ms() - start;
+        let frames = video.frames();
+        video.set_frame_us((ms * 1000 / frames.max(1) as u64) as u32);
+        let data = video.finish();
+        match self.storage.fs().write_file(path, &data) {
+            Ok(()) => println!(
+                "recorded {frames} frames in {}.{} s ({} a second) to {path} ({} KiB)",
+                ms / 1000,
+                ms % 1000 / 100,
+                frames as u64 * 1000 / ms.max(1),
+                data.len().div_ceil(1024)
+            ),
+            Err(e) => error(&format!("record {file}: {e}")),
+        }
+    }
+
     /// At boot: the saved wallpaper, if its picture is still there.
     pub fn load_wallpaper(&mut self) {
         let data = self.storage.fs().read_file(WALLPAPER_FILE).ok();
@@ -1128,7 +1179,10 @@ impl Shell {
                 // PNG or GIF when the name says so, BMP otherwise.
                 let name = path.to_ascii_lowercase();
                 let picture = console::with_screen(|w, h, pixel| {
-                    let data = if name.ends_with(".png") {
+                    let data = if name.ends_with(".jpg") || name.ends_with(".jpeg") {
+                        let pixel = crate::smp::Disjoint(pixel);
+                        crate::image::encode_jpeg(w, h, 90, &|x, y| pixel.get()(x, y))
+                    } else if name.ends_with(".png") {
                         let pixel = crate::smp::Disjoint(pixel);
                         crate::image::encode_png(w, h, &|x, y| pixel.get()(x, y))
                     } else if name.ends_with(".gif") {
@@ -1151,7 +1205,7 @@ impl Shell {
                     None => error("screenshot: needs a graphics screen"),
                 }
             }
-            ("screenshot", _) => error("usage: screenshot FILE   (saves the screen as a picture: PNG or GIF if FILE ends in .png or .gif, BMP otherwise)"),
+            ("screenshot", _) => error("usage: screenshot FILE   (saves the screen as a picture: JPEG, PNG or GIF by the ending, BMP otherwise)"),
             ("record", [file, secs]) => {
                 let path = self.abs(file);
                 match secs.parse::<u32>() {
@@ -1160,7 +1214,12 @@ impl Shell {
                             self.record(&path, file, secs);
                         }
                     }
-                    _ => error("usage: record FILE.gif SECONDS   (1 to 60; Ctrl+C stops early)"),
+                    Ok(secs @ 1..=60) if path.to_ascii_lowercase().ends_with(".avi") => {
+                        if self.may_change(&path) {
+                            self.record_avi(&path, file, secs);
+                        }
+                    }
+                    _ => error("usage: record FILE.gif|FILE.avi SECONDS   (1 to 60; Ctrl+C stops early)"),
                 }
             }
             ("sound", []) => match crate::hda::describe() {
@@ -1228,7 +1287,7 @@ impl Shell {
                 }
             }
             ("play", _) => error("usage: play FILE.wav|FILE.avi"),
-            ("record", _) => error("usage: record FILE.gif SECONDS   (1 to 60; Ctrl+C stops early)"),
+            ("record", _) => error("usage: record FILE.gif|FILE.avi SECONDS   (1 to 60; Ctrl+C stops early)"),
             ("monitor", []) => match crate::desk::open_monitor() {
                 Ok(_) => println!("the system monitor in a new window: q leaves"),
                 Err(why) => error(&format!("monitor: {why}")),
@@ -2671,8 +2730,8 @@ const COMMANDS: &[(&str, &str)] = &[
     ("beep [HZ|NOTE [MS]]", "play a tone (default 880 Hz, 300 ms; notes like a4, c#5)"),
     ("play FILE.wav|.avi", "play a WAV file, or a Motion-JPEG AVI video in a window"),
     ("tune [save FILE.wav] NOTES", "play notes like c5 e5 g5 c6:500 (r rests), or save them as a WAV file"),
-    ("record FILE.gif SECS", "film the screen for SECS seconds (1-60) into an animated GIF"),
-    ("screenshot FILE", "save the screen as a picture (FILE.png: PNG, FILE.gif: GIF, otherwise BMP)"),
+    ("record FILE.gif|.avi SECS", "film the screen for SECS seconds (1-60): an animated GIF, or an MJPEG video"),
+    ("screenshot FILE", "save the screen as a picture (FILE.jpg: JPEG, .png: PNG, .gif: GIF, otherwise BMP)"),
     ("display [mode WxH]", "screen: driver, resolution; 'display font 1|2|auto'; 'display test'; 'display speed'"),
     ("edit FILE", "text editor in a window on the desktop (Ctrl+S saves, Ctrl+Q leaves)"),
     ("browse URL|FILE|WORDS", "web page viewer in a window: http:// pages, HTML files, or a search; Tab/Enter/click follow links"),

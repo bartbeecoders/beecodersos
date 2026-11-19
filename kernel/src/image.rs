@@ -306,3 +306,17 @@ pub fn shrunk(picture: &Image, max_w: usize, max_h: usize) -> Image {
     Image { width: tw, height: th, pixels }
 }
 
+/// A JPEG of `width` x `height` pixels at `quality`: the rows of 16 lines
+/// are turned into coefficients on every processor, then coded in order.
+pub fn encode_jpeg(width: usize, height: usize, quality: u32, pixel: &(dyn Fn(usize, usize) -> u32 + Sync)) -> Vec<u8> {
+    let writer = beenet::jpeg::Writer::new(width, height, quality);
+    let mut rows: Vec<Vec<i16>> = (0..writer.mcu_rows()).map(|_| Vec::new()).collect();
+    let out = crate::smp::Disjoint(rows.as_mut_ptr());
+    let w = &writer;
+    crate::smp::run(writer.mcu_rows(), &|my| {
+        // SAFETY: each job sets its own row.
+        unsafe { *out.get().add(my) = w.row(my, |x, y| pixel(x, y)) };
+    });
+    writer.finish(&rows)
+}
+

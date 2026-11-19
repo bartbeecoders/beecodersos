@@ -1432,6 +1432,21 @@ desktop.
   threads run (threads switch only when one waits); now it waits only for a
   key after the end. QEMU showed the same freeze with the old line and none
   with the fix.
+- **Writing JPEG and video:** `screenshot FILE.jpg` saves the screen as a
+  JPEG (`beenet::jpeg::Writer`: 4:2:0 YCbCr baseline with the standard
+  Huffman tables and quantization tables scaled for the quality as libjpeg
+  does; rows of 16 lines are made into coefficients on every processor,
+  `image::encode_jpeg`, then coded in order). `record FILE.avi SECS` films
+  the screen at ten pictures a second into a Motion-JPEG AVI
+  (`beenet::avi::Writer`, with the index players expect); the time per
+  frame written is the one measured, so it plays at the right pace. In the
+  test VM an 800x600 screen is a 109 KiB JPEG, and 2 s of video are 20
+  frames. Host tests read written JPEGs and AVIs back; libjpeg, ffprobe
+  and ffmpeg read them too. Writing them found a decoder bug: a Huffman
+  symbol's index could overflow 16 bits for the longest codes (the
+  standard AC table has them); fixed. `pictures.scn` saves a JPEG and a
+  video and plays it back, waiting past its end (the player must still
+  let the shell answer).
 - **GIF and screen recordings:** `view` also shows GIF pictures and plays
   animated GIFs at the speed the file asks for, round and round (space
   pauses, `n` steps a frame, `q` leaves). `beenet/src/gif.rs` reads
