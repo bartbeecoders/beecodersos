@@ -2880,6 +2880,14 @@ fn pictures() -> TestResult {
     check_eq!(fit(10_000, 1, 100, 100), (100, 1, 1));
     check_eq!(fit(0, 5, 100, 100), (0, 0, 0));
     // A PNG (palette, 4 bits) made by ImageMagick, through the same door as the others.
+    // A JPEG made on every processor (rows of blocks) is the same as one made in order.
+    let jpg: &[u8] = include_bytes!("../../beenet/testdata/jphoto.jpg");
+    let parallel = decode(jpg).map_err(String::from)?;
+    let (w, h, serial) = beenet::jpeg::decode(jpg).map_err(String::from)?;
+    check_eq!((parallel.width, parallel.height), (w, h));
+    check!(parallel.pixels == serial);
+    check_eq!(crate::image::dimensions(jpg), Some((160, 120)));
+    check_eq!(crate::filemgr::opener("/photos/Bee.JPG"), crate::filemgr::Opener::Picture);
     let png = decode(include_bytes!("../../beenet/testdata/pal.png")).map_err(String::from)?;
     check_eq!((png.width, png.height), (37, 23));
     check!(decode(&include_bytes!("../../beenet/testdata/pal.png")[..100]).is_err());

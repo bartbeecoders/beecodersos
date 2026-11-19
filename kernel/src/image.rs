@@ -36,8 +36,31 @@ fn checked_size(width: usize, height: usize) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// The size a picture file says it has (PNG, GIF, BMP), without decoding it.
+/// A JPEG: the coefficients are read in one pass, then each row of
+/// blocks is turned into pixels on whichever processor is free.
+fn decode_jpeg(data: &[u8]) -> Result<Image, &'static str> {
+    // parse bounds the size (photos may be up to 8192 pixels a side, 24 megapixels).
+    let jpeg = beenet::jpeg::parse(data)?;
+    let mut pixels = alloc::vec![0u32; jpeg.width * jpeg.height];
+    let rows = jpeg.mcu_height() * jpeg.width;
+    let out = crate::smp::Disjoint(pixels.as_mut_ptr());
+    let total = pixels.len();
+    let jpeg_ref = &jpeg;
+    crate::smp::run(jpeg.mcus_y, &|my| {
+        let start = my * rows;
+        let len = rows.min(total.saturating_sub(start));
+        // SAFETY: each job writes its own rows of pixels.
+        let chunk = unsafe { core::slice::from_raw_parts_mut(out.get().add(start), len) };
+        jpeg_ref.render_rows(my, chunk);
+    });
+    Ok(Image { width: jpeg.width, height: jpeg.height, pixels })
+}
+
+/// The size a picture file says it has (JPEG, PNG, GIF, BMP), without decoding it.
 pub fn dimensions(data: &[u8]) -> Option<(usize, usize)> {
+    if beenet::jpeg::is_jpeg(data) {
+        return beenet::jpeg::dimensions(data);
+    }
     let be = |at: usize| Some(u32::from_be_bytes(data.get(at..at + 4)?.try_into().ok()?) as usize);
     if beenet::png::is_png(data) {
         return Some((be(16)?, be(20)?));
@@ -52,7 +75,8 @@ pub fn dimensions(data: &[u8]) -> Option<(usize, usize)> {
     None
 }
 
-/// A PNG, a GIF (its first frame), a BMP (uncompressed, 24 or 32 bits per
+/// A JPEG (rows of blocks turned into pixels on every processor), a PNG,
+/// a GIF (its first frame), a BMP (uncompressed, 24 or 32 bits per
 /// pixel) or a binary PPM (P6, 8 bits).
 pub fn decode(data: &[u8]) -> Result<Image, &'static str> {
     if beenet::png::is_png(data) {
@@ -63,10 +87,13 @@ pub fn decode(data: &[u8]) -> Result<Image, &'static str> {
         let gif = beenet::gif::decode(data)?;
         return Ok(Image { width: gif.width, height: gif.height, pixels: gif.first() });
     }
+    if beenet::jpeg::is_jpeg(data) {
+        return decode_jpeg(data);
+    }
     match data.get(..2) {
         Some(b"BM") => decode_bmp(data),
         Some(b"P6") => decode_ppm(data),
-        _ => Err("not a picture this OS can show (PNG, GIF, BMP or PPM)"),
+        _ => Err("not a picture this OS can show (JPEG, PNG, GIF, BMP or PPM)"),
     }
 }
 

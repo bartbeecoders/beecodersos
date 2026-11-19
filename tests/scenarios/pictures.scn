@@ -64,10 +64,10 @@ usage: record FILE.gif SECONDS   (1 to 60; Ctrl+C stops early)
 # What is no picture opens no window.
 $ echo hello > /note.txt
 $ view /note.txt
-view /note.txt: not a picture this OS can show (PNG, GIF, BMP or PPM)
+view /note.txt: not a picture this OS can show (JPEG, PNG, GIF, BMP or PPM)
 $ view /missing.bmp
 view /missing.bmp: no such file or directory
 $ view
-usage: view FILE   (a PNG, GIF, BMP or PPM picture; an animated GIF plays)
+usage: view FILE   (a JPEG, PNG, GIF, BMP or PPM picture; an animated GIF plays)
 $ screenshot
 usage: screenshot FILE   (saves the screen as a picture: PNG or GIF if FILE ends in .png or .gif, BMP otherwise)

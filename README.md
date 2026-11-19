@@ -1370,6 +1370,21 @@ desktop.
   flipped at every byte; the PNGs it writes are read by ImageMagick. A
   1280x1024 wallpaper is 22 KB as PNG instead of 3.9 MB as BMP. `pictures.scn` saves the screen at 800x600, views it
   on a 4-processor VM and checks the pixels of the window.
+- **JPEG photos:** `view`, the file manager's thumbnails and the wallpaper
+  also read JPEG (`beenet/src/jpeg.rs`): baseline JPEG with Huffman
+  coding, restart markers, grayscale or YCbCr in 4:4:4, 4:2:2 or 4:2:0
+  (colors from the nearest chroma sample), up to 8192 pixels a side and 24
+  megapixels. Decoding has two halves: the coefficients are read in one
+  pass, then each row of 8x8 (or 16x16) blocks is turned into pixels
+  (an inverse DCT in whole numbers, its cosine table computed beforehand,
+  and the color conversion) on whichever processor is free
+  (`image::decode_jpeg`). Progressive JPEGs are refused for now with a
+  clear message. Host tests compare ImageMagick-made JPEGs in every layout
+  (also with restart markers, and a 160x120 photo) with libjpeg's own
+  pixels: never more than 4 apart; cut and damaged files fail cleanly; the
+  self-test checks that the processors together give exactly the pixels of
+  the one-by-one decoder. On the HP a 1923x1599 photo of a honey bee
+  (2.4 MB, fetched from Wikimedia over HTTPS) is read and shown in 0.44 s.
 - **GIF and screen recordings:** `view` also shows GIF pictures and plays
   animated GIFs at the speed the file asks for, round and round (space
   pauses, `n` steps a frame, `q` leaves). `beenet/src/gif.rs` reads
@@ -1415,7 +1430,7 @@ desktop.
   switches the card's VC1 off when the link's is off. If a stream still
   does not move, `beep` reports its registers. `sound.scn` checks the
   commands on a machine without a card.
-- **Wallpaper:** `desktop wallpaper FILE` puts a PNG, GIF, BMP or PPM picture behind
+- **Wallpaper:** `desktop wallpaper FILE` puts a JPEG, PNG, GIF, BMP or PPM picture behind
   the windows, scaled to cover the whole screen (cut off evenly where its
   shape differs; made on every processor in use, and again when the screen
   changes size); `desktop wallpaper none` brings back the plain color. The

@@ -1119,7 +1119,7 @@ impl Shell {
                     Err(why) => error(&format!("view {file}: {why}")),
                 }
             }
-            ("view", _) => error("usage: view FILE   (a PNG, GIF, BMP or PPM picture; an animated GIF plays)"),
+            ("view", _) => error("usage: view FILE   (a JPEG, PNG, GIF, BMP or PPM picture; an animated GIF plays)"),
             ("screenshot", [file]) => {
                 let path = self.abs(file);
                 if !self.may_change(&path) {
@@ -2659,7 +2659,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("lsusb", "USB controller and devices"),
     ("threads", "what runs side by side inside the kernel"),
     ("monitor", "system monitor in a window: work per processor, memory, network, threads"),
-    ("view FILE", "show a picture (PNG, GIF, BMP or PPM) in a window; animated GIFs play"),
+    ("view FILE", "show a picture (JPEG, PNG, GIF, BMP or PPM) in a window; animated GIFs play"),
     ("sound [volume N]", "the sound card, its outputs and volume (0-100)"),
     ("beep [HZ|NOTE [MS]]", "play a tone (default 880 Hz, 300 ms; notes like a4, c#5)"),
     ("play FILE.wav", "play a WAV file (PCM, 8 or 16 bits)"),
