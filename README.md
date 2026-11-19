@@ -1323,6 +1323,20 @@ desktop.
   chooses and a second click opens; `v` goes back to the list
   (`console::pane_draw` draws pixels, `pane_show` brings the text back).
   `desktop-icons.scn` checks the icons' pixels at 800x600.
+- **Reading pages like a browser shows them:** a page that marks its
+  content with `<main>` (Wikipedia does) is shown from there: menus,
+  headers and footers around it are left out, and `m` switches to the whole
+  page and back (`html::render_with`'s `main_only`, `Page::main_only`).
+  Elements a browser would not show are left out with all they hold
+  (`Tag::hidden`): `hidden`, `aria-hidden="true"`, `display: none`, and the
+  usual class names of site controls (drop-down menus, `noprint`,
+  `mw-editsection`, `navbox`, text only for screen readers). A tag's end is
+  the first `>` outside a quoted attribute value (`tag_end`), so attributes
+  that hold `>` (Wikipedia's `data-mw`) no longer spill onto the page.
+  Wikipedia's article on honey bees now starts on the first screen, with
+  its photo on the second; before, menus and 98 language names came first.
+  DuckDuckGo and Mojeek were tried for searching over HTTPS: both answer
+  automated clients with a challenge, so searching stays with FrogFind.
 - **Pictures in web pages:** after a page is shown, `browse` loads its
   `<img>` pictures (up to 16; from the web, also over HTTPS, or from the
   disk for a page on the disk), in the formats the OS reads (JPEG, PNG,

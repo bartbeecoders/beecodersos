@@ -45,6 +45,8 @@ pub struct Page {
     pub cut: bool,
     /// The pictures (`<img>`), in order.
     pub images: Vec<PageImage>,
+    /// Only the page's `<main>` part was laid out (it has one, and that was asked for).
+    pub main_only: bool,
 }
 
 /// Pictures after this many are left out.
@@ -83,23 +85,35 @@ pub fn plain(text: &str, width: usize) -> Page {
 
 /// Lay out an HTML page in lines of at most `width` characters.
 pub fn render(html: &str, width: usize) -> Page {
-    render_with(html, width, &[])
+    render_with(html, width, &[], false)
+}
+
+/// Does the page mark its content with `<main>`?
+pub fn has_main(html: &str) -> bool {
+    html.as_bytes().windows(6).any(|w| w[..5].eq_ignore_ascii_case(b"<main") && matches!(w[5], b'>' | b' ' | b'\t' | b'\n' | b'\r'))
 }
 
 /// `render`, keeping `rows` empty lines for each picture whose address is
 /// in `known` (src as the page writes it, rows): the viewer draws it there.
-pub fn render_with(html: &str, width: usize, known: &[(String, usize)]) -> Page {
+/// `main_only`: if the page has a `<main>`, only what is in it (menus,
+/// headers and footers around it are left out; the title stays).
+pub fn render_with(html: &str, width: usize, known: &[(String, usize)], main_only: bool) -> Page {
     let mut layout = Layout::new(width);
+    let main_only = main_only && has_main(html);
+    layout.page.main_only = main_only;
+    let mut outside_main = main_only;
     let mut rest = html;
     // Inside <script>, <style>, ...: skip to the closing tag.
     let mut skip_until: Option<&'static str> = None;
     let mut in_title = false;
+    // Inside an element that is not shown: its name and how deep.
+    let mut skip_tree: Option<(String, usize)> = None;
     while !rest.is_empty() {
         if layout.full() {
             break;
         }
         let Some(open) = rest.find('<') else {
-            if skip_until.is_none() {
+            if skip_until.is_none() && !outside_main && skip_tree.is_none() {
                 layout.text(&decode(rest));
             }
             break;
@@ -111,7 +125,7 @@ pub fn render_with(html: &str, width: usize, known: &[(String, usize)]) -> Page 
                 if layout.page.title.len() < 200 {
                     layout.page.title.push_str(text.trim());
                 }
-            } else {
+            } else if !outside_main && skip_tree.is_none() {
                 layout.text(&text);
             }
         }
@@ -120,9 +134,9 @@ pub fn render_with(html: &str, width: usize, known: &[(String, usize)]) -> Page 
             rest = body.find("-->").map_or("", |end| &body[end + 3..]);
             continue;
         }
-        let Some(close) = rest.find('>') else {
+        let Some(close) = tag_end(rest) else {
             // A '<' that opens nothing: show it as text.
-            if skip_until.is_none() {
+            if skip_until.is_none() && !outside_main && skip_tree.is_none() {
                 layout.text(&decode(rest));
             }
             break;
@@ -131,7 +145,7 @@ pub fn render_with(html: &str, width: usize, known: &[(String, usize)]) -> Page 
         rest = &rest[close + 1..];
         let Some(tag) = Tag::parse(tag) else {
             // "a < b": not a tag.
-            if skip_until.is_none() {
+            if skip_until.is_none() && !outside_main && skip_tree.is_none() {
                 layout.text("<");
                 layout.text(&decode(tag));
                 layout.text(">");
@@ -144,7 +158,33 @@ pub fn render_with(html: &str, width: usize, known: &[(String, usize)]) -> Page 
             }
             continue;
         }
+        if let Some((name, depth)) = skip_tree.as_mut() {
+            if tag.name == *name {
+                if tag.closing {
+                    *depth -= 1;
+                    if *depth == 0 {
+                        skip_tree = None;
+                    }
+                } else {
+                    *depth += 1;
+                }
+            } else if !tag.closing {
+                skip_until = raw_text(&tag.name);
+            }
+            continue;
+        }
+        if tag.hidden() && !in_title {
+            skip_tree = Some((tag.name.clone(), 1));
+            continue;
+        }
+        if outside_main && !matches!(tag.name.as_str(), "main" | "title" | "script" | "style" | "template" | "svg" | "select" | "iframe" | "object") {
+            continue;
+        }
         match (tag.name.as_str(), tag.closing) {
+            ("main", closing) => {
+                outside_main = main_only && closing;
+                layout.new_line();
+            }
             ("script" | "style" | "template" | "svg" | "select" | "iframe" | "object", false) => {
                 skip_until = Some(match tag.name.as_str() {
                     "script" => "script",
@@ -180,7 +220,7 @@ pub fn render_with(html: &str, width: usize, known: &[(String, usize)]) -> Page 
                 layout.new_line();
                 layout.bullet();
             }
-            ("dt" | "dd" | "div" | "tr" | "section" | "article" | "header" | "footer" | "nav" | "main" | "aside" | "form" | "center"
+            ("dt" | "dd" | "div" | "tr" | "section" | "article" | "header" | "footer" | "nav" | "aside" | "form" | "center"
             | "address" | "figcaption" | "li", _) => layout.new_line(),
             ("hr", _) => {
                 layout.new_line();
@@ -239,7 +279,63 @@ struct Tag<'a> {
     attrs: &'a str,
 }
 
+/// Where the tag that starts `text` (with its `<`) ends: the first `>`
+/// that is not inside a quoted attribute value (values may hold `>`).
+fn tag_end(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let (mut quote, mut after_equals) = (None::<u8>, false);
+    for (i, &b) in bytes.iter().enumerate() {
+        match quote {
+            Some(q) if b == q => quote = None,
+            Some(_) => {}
+            None if b == b'>' => return Some(i),
+            None if (b == b'"' || b == b'\'') && after_equals => quote = Some(b),
+            None => {}
+        }
+        if quote.is_none() && !b.is_ascii_whitespace() {
+            after_equals = b == b'=';
+        }
+    }
+    None
+}
+
+/// Elements without a closing tag.
+const VOID: [&str; 14] = ["img", "br", "hr", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr", "param"];
+
+/// Elements whose contents are not HTML: skipped to their closing tag.
+fn raw_text(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "script" => "script",
+        "style" => "style",
+        "template" => "template",
+        "svg" => "svg",
+        "select" => "select",
+        "iframe" => "iframe",
+        "object" => "object",
+        _ => return None,
+    })
+}
+
 impl<'a> Tag<'a> {
+    /// An element a browser would not show: hidden, or a part of the site's
+    /// controls (drop-down menus, edit links, navigation boxes, text only
+    /// for screen readers) that only makes sense with styles and scripts.
+    fn hidden(&self) -> bool {
+        if self.closing || VOID.contains(&self.name.as_str()) || self.name.is_empty() {
+            return false;
+        }
+        let class_hides = |c: &str| {
+            c.split_ascii_whitespace().any(|k| {
+                let k = k.to_ascii_lowercase();
+                k.contains("dropdown") || k.contains("sr-only") || matches!(k.as_str(), "noprint" | "mw-editsection" | "navbox" | "mw-jump-link" | "visually-hidden" | "hidden")
+            })
+        };
+        self.attr("hidden").is_some()
+            || self.attr("aria-hidden").is_some_and(|v| v.eq_ignore_ascii_case("true"))
+            || self.attr("style").is_some_and(|v| v.to_ascii_lowercase().replace(' ', "").contains("display:none"))
+            || self.attr("class").is_some_and(class_hides)
+    }
+
     fn parse(inside: &'a str) -> Option<Tag<'a>> {
         let (closing, inside) = match inside.strip_prefix('/') {
             Some(rest) => (true, rest),
@@ -643,5 +739,40 @@ mod tests {
         assert!(lines(&page).iter().all(|l| l.chars().count() <= 10));
         let href = format!("<a href='{}'>long</a>", "y".repeat(MAX_HREF + 1));
         assert!(render(&href, 80).links.is_empty());
+    }
+
+    #[test]
+    fn only_the_main_part() {
+        let html = "<html><head><title>T</title></head><body><nav><a href=/a>Menu</a> Home</nav><main id=content><h1>Article</h1><p>Text <a href=x>x</a><img src=p.png alt=pic></main><footer>Footer</footer>";
+        let page = render_with(html, 40, &[], true);
+        assert!(page.main_only);
+        assert_eq!(page.title, "T");
+        assert_eq!(lines(&page), vec!["Article", "", "Text x[pic]"]);
+        assert_eq!(page.links, vec!["x"]);
+        assert_eq!(page.images.len(), 1);
+        // Asked not to, or a page without <main>: everything.
+        let all = render_with(html, 40, &[], false);
+        assert!(!all.main_only && lines(&all).iter().any(|l| l.contains("Footer")));
+        let plain_page = render_with("<p>no main <mainly>here</mainly>", 40, &[], true);
+        assert!(!plain_page.main_only && lines(&plain_page) == vec!["no main here"]);
+    }
+
+    #[test]
+    fn hidden_parts_are_left_out() {
+        let html = "<div class='vector-dropdown'><ul><li>English<li>Deutsch</ul><div>more</div></div>\
+            <p>Shown<span class=mw-editsection>[edit]</span> text<div hidden>secret</div><span aria-hidden=true>x</span>\
+            <div style='display: none'><script>var a = '</div>';</script>gone</div><p>Also shown<img src=a.png hidden>";
+        let page = render(html, 60);
+        assert_eq!(lines(&page), vec!["Shown text", "", "Also shown"]);
+        assert_eq!(page.images.len(), 1); // a void element is never a hidden subtree
+    }
+
+    #[test]
+    fn quoted_attributes_may_hold_brackets() {
+        let page = render("<p>One<span data-x='{\"a\":\"<b>x</b>\"}' title=\"1 > 0\">two</span> three", 40);
+        assert_eq!(lines(&page), vec!["Onetwo three"]);
+        assert_eq!(tag_end("<a href=x>"), Some(9));
+        assert_eq!(tag_end("<a title='>'>"), Some(12));
+        assert_eq!(tag_end("<a don't>"), Some(8)); // a quote not after '=' is just a character
     }
 }
