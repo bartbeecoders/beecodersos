@@ -28,6 +28,7 @@ pub mod deflate;
 pub mod crypto;
 pub mod sha512;
 pub mod rsa;
+pub mod ecdsa;
 pub mod x509;
 pub mod tls;
 pub mod png;

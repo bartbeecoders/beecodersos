@@ -907,22 +907,15 @@ impl Conn {
             let stream = tcp_connect(ip, port).map_err(|e| format!("{host} port {port}: {e}"))?;
             return Ok(Conn::Plain(stream));
         }
-        // RSA certificates first: they can be checked. A server that only has
-        // an ECDSA one refuses that handshake (alert 40); then once more with ECDSA.
-        match Self::handshake(host, ip, port, false) {
-            Err((e, true)) => Err(e),
-            Err((_, false)) => Self::handshake(host, ip, port, true).map_err(|(e, _)| e),
-            ok => ok.map_err(|(e, _)| e),
-        }
+        Self::handshake(host, ip, port).map_err(|(e, _)| e)
     }
 
-    /// One TLS handshake; on failure the reason, and whether it is final
-    /// (false: the server refused the handshake itself, try with ECDSA).
-    fn handshake(host: &str, ip: Ipv4, port: u16, ecdsa: bool) -> Result<Conn, (String, bool)> {
+    /// One TLS handshake; on failure the reason.
+    fn handshake(host: &str, ip: Ipv4, port: u16) -> Result<Conn, (String, bool)> {
         let stream = tcp_connect(ip, port).map_err(|e| (format!("{host} port {port}: {e}"), true))?;
         let random = crate::rand::secret32();
         let now = time::now_unix().map(|t| t as i64);
-        let mut client = alloc::boxed::Box::new(beenet::tls::Client::new(host, random, crate::rand::secret32(), now, ecdsa));
+        let mut client = alloc::boxed::Box::new(beenet::tls::Client::new(host, random, crate::rand::secret32(), now, true));
         let fin = |e: &str| (String::from(e), true);
         stream.send(&client.take_outgoing()).map_err(fin)?;
         let start = time::uptime_ms();
@@ -931,8 +924,7 @@ impl Conn {
             match stream.receive(&mut buf) {
                 Received::Data(n) => {
                     if let Err(e) = client.receive(&buf[..n]) {
-                        let retry = !ecdsa && e == beenet::tls::TlsError::Alert(40);
-                        return Err((format!("{host}: {}", e.message()), !retry));
+                        return Err((format!("{host}: {}", e.message()), true));
                     }
                     let out = client.take_outgoing();
                     if !out.is_empty() {
