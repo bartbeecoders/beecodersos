@@ -1,0 +1,25 @@
+# The file manager copies and moves files: c copies the chosen file, x cuts
+# it, p puts it in the folder shown (a copy beside the original is called
+# "copy of ...").
+@ai
+$ ai control on
+$ mkdir /box
+$ echo honey > /jar.txt
+$ files /
+~ in a new window
+# Folders first: box/, system/; then jar.txt.
+@ctl keys {machine} "{down}{down}c{up}{up}{enter}p"
+$ sleep 1
+$ cat /box/jar.txt
+honey
+# Again in the same folder: another name.
+@ctl keys {machine} "p"
+$ sleep 1
+$ ls /box
+~ copy of jar.txt
+# x and p move it back up.
+@ctl keys {machine} "x{backspace}p"
+$ sleep 1
+$ ls /
+~ copy of jar.txt
+@ctl keys {machine} "q"

@@ -1339,7 +1339,11 @@ desktop.
   editor; **Backspace** goes up, with
   the bar on the folder just left. **n** makes a folder and **r** renames
   (the name is typed in the status line; Escape drops it), **d** or Delete
-  deletes after a `y` (a folder only when it is empty), **u** reads the
+  deletes after a `y` (a folder only when it is empty), **c** copies the
+  chosen file and **x** cuts it (a folder too), **p** puts it in the folder
+  shown (a copy beside the original is called "copy of ..."; a move refuses
+  a name that is taken, and a folder going inside itself;
+  `files-copy.scn`), **u** reads the
   folder again, **q** leaves. A **click** on an entry puts the bar there, a
   second click opens it. **v** switches to the icon view
   (`kernel/src/icons.rs`): a grid drawn in the window's pixels, with icons

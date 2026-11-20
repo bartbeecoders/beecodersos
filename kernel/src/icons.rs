@@ -201,7 +201,7 @@ pub fn draw(canvas: &Canvas, browser: &Browser, thumbs: &Thumbs, top: usize) {
     if browser.entries().is_empty() {
         canvas.text(16, TOP + 16, "This folder is empty.", HELP, BACKGROUND, width);
     }
-    let help = " arrows choose  Enter open  e edit  Backspace up  v list  n new folder  r rename  d delete  q leave";
+    let help = " arrows choose  Enter open  e edit  Backspace up  v list  n folder  r rename  d delete  c copy  x cut  p paste  q leave";
     canvas.fill_rect(Rect::new(0, height.saturating_sub(BOTTOM - 2), width, BOTTOM - 2), BAR);
     canvas.text(0, height.saturating_sub(BOTTOM - 1), help, HELP, BAR, width);
 }
