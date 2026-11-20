@@ -1099,7 +1099,19 @@ impl Shell {
                 return self.wget(a[0], Some(&file));
             }
             if cmd != "echo" {
-                return error("redirection is only supported for echo and wget");
+                // Any other command: what it prints is collected and written to the file.
+                let path = self.abs(&file);
+                if !self.may_change(&path) {
+                    return;
+                }
+                let quote = |w: &str| if w.contains(' ') || w.is_empty() { format!("\"{w}\"") } else { String::from(w) };
+                let line: Vec<String> = core::iter::once(cmd.clone()).chain(a.iter().map(|w| quote(w))).collect();
+                console::capture_start();
+                self.execute(&line.join(" "));
+                let text = console::capture_end();
+                let mut fs = self.storage.fs();
+                let r = if append { fs.append(&path, text.as_bytes()) } else { fs.write_file(&path, text.as_bytes()) };
+                return report(r);
             }
             let mut text = a.join(" ");
             text.push('\n');
@@ -3436,9 +3448,12 @@ pub(crate) fn edit_distance(a: &str, b: &str) -> usize {
 
 fn error(msg: &str) {
     set_last_error(Some(msg));
+    // Errors go to the screen, also while the output goes to a file.
+    console::capture_pause(true);
     console::set_color(Color::LightRed, Color::Black);
     println!("{msg}");
     console::set_color(Color::LightGray, Color::Black);
+    console::capture_pause(false);
 }
 
 /// Split a command line into words; "double quotes" group words.

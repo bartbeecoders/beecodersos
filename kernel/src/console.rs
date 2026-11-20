@@ -1342,8 +1342,47 @@ struct Console {
     ended_line: bool,
 }
 
+/// Output being collected instead of shown (`COMMAND > FILE`): per thread,
+/// its text, and whether it is paused (an error message goes to the screen).
+static CAPTURES: Global<Vec<(crate::thread::ThreadId, String, bool)>> = Global::new(Vec::new());
+/// The most a capture keeps (what comes after is left out).
+const MAX_CAPTURE: usize = 4 * 1024 * 1024;
+
+/// From now on what this thread prints is collected (see `capture_end`).
+pub fn capture_start() {
+    let me = crate::thread::current();
+    let all = CAPTURES.get();
+    all.retain(|c| c.0 != me);
+    all.push((me, String::new(), false));
+}
+
+/// Stop collecting; the text this thread printed meanwhile.
+pub fn capture_end() -> String {
+    let me = crate::thread::current();
+    let all = CAPTURES.get();
+    match all.iter().position(|c| c.0 == me) {
+        Some(at) => all.remove(at).1,
+        None => String::new(),
+    }
+}
+
+/// Let this thread's printing reach the screen for a moment (an error).
+pub fn capture_pause(paused: bool) {
+    let me = crate::thread::current();
+    if let Some(c) = CAPTURES.get().iter_mut().find(|c| c.0 == me) {
+        c.2 = paused;
+    }
+}
+
 impl Write for Console {
     fn write_str(&mut self, s: &str) -> fmt::Result {
+        let me = crate::thread::current();
+        if let Some(c) = CAPTURES.get().iter_mut().find(|c| c.0 == me && !c.2) {
+            if c.1.len() + s.len() <= MAX_CAPTURE {
+                c.1.push_str(s);
+            }
+            return Ok(());
+        }
         if let Some(id) = session::current() {
             session::write(id, s);
             return Ok(());
