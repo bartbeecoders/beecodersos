@@ -17,3 +17,10 @@ $ du /hive
       10 B  in all, in /hive
 $ find
 usage: find [FOLDER] TEXT   (paths below FOLDER whose name contains TEXT, any case)
+# ls -s: folders first, then the files by size, largest first, and their total.
+$ echo a-longer-line-of-honey > /hive/big.txt
+$ ls -s /hive
+~ <dir>  frames/
+~ 23 B  big\.txt
+~ 6 B  Honey\.txt
+~ 29 B  in the files here
