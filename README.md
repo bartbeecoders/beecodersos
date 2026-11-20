@@ -1604,8 +1604,9 @@ desktop.
   Files, Notes, Web, Camera, Monitor, Pictures); typing narrows the list
   (names that start with it first), the arrows or a click choose, Enter
   starts it and the launcher closes, Esc closes it. It floats in the
-  middle of the screen, over the windows, and is never tiled
-  (`desktop-launcher.scn`). `desktop tile off` lets them float
+  middle of the screen, over the windows, and is never tiled. **Super+K**
+  (or "Keys" in the launcher) shows these keyboard shortcuts in a floating
+  window; any key closes it (`desktop-launcher.scn`). `desktop tile off` lets them float
   where they are (`desktop-tile.scn`, `desktop-resize-terminal.scn`).
   **Buttons** at the top of the desktop start programs with a click:
   Terminal, Files (the file manager on the home folder), Notes (the

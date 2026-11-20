@@ -123,6 +123,12 @@ pub fn open_launcher() -> Result<usize, &'static str> {
     open_with("Start", "launcher", false, Some((64, 12)), crate::launcher::run)
 }
 
+/// The keyboard shortcuts (Super+K), floating in the middle.
+pub fn open_keys() -> Result<usize, &'static str> {
+    let rows = crate::launcher::KEYS.len() + 4;
+    open_with("Keys", "keys", false, Some((64, rows)), crate::launcher::run_keys)
+}
+
 /// The pictures in the home folder: the first in the picture viewer (the
 /// arrow keys show the others); without any, the file manager there.
 pub fn open_pictures() -> Result<usize, &'static str> {
@@ -249,7 +255,7 @@ pub fn route(key: Key) -> Option<Key> {
 /// the focused window, Super+arrows move the focus, Super+Shift+arrows move
 /// the window, Super+F fills the screen with it, Super+T tiles or floats,
 /// Super+1-9 shows a workspace, Super+Shift+1-9 sends the window there,
-/// Super+Space opens the launcher.
+/// Super+Space opens the launcher, Super+K lists these keys.
 pub fn super_key(key: SuperKey, shift: bool) {
     use crate::wm::Dir;
     let dir = match key {
@@ -269,6 +275,9 @@ pub fn super_key(key: SuperKey, shift: bool) {
         (SuperKey::Char(d @ '1'..='9'), _) => console::switch_workspace(d as usize - '0' as usize),
         (SuperKey::Char(' '), _) => {
             let _ = open_launcher();
+        }
+        (SuperKey::Char('k'), _) => {
+            let _ = open_keys();
         }
         (SuperKey::Char('w'), _) => console::close_focused(),
         (SuperKey::Char('f'), _) => console::toggle_fullscreen(),

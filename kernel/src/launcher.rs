@@ -1,14 +1,59 @@
 //! The launcher (Super+Space, as on Omarchy): a small window that lists
 //! the programs. Typing narrows the list, the arrows choose, Enter starts
-//! the chosen one (and the launcher closes), Esc closes it.
+//! the chosen one (and the launcher closes), Esc closes it. Also the list
+//! of keyboard shortcuts (Super+K).
 
 use crate::input::{self, Key};
 use crate::{console, desk, session, vga};
 use alloc::string::String;
 use alloc::vec::Vec;
 
+/// The keyboard shortcuts of the desktop (Super+K shows them).
+pub const KEYS: [(&str, &str); 14] = [
+    ("Super+Space", "the launcher: programs by name"),
+    ("Super+Enter", "a new terminal"),
+    ("Super+W", "close the window"),
+    ("Super+arrows", "go to the window that way"),
+    ("Super+Shift+arrows", "swap the window with that one"),
+    ("Super+F", "fill the screen, and back"),
+    ("Super+T", "tile the windows, or let them float"),
+    ("Super+1-9", "show another workspace"),
+    ("Super+Shift+1-9", "send the window to a workspace"),
+    ("Super+K", "these keys"),
+    ("Alt+Tab", "the next window"),
+    ("Shift+PgUp/PgDn", "look back in a terminal"),
+    ("Ctrl+C", "stop a command"),
+    ("q / Esc", "leave most windows"),
+];
+
+/// The thread of the keys window: the list until a key or its close box.
+pub fn run_keys(window: usize) {
+    loop {
+        let Some((cols, rows)) = console::pane_size(window) else { return };
+        let line = |text: &str, attr: u8| {
+            let mut cells: Vec<u16> = text.chars().take(cols).map(|c| (attr as u16) << 8 | vga::cp437(c) as u16).collect();
+            cells.resize(cols, (attr as u16) << 8 | b' ' as u16);
+            cells
+        };
+        let mut lines = alloc::vec![line(" Keys", TITLE_ATTR), line("", TEXT_ATTR)];
+        for (keys, what) in KEYS.iter() {
+            lines.push(line(&alloc::format!("  {keys:<20} {what}"), TEXT_ATTR));
+        }
+        while lines.len() + 1 < rows {
+            lines.push(line("", TEXT_ATTR));
+        }
+        lines.truncate(rows.saturating_sub(1));
+        lines.push(line(" any key closes this window", HELP_ATTR));
+        console::pane_show(window, &lines, (0, cols.saturating_sub(1)));
+        match input::read_key() {
+            Key::Resized | Key::Click(..) => {}
+            _ => return,
+        }
+    }
+}
+
 /// Name and what it is, in the order shown.
-pub const PROGRAMS: [(&str, &str); 7] = [
+pub const PROGRAMS: [(&str, &str); 8] = [
     ("Terminal", "a shell in a window"),
     ("Files", "the file manager on your home folder"),
     ("Notes", "the editor on notes.txt"),
@@ -16,6 +61,7 @@ pub const PROGRAMS: [(&str, &str); 7] = [
     ("Camera", "the USB camera, live"),
     ("Monitor", "processors, memory, network, threads"),
     ("Pictures", "the pictures in your home folder"),
+    ("Keys", "the keyboard shortcuts"),
 ];
 
 const TITLE_ATTR: u8 = 0x70;
@@ -49,7 +95,8 @@ fn start(program: usize) {
         3 => desk::launch(3),
         4 => desk::launch(4),
         5 => desk::open_monitor(),
-        _ => desk::open_pictures(),
+        6 => desk::open_pictures(),
+        _ => desk::open_keys(),
     };
 }
 
