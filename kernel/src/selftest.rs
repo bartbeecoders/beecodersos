@@ -2609,6 +2609,20 @@ fn text_editor() -> TestResult {
     check_eq!(u.text(), "hi\n");
     let (lines, _) = u.render("x", 60, 4);
     check!(row_text(&lines[0]).contains("nothing to undo"));
+    // Ctrl+K cuts (in a row: whole lines gather), Ctrl+U pastes, also in
+    // another editor (the clipboard is shared).
+    let mut c = Editor::new("one\ntwo\nthree\n");
+    keys(&mut c, &[Key::Ctrl('k'), Key::Ctrl('k'), Key::Ctrl('k'), Key::Ctrl('k')]); // "one", its end, "two", its end
+    check_eq!(c.text(), "three\n");
+    keys(&mut c, &[Key::Down, Key::End, Key::Ctrl('u')]);
+    check_eq!(c.text(), "threeone\ntwo\n\n");
+    let mut other = Editor::new("x\n");
+    keys(&mut other, &[Key::Ctrl('u')]);
+    check_eq!(other.text(), "one\ntwo\nx\n");
+    keys(&mut other, &[Key::Ctrl('z')]);
+    check_eq!(other.text(), "x\n");
+    keys(&mut other, &[Key::End, Key::Ctrl('k'), Key::Right, Key::Ctrl('k')]); // a cut after another key starts afresh
+    check_eq!(other.text(), "x\n");
 
     // Typing, Enter in the middle of a line, Backspace and Delete across lines.
     keys(&mut e, &[Key::End]);
