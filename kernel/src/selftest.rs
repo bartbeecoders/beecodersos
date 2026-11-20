@@ -2773,6 +2773,24 @@ fn file_manager() -> TestResult {
     check_eq!(b.key(Key::Down, 5), Action::None);
     check_eq!(b.chosen().map(|e| e.name.as_str()), Some("alpha.txt"));
     check_eq!(b.key(Key::Enter, 5), Action::Open(String::from("/data/alpha.txt")));
+    // c copies, x cuts, p pastes in the folder shown: next to the original a
+    // copy gets another name; a folder is moved, not copied.
+    check_eq!(b.key(Key::Char('p'), 5), Action::None); // nothing yet: it says so
+    check_eq!(b.key(Key::Char('c'), 5), Action::None);
+    check_eq!(
+        b.key(Key::Char('p'), 5),
+        Action::Paste { from: String::from("/data/alpha.txt"), to: String::from("/data/copy of alpha.txt"), cut: false }
+    );
+    b.show("/data/apps", vec![], None);
+    check_eq!(b.key(Key::Char('p'), 5), Action::Paste { from: String::from("/data/alpha.txt"), to: String::from("/data/apps/alpha.txt"), cut: false });
+    b.show("/data", files(), Some("Beta"));
+    check_eq!(b.key(Key::Char('c'), 5), Action::None); // a folder: not copied
+    check!(row_text(&b.render(60, 8).0[0]).contains("only files are copied"));
+    check_eq!(b.key(Key::Char('x'), 5), Action::None);
+    b.show("/data/apps", vec![], None);
+    check_eq!(b.key(Key::Char('p'), 5), Action::Paste { from: String::from("/data/Beta"), to: String::from("/data/apps/Beta"), cut: true });
+    check_eq!(b.key(Key::Char('p'), 5), Action::None); // a move happens once
+    b.show("/data", files(), Some("alpha.txt"));
     check_eq!(b.key(Key::Char('e'), 5), Action::Edit(String::from("/data/alpha.txt")));
     b.key(Key::PageDown, 5);
     b.key(Key::Down, 5);

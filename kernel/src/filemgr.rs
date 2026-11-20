@@ -50,6 +50,8 @@ pub enum Action {
     Delete(String),
     MakeFolder(String),
     Rename(String, String),
+    /// Copy (or with `cut`, move) the file at `from` to `to`.
+    Paste { from: String, to: String, cut: bool },
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -70,6 +72,8 @@ pub struct Browser {
     /// Shown in the status line until the next key.
     message: String,
     warning: bool,
+    /// `c` / `x`: the file to copy (or move, `true`) when `p` is pressed.
+    clip: Option<(String, bool)>,
 }
 
 /// `folder` + "/" + `name`, also right for the root folder.
@@ -96,7 +100,16 @@ pub fn valid_name(name: &str) -> bool {
 
 impl Browser {
     pub fn new() -> Browser {
-        Browser { folder: String::from("/"), entries: Vec::new(), chosen: 0, top: 0, mode: Mode::List, message: String::new(), warning: false }
+        Browser {
+            folder: String::from("/"),
+            entries: Vec::new(),
+            chosen: 0,
+            top: 0,
+            mode: Mode::List,
+            message: String::new(),
+            warning: false,
+            clip: None,
+        }
     }
 
     pub fn folder(&self) -> &str {
@@ -257,6 +270,31 @@ impl Browser {
                 self.mode = Mode::Name { rename: true, text };
             }
             Key::Char('d') | Key::Delete if self.chosen().is_some() => self.mode = Mode::ConfirmDelete,
+            Key::Char(k @ ('c' | 'x')) if self.chosen().is_some() => {
+                let (name, folder) = self.chosen().map(|e| (e.name.clone(), e.folder)).unwrap_or_default();
+                if folder && k == 'c' {
+                    self.say("only files are copied (x and p move a folder)", true);
+                } else {
+                    self.clip = Some((join(&self.folder, &name), k == 'x'));
+                    let what = if k == 'x' { "cut" } else { "copied" };
+                    self.say(&format!("{what}: {name}  (p puts it in the folder shown)"), false);
+                }
+            }
+            Key::Char('p') => match self.clip.clone() {
+                None => self.say("nothing to paste: c copies a file, x cuts one", true),
+                Some((from, cut)) => {
+                    let name = from.rsplit('/').next().unwrap_or("").to_string();
+                    let mut to = join(&self.folder, &name);
+                    if !cut && self.entries.iter().any(|e| e.name == name) {
+                        // A copy next to the original (or a file of that name): another name.
+                        to = join(&self.folder, &format!("copy of {name}"));
+                    }
+                    if cut {
+                        self.clip = None;
+                    }
+                    return Action::Paste { from, to, cut };
+                }
+            },
             Key::Char('u') => return Action::Go(self.folder.clone()),
             Key::Char('q') | Key::Ctrl('q') | Key::Escape => return Action::Quit,
             _ => {}
@@ -304,7 +342,7 @@ impl Browser {
                 None => line("", TEXT_ATTR),
             });
         }
-        out.push(line(" Enter open  e edit  Backspace up  v icons  n new folder  r rename  d delete  u again  q leave", HELP_ATTR));
+        out.push(line(" Enter open  e edit  Backspace up  v icons  n folder  r rename  d delete  c copy  x cut  p paste  q leave", HELP_ATTR));
         (out, cursor)
     }
 }
@@ -418,6 +456,33 @@ pub fn run(window: usize, start: String, mut storage: Storage) {
                 match result {
                     Ok(()) => choose = path.rsplit('/').next().map(String::from),
                     Err(e) => said = Some((format!("no folder made: {e}"), true)),
+                }
+            }
+            Action::Paste { from, to, cut } => {
+                let result = crate::users::console_may_change(&mut storage, &to)
+                    .and_then(|()| if cut { crate::users::console_may_change(&mut storage, &from) } else { Ok(()) })
+                    .map_err(|whose| format!("it {whose}"))
+                    .and_then(|()| {
+                        let mut fs = storage.fs();
+                        if fs.exists(&to) {
+                            return Err(String::from("there is already one of that name here"));
+                        }
+                        if cut && to.starts_with(&format!("{from}/")) {
+                            return Err(String::from("a folder cannot go inside itself"));
+                        }
+                        if cut {
+                            fs.rename(&from, &to).map_err(|e| format!("{e}"))
+                        } else {
+                            let data = fs.read_file(&from).map_err(|e| format!("{e}"))?;
+                            fs.write_file(&to, &data).map_err(|e| format!("{e}"))
+                        }
+                    });
+                match result {
+                    Ok(()) => {
+                        choose = to.rsplit('/').next().map(String::from);
+                        said = Some((String::from(if cut { "moved here" } else { "copied here" }), false));
+                    }
+                    Err(e) => said = Some((format!("{}: {e}", if cut { "not moved" } else { "not copied" }), true)),
                 }
             }
             Action::Rename(from, to) => {
