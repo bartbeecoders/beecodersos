@@ -61,6 +61,8 @@ pub struct Window {
     pub scroll: Option<(usize, usize, usize)>,
     /// Filling the screen (Super+F): the frame it had before.
     pub saved: Option<Rect>,
+    /// The workspace it is on (1-9); only the current one's windows show.
+    pub workspace: usize,
 }
 
 impl Window {
@@ -244,6 +246,8 @@ pub enum MouseEffect {
     /// The button went down on a window's scroll bar, above (`up`) or
     /// below its thumb: its program shows the page before or after.
     Scroll { id: usize, up: bool },
+    /// The button went down on the box of a workspace: show it.
+    Workspace(usize),
 }
 
 pub struct Desktop {
@@ -265,7 +269,15 @@ pub struct Desktop {
     pub tiling: bool,
     /// The order windows are tiled in (oldest first; Super+Shift+arrow swaps).
     tile_order: Vec<usize>,
+    /// The workspace shown (Super+1-9).
+    current: usize,
 }
+
+/// Workspaces: 1 to this; boxes for the first `WORKSPACE_BOXES` left of the buttons.
+pub const WORKSPACES: usize = 9;
+const WORKSPACE_BOXES: usize = 5;
+const WORKSPACE_BOX: usize = 16;
+const WORKSPACE_USED: u32 = 0x5A7FA8;
 
 /// A direction for moving the focus or a window with the keyboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -294,6 +306,75 @@ impl Desktop {
             cell: (GLYPH_WIDTH, GLYPH_HEIGHT),
             tiling: false,
             tile_order: Vec::new(),
+            current: 1,
+        }
+    }
+
+    /// The workspace shown.
+    pub fn workspace(&self) -> usize {
+        self.current
+    }
+
+    fn visible(&self, i: usize) -> bool {
+        self.windows.get(i).is_some_and(|w| w.workspace == self.current)
+    }
+
+    /// Show another workspace: its windows come on top (in their order),
+    /// the others are hidden. False: it already was the one shown.
+    pub fn switch_to(&mut self, n: usize) -> bool {
+        let n = n.clamp(1, WORKSPACES);
+        if n == self.current {
+            return false;
+        }
+        self.current = n;
+        let (mut down, mut up) = (Vec::new(), Vec::new());
+        for (w, id) in self.windows.drain(..).zip(self.ids.drain(..)) {
+            if w.workspace == n {
+                up.push((w, id));
+            } else {
+                down.push((w, id));
+            }
+        }
+        for (w, id) in down.into_iter().chain(up) {
+            self.windows.push(w);
+            self.ids.push(id);
+        }
+        true
+    }
+
+    /// Put a window on another workspace (it goes out of sight if that is
+    /// not the one shown).
+    pub fn send_to(&mut self, id: usize, n: usize) -> bool {
+        let n = n.clamp(1, WORKSPACES);
+        let Some(at) = self.position(id) else { return false };
+        if self.windows[at].workspace == n {
+            return false;
+        }
+        self.windows[at].workspace = n;
+        if n != self.current {
+            // To the bottom of the pile, under those that stay.
+            let w = self.windows.remove(at);
+            let id = self.ids.remove(at);
+            self.windows.insert(0, w);
+            self.ids.insert(0, id);
+        }
+        true
+    }
+
+    /// The box of workspace `n` (1-based) left of the desktop buttons.
+    fn workspace_box(n: usize) -> Rect {
+        Rect::new(8 + (n - 1) * (WORKSPACE_BOX + 2), BUTTONS_AT.1, WORKSPACE_BOX, BUTTON_HEIGHT)
+    }
+
+    fn draw_workspaces(&self, canvas: &Canvas) {
+        for n in 1..=WORKSPACE_BOXES {
+            let rect = Self::workspace_box(n);
+            let used = self.windows.iter().any(|w| w.workspace == n);
+            let color = if n == self.current { TITLE_BAR } else if used { WORKSPACE_USED } else { BORDER_COLOR };
+            canvas.fill_rect(rect, color);
+            let digit = [b'0' + n as u8];
+            let label = core::str::from_utf8(&digit).unwrap_or("?");
+            canvas.text(rect.x + (WORKSPACE_BOX - GLYPH_WIDTH) / 2, rect.y + 4, label, TITLE_TEXT, color, GLYPH_WIDTH);
         }
     }
 
@@ -302,7 +383,7 @@ impl Desktop {
     /// size changed.
     pub fn tile(&mut self, area: Rect) -> Vec<usize> {
         self.tile_order.retain(|id| self.ids.contains(id));
-        let order: Vec<usize> = self.tile_order.iter().filter_map(|id| self.position(*id)).collect();
+        let order: Vec<usize> = self.tile_order.iter().filter_map(|id| self.position(*id)).filter(|&i| self.visible(i)).collect();
         let frames = tile_frames(order.len(), area, self.cell);
         let mut changed = Vec::new();
         for (&i, frame) in order.iter().zip(frames) {
@@ -403,7 +484,7 @@ impl Desktop {
     /// Add a window on top of the others; returns its number (the first
     /// window gets 0, and numbers are not used again).
     pub fn open(&mut self, title: &str, frame: Rect) -> usize {
-        self.windows.push(Window { title: String::from(title), frame, resizable: true, collapsed: None, scroll: None, saved: None });
+        self.windows.push(Window { title: String::from(title), frame, resizable: true, collapsed: None, scroll: None, saved: None, workspace: self.current });
         self.ids.push(self.next_id);
         self.tile_order.push(self.next_id);
         self.next_id += 1;
@@ -432,7 +513,8 @@ impl Desktop {
 
     /// The number of the window on top: the one with the focus.
     pub fn top(&self) -> Option<usize> {
-        self.ids.last().copied()
+        let last = self.windows.len().checked_sub(1)?;
+        self.visible(last).then(|| self.ids[last])
     }
 
     /// Bring a window to the top. False: it already was, or does not exist.
@@ -452,8 +534,9 @@ impl Desktop {
     /// The next window gets the focus: the one at the back comes to the
     /// top, so repeating it visits every window. False with fewer than two.
     pub fn cycle(&mut self) -> bool {
-        match self.ids.first().copied() {
-            Some(back) if self.windows.len() > 1 => self.raise(back),
+        let shown: Vec<usize> = (0..self.windows.len()).filter(|&i| self.visible(i)).collect();
+        match shown.first() {
+            Some(&back) if shown.len() > 1 => self.raise(self.ids[back]),
             _ => false,
         }
     }
@@ -475,7 +558,7 @@ impl Desktop {
         self.ids
             .iter()
             .zip(self.windows.iter())
-            .filter(|(other, _)| **other != id)
+            .filter(|(other, w)| **other != id && w.workspace == self.current)
             .filter_map(|(other, w)| {
                 let (ox, oy) = middle(w.frame);
                 let (ahead, across) = match dir {
@@ -551,7 +634,11 @@ impl Desktop {
             canvas.fill_rect(rect, BORDER_COLOR);
             canvas.text(rect.x + GLYPH_WIDTH, rect.y + 4, &self.clock, TITLE_TEXT, BORDER_COLOR, rect.width);
         }
+        self.draw_workspaces(canvas);
         for (i, window) in self.windows.iter().enumerate() {
+            if !self.visible(i) {
+                continue;
+            }
             window.draw(canvas, i + 1 == self.windows.len());
             content(self.ids[i], window);
             window.draw_scroll_bar(canvas);
@@ -619,12 +706,19 @@ impl Desktop {
             }
         } else if !was_down {
             // The topmost window under the pointer comes to the top.
-            match self.windows.iter().rposition(|w| inside(w.frame)) {
+            let current = self.current;
+            match self.windows.iter().rposition(|w| w.workspace == current && inside(w.frame)) {
                 Some(at) => raised = self.raise(self.ids[at]),
-                // On the desktop itself: one of its buttons?
-                None => launch = self.buttons.iter().position(|(_, rect)| inside(*rect)),
+                // On the desktop itself: a workspace's box, or one of its buttons?
+                None => {
+                    if let Some(n) = (1..=WORKSPACE_BOXES).find(|&n| inside(Self::workspace_box(n))) {
+                        self.pointer = Some(new);
+                        return MouseEffect::Workspace(n);
+                    }
+                    launch = self.buttons.iter().position(|(_, rect)| inside(*rect))
+                }
             }
-            let top = self.windows.last().filter(|w| inside(w.frame));
+            let top = self.windows.last().filter(|w| w.workspace == current && inside(w.frame));
             if top.and_then(|w| w.close_box()).is_some_and(inside) {
                 close = self.top();
             } else if !self.tiling && top.and_then(|w| w.collapse_box()).is_some_and(inside) {

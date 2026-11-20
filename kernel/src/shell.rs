@@ -1448,6 +1448,7 @@ impl Shell {
                 if console::tiling_on() {
                     println!("windows are tiled ('desktop tile off' lets them float)");
                 }
+                println!("workspace {} (Super+1-9 shows another, Super+Shift+1-9 sends a window there)", console::workspace());
                 if let Some((x, y)) = console::pointer() {
                     println!("mouse pointer at {x},{y}");
                 }

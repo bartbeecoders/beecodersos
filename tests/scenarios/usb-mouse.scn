@@ -19,7 +19,7 @@ $ lsusb
 @mouse -3000 -3000
 $ desktop
 mouse pointer at 0,0
-@screenshot 1920x1080 pixels 0,0=000000 1,2=ffffff 20,20=a8d0f0
+@screenshot 1920x1080 pixels 0,0=000000 1,2=ffffff 20,40=a8d0f0
 
 # Onto the title bar (the window starts at 70,74), press, move, let go: the
 # window went along, the desktop shows where it was, the terminal still works.

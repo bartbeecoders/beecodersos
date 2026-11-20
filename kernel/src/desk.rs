@@ -203,6 +203,9 @@ pub fn route(key: Key) -> Option<Key> {
         console::scroll_focused(up);
         return None;
     }
+    if console::nothing_focused() {
+        return None; // an empty workspace: no window to type in
+    }
     let Some(window) = console::focused_pane() else { return Some(key) };
     if let Some(terminal) = TERMINALS.get().iter().find(|t| t.window == window) {
         session::push_key(terminal.session, key);
@@ -212,7 +215,8 @@ pub fn route(key: Key) -> Option<Key> {
 
 /// Keys with Super, as on Omarchy: Super+Enter a terminal, Super+W closes
 /// the focused window, Super+arrows move the focus, Super+Shift+arrows move
-/// the window, Super+F fills the screen with it, Super+T tiles or floats.
+/// the window, Super+F fills the screen with it, Super+T tiles or floats,
+/// Super+1-9 shows a workspace, Super+Shift+1-9 sends the window there.
 pub fn super_key(key: SuperKey, shift: bool) {
     use crate::wm::Dir;
     let dir = match key {
@@ -228,6 +232,8 @@ pub fn super_key(key: SuperKey, shift: bool) {
         (SuperKey::Enter, _) => {
             let _ = open_terminal();
         }
+        (SuperKey::Char(d @ '1'..='9'), _) if shift => console::send_to_workspace(d as usize - '0' as usize),
+        (SuperKey::Char(d @ '1'..='9'), _) => console::switch_workspace(d as usize - '0' as usize),
         (SuperKey::Char('w'), _) => console::close_focused(),
         (SuperKey::Char('f'), _) => console::toggle_fullscreen(),
         (SuperKey::Char('t'), _) => {

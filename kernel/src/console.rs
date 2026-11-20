@@ -885,6 +885,7 @@ pub fn mouse_event(buttons: u8, dx: i32, dy: i32) {
             compose(bounds);
             show(true);
         }
+        MouseEffect::Workspace(n) => switch_workspace(n),
         MouseEffect::Scroll { id, up } => {
             // A terminal scrolls its own history; another program gets Page Up / Down.
             let terminal = id == TERMINAL || PANES.get().iter().any(|p| p.window == id && p.con.history_view().2 > p.con.history_view().1);
@@ -1042,6 +1043,35 @@ fn update_terminal_scroll_bars() {
             compose(bar);
         }
     }
+}
+
+/// Super+N: show workspace N (its windows tiled again when tiling).
+pub fn switch_workspace(n: usize) {
+    let Some(desk) = DESKTOP.get().as_mut() else { return };
+    if desk.switch_to(n) {
+        retile();
+        redraw_all();
+    }
+}
+
+/// Super+Shift+N: the focused window goes to workspace N.
+pub fn send_to_workspace(n: usize) {
+    let Some(desk) = DESKTOP.get().as_mut() else { return };
+    let Some(top) = desk.top() else { return };
+    if desk.send_to(top, n) {
+        retile();
+        redraw_all();
+    }
+}
+
+/// Which workspace shows (the desktop's own state; 1 without a desktop).
+pub fn workspace() -> usize {
+    DESKTOP.get().as_ref().map_or(1, |d| d.workspace())
+}
+
+/// On a workspace without windows nothing has the focus: keys go nowhere.
+pub fn nothing_focused() -> bool {
+    DESKTOP.get().as_ref().is_some_and(|d| d.top().is_none())
 }
 
 /// Super+W: the focused window closes (not the console's own).

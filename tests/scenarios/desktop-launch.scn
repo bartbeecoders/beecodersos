@@ -4,7 +4,7 @@
 @usb kbd mouse
 $ layout us
 $ mkdir /aaa
-@screenshot 1920x1080 pixels 102,8=3a6ea5 100,6=1f3a5f 190,8=3a6ea5 254,8=3a6ea5 20,20=a8d0f0 184,10=a8d0f0
+@screenshot 1920x1080 pixels 102,8=3a6ea5 100,6=1f3a5f 190,8=3a6ea5 254,8=3a6ea5 20,40=a8d0f0 184,10=a8d0f0
 $ threads
 !~ desktop
 

@@ -1,0 +1,30 @@
+# Workspaces, as on Omarchy: Super+Shift+2 sends the focused window to
+# workspace 2, Super+2 shows it, Super+1 comes back. The boxes left of the
+# buttons (8.., 26.., ...) show them: the current one blue.
+@ai
+$ ai control on
+$ desktop tile on
+~ windows are tiled
+$ monitor
+the system monitor in a new window: q leaves
+$ sleep 1
+$ desktop
+~ the terminal window has 117x62 characters
+~ workspace 1
+@screenshot 1920x1080 pixels 10,8=3a6ea5 28,8=1f3a5f
+# The monitor goes to workspace 2: the console's window has the screen to itself.
+@ctl keys {machine} "{super+shift+2}"
+$ sleep 1
+$ desktop
+~ the terminal window has 236x62 characters
+@screenshot 1920x1080 pixels 10,8=3a6ea5 28,8=5a7fa8
+# Workspace 2: the monitor alone, the box blue.
+@ctl keys {machine} "{super+2}"
+$ sleep 1
+@screenshot 1920x1080 pixels 28,8=3a6ea5 10,8=5a7fa8 20,42=3a6ea5
+$ threads
+~ monitor +(waiting|ready|running)
+@ctl keys {machine} "{super+1}"
+$ sleep 1
+$ desktop
+~ workspace 1
