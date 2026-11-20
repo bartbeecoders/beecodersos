@@ -3419,6 +3419,17 @@ fn vnc_parts() -> TestResult {
     check_eq!(keys.event(false, 0xFFE9), None);
     check_eq!(keys.event(true, 0xFF09), Some(Key::Tab));
     check_eq!(keys.event(true, 0xFFBE), None); // F1: nothing yet
+    // Super (0xFFEB): the desktop's shortcuts; with Shift too. Shift+Page Up looks back.
+    use crate::input::SuperKey;
+    check_eq!(keys.event(true, 0xFFEB), None);
+    check_eq!(keys.event(true, 0x20), Some(Key::Super(SuperKey::Char(' '), false)));
+    check_eq!(keys.event(true, b'2' as u32), Some(Key::Super(SuperKey::Char('2'), false)));
+    check_eq!(keys.event(true, 0xFFE1), None);
+    check_eq!(keys.event(true, 0xFF53), Some(Key::Super(SuperKey::Right, true)));
+    check_eq!(keys.event(false, 0xFFEB), None);
+    check_eq!(keys.event(true, 0xFF55), Some(Key::ScrollBack(true)));
+    check_eq!(keys.event(false, 0xFFE1), None);
+    check_eq!(keys.event(true, 0xFF55), Some(Key::PageUp));
     // Tiles: everything the first time, then only what changed.
     let (w, h) = (150, 70); // 3 x 2 tiles, the last ones narrower
     let old = alloc::vec![0u32; w * h];
