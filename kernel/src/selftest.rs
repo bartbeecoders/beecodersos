@@ -48,6 +48,7 @@ macro_rules! check_eq {
 
 const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("event log: repeated commands are folded", eventlog_repeats),
+    ("timers: durations and what is left", timer_durations),
     ("crash: restart or halt afterwards", crash_then),
     ("gfx: the fast drawing paths give the same picture", gfx_fast_paths),
     ("screen in memory: changed parts are copied, in batches", screen_in_memory),
@@ -1463,6 +1464,26 @@ fn display_g3() -> TestResult {
     check_eq!(paging::entry_with_wc(0xFD00_109B), 0xFD00_008B); // other caching bits go
     check_eq!(paging::entry_with_wc(0xFD00_0082), 0xFD00_0082); // not present: untouched
     check_eq!(paging::entry_with_wc(0x0010_0003), 0x0010_0003); // points to a page table: untouched
+    Ok(())
+}
+
+fn timer_durations() -> TestResult {
+    use crate::timer::{left_text, parse_duration};
+    check_eq!(parse_duration("90"), Some(90_000));
+    check_eq!(parse_duration("90s"), Some(90_000));
+    check_eq!(parse_duration("5m"), Some(300_000));
+    check_eq!(parse_duration("1h30m"), Some(5_400_000));
+    check_eq!(parse_duration("2M30S"), Some(150_000));
+    check_eq!(parse_duration("24h"), Some(86_400_000));
+    for bad in ["", "0", "0s", "25h", "1m30", "m", "5x", "-5m", "1.5h", "99999999999999999999h"] {
+        check_eq!(parse_duration(bad), None);
+    }
+    check_eq!((left_text(12_000), left_text(250_000), left_text(3_900_000), left_text(1)), (
+        alloc::string::String::from("12s"),
+        alloc::string::String::from("4m 10s"),
+        alloc::string::String::from("1h 05m"),
+        alloc::string::String::from("1s")
+    ));
     Ok(())
 }
 

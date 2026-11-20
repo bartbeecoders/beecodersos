@@ -31,6 +31,7 @@ mod monitor;
 mod clock;
 mod image;
 mod view;
+mod timer;
 mod video;
 mod webcam;
 mod icons;

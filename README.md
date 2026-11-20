@@ -332,7 +332,7 @@ line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Commands:** `help`, `whoami`, `users`, `useradd`, `userdel`, `passwd`, `login`, `logout`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `head`, `tail`, `wc`, `grep`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `timezone`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `do`, `ai`,
-`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `cpu`, `monitor`, `view`, `screenshot`, `record`, `sound`, `beep`, `play`, `tune`, `lsusb`, `camera`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `vnc`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash panic|exception|hang`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `cpu`, `monitor`, `view`, `screenshot`, `record`, `sound`, `beep`, `play`, `tune`, `timer`, `timers`, `lsusb`, `camera`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `vnc`, `arp`, `lspci [-v]`, `threads`, `selftest`, `crash panic|exception|hang`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Text tools** (`kernel/src/textops.rs`, self-tested; `text-tools.scn`):
 `head` / `tail [-n N | -N] FILE` show the first or last lines (10 unless N
@@ -1518,6 +1518,11 @@ desktop.
   switches the card's VC1 off when the link's is off. If a stream still
   does not move, `beep` reports its registers. `sound.scn` checks the
   commands on a machine without a card.
+- **Timers** (`kernel/src/timer.rs`): `timer 10m tea` (also `90`, `90s`,
+  `1h30m`; up to a day) waits in a thread of its own; when the time is up a
+  window "Timer N" opens with the message and the speaker plays a short
+  tune. `timers` lists them with what is left, `timer off N` cancels one;
+  they live in memory. `timer.scn` lets one go off and reads its window.
 - **Wallpaper:** `desktop wallpaper FILE` puts a JPEG, PNG, GIF, BMP or PPM picture behind
   the windows, scaled to cover the whole screen (cut off evenly where its
   shape differs; made on every processor in use, and again when the screen
