@@ -1,0 +1,18 @@
+# The console's own window is resized like the others: at 1920x1080 it is
+# 221x56 characters at 70,74 (1780x932), its grip at 1836..1848, 992..1004.
+# Pulling it in by 800 x 400 pixels leaves 121x31 characters; the shell
+# goes on in it.
+@usb kbd mouse
+$ layout us
+$ desktop
+~ the terminal window has 221x56 characters
+# The pointer starts in the middle (960,540).
+@mouse 882 458
+@button left down
+@mouse -800 -400
+@button left up
+$ desktop
+~ the terminal window has 121x31 characters
+$ echo still here
+still here
+@screenshot 1920x1080 pixels 1049,300=1f3a5f 1100,300=a8d0f0

@@ -1,0 +1,29 @@
+# desktop tile on: windows side by side, as on Omarchy (Hyprland's dwindle).
+# Below the button row (30 pixels) with gaps of 8: one window takes it all
+# (236x62 characters at 1920x1080); a second one takes the right half, and
+# the console's window the left (117 columns); when it goes, all again.
+@disk
+@usb kbd mouse
+$ layout us
+$ desktop tile on
+windows are tiled: side by side, the newest splitting the space of the one before (saved)
+$ desktop
+~ the terminal window has 236x62 characters
+~ windows are tiled
+$ monitor
+the system monitor in a new window: q leaves
+$ sleep 1
+$ desktop
+~ the terminal window has 117x62 characters
+# The monitor's title bar at the right, focused (blue).
+@screenshot 1920x1080 pixels 970,42=3a6ea5 20,42=8a9bb0
+@keys q
+$ sleep 1
+$ desktop
+~ the terminal window has 236x62 characters
+# Saved: after a restart the windows are tiled again.
+@reboot
+$ desktop
+~ windows are tiled
+$ desktop tile off
+windows float again: drag them by the title bar, resize them by the grip (saved)

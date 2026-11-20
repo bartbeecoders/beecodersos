@@ -223,6 +223,8 @@ pub struct Desktop {
     width: usize,
     /// The size of a character in windows: resizing goes in whole ones.
     cell: (usize, usize),
+    /// Windows are tiled (`tile`): they cannot be dragged or resized by hand.
+    pub tiling: bool,
 }
 
 /// Where the row of desktop buttons starts, and how high a button is.
@@ -241,7 +243,27 @@ impl Desktop {
             clock: String::new(),
             width: 0,
             cell: (GLYPH_WIDTH, GLYPH_HEIGHT),
+            tiling: false,
         }
+    }
+
+    /// Lay the windows out side by side in `area` (oldest first, see
+    /// `tile_frames`); folded windows unfold. Returns the windows whose
+    /// size changed.
+    pub fn tile(&mut self, area: Rect) -> Vec<usize> {
+        let mut order: Vec<usize> = (0..self.windows.len()).collect();
+        order.sort_by_key(|&i| self.ids[i]);
+        let frames = tile_frames(order.len(), area, self.cell);
+        let mut changed = Vec::new();
+        for (&i, frame) in order.iter().zip(frames) {
+            let window = &mut self.windows[i];
+            window.collapsed = None;
+            if (window.frame.width, window.frame.height) != (frame.width, frame.height) {
+                changed.push(self.ids[i]);
+            }
+            window.frame = frame;
+        }
+        changed
     }
 
     /// The size of a character in windows (the font, scaled): resizing
@@ -410,7 +432,9 @@ impl Desktop {
         for (i, window) in self.windows.iter().enumerate() {
             window.draw(canvas, i + 1 == self.windows.len());
             content(self.ids[i], window);
-            window.draw_grip(canvas);
+            if !self.tiling {
+                window.draw_grip(canvas);
+            }
         }
     }
 }
@@ -480,16 +504,16 @@ impl Desktop {
             let top = self.windows.last().filter(|w| inside(w.frame));
             if top.and_then(|w| w.close_box()).is_some_and(inside) {
                 close = self.top();
-            } else if top.and_then(|w| w.collapse_box()).is_some_and(inside) {
+            } else if !self.tiling && top.and_then(|w| w.collapse_box()).is_some_and(inside) {
                 if let Some(window) = self.windows.last_mut() {
                     window.toggle_collapsed();
                 }
                 self.pointer = Some(new);
                 return MouseEffect::WindowMoved;
-            } else if let Some(w) = top.filter(|w| w.grip().is_some_and(inside)) {
+            } else if let Some(w) = top.filter(|w| !self.tiling && w.grip().is_some_and(inside)) {
                 new.resize = Some((w.frame, new.x, new.y));
             } else {
-                new.grab = top.and_then(|w| {
+                new.grab = top.filter(|_| !self.tiling).and_then(|w| {
                     let f = w.frame;
                     (new.y < f.y + BORDER + TITLE_HEIGHT).then(|| (new.x - f.x, new.y - f.y))
                 });
@@ -532,6 +556,51 @@ impl Desktop {
         }
         MouseEffect::Nothing
     }
+}
+
+/// How much of the top of the screen the row of desktop buttons takes.
+pub fn top_bar_height() -> usize {
+    BUTTONS_AT.1 + BUTTON_HEIGHT
+}
+
+/// Room between tiled windows, and around them.
+pub const GAP: usize = 8;
+
+/// Where `n` tiled windows go in `area`, oldest first (Hyprland's
+/// "dwindle", as on Omarchy): the first takes the left half, the second
+/// the top half of what is left, the third the left half of the rest, and
+/// so on; the last takes all that remains. `GAP` pixels between and around
+/// them; each content area is whole characters (`cell`) wide and high.
+pub fn tile_frames(n: usize, area: Rect, cell: (usize, usize)) -> Vec<Rect> {
+    let mut frames = Vec::new();
+    let mut rest = Rect::new(area.x + GAP, area.y + GAP, area.width.saturating_sub(2 * GAP), area.height.saturating_sub(2 * GAP));
+    for i in 0..n {
+        let mut take = rest;
+        if i + 1 < n {
+            if i % 2 == 0 {
+                // Side by side: this one on the left.
+                let w = rest.width.saturating_sub(GAP) / 2;
+                take = Rect::new(rest.x, rest.y, w, rest.height);
+                rest = Rect::new(rest.x + w + GAP, rest.y, rest.width.saturating_sub(w + GAP), rest.height);
+            } else {
+                // One above the other: this one on top.
+                let h = rest.height.saturating_sub(GAP) / 2;
+                take = Rect::new(rest.x, rest.y, rest.width, h);
+                rest = Rect::new(rest.x, rest.y + h + GAP, rest.width, rest.height.saturating_sub(h + GAP));
+            }
+        }
+        frames.push(snap(take, cell));
+    }
+    frames
+}
+
+/// A frame no larger than `room`, its content whole characters (and at
+/// least one), in the top left of `room`.
+fn snap(room: Rect, (cw, ch): (usize, usize)) -> Rect {
+    let (extra_w, extra_h) = frame_size(0, 0);
+    let cols = (room.width.saturating_sub(extra_w) / cw.max(1)).max(1);
+    let rows = (room.height.saturating_sub(extra_h) / ch.max(1)).max(1);
+    Rect::new(room.x, room.y, cols * cw + extra_w, rows * ch + extra_h)
 }
 
 /// The size of the window whose content area is `width` by `height` pixels.

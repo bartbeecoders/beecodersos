@@ -1567,11 +1567,20 @@ desktop.
   lines) resizes it with the mouse, in whole characters, at least 20 x 4 and
   never past the screen's edge; on letting go the window's content is
   made again at the new size (its text kept as far as it fits) and its
-  program gets `Key::Resized` and draws itself anew. The console's own
-  window keeps its size (`desktop-resize.scn`, self-test `wm_resize`).
+  program gets `Key::Resized` and draws itself anew (`desktop-resize.scn`,
+  self-test `wm_resize`).
   **Folding up:** the yellow box left of the close box folds a window up to
   its title bar (what lies behind shows again) and a second click unfolds
   it at the height it had.
+  **Tiling** (`desktop tile on`, saved in `/system/desktop-tile`), as on
+  Omarchy (Hyprland's "dwindle"): the windows lie side by side below the
+  button row with gaps of 8 pixels, oldest first; the first takes the left
+  half, the second the top of what is left, and so on, the newest all that
+  remains. Opening or closing a window lays them out again, and each one's
+  content is made anew for its size (also the console's own window, which
+  can now be resized like the others). While tiling, windows are not
+  dragged, resized or folded by hand. `desktop tile off` lets them float
+  where they are (`desktop-tile.scn`, `desktop-resize-terminal.scn`).
   **Buttons** at the top of the desktop start programs with a click:
   Terminal, Files (the file manager on the home folder), Notes (the
   editor on `notes.txt` there) and Web (the web page viewer on

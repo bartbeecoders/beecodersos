@@ -20,6 +20,8 @@ const LAYOUT_FILE: &str = "/system/keyboard";
 const DISPLAY_FILE: &str = "/system/display";
 /// "on" or "off": the desktop (`desktop on` / `desktop off`). No file: on.
 const DESKTOP_FILE: &str = "/system/desktop";
+/// "on": windows are tiled (`desktop tile on`).
+const TILE_FILE: &str = "/system/desktop-tile";
 /// Shown at boot when it exists (at most `BANNER_LINES` lines).
 const BANNER_FILE: &str = "/system/banner";
 const BANNER_LINES: usize = 20;
@@ -286,6 +288,9 @@ impl Shell {
     pub fn load_desktop(&mut self) {
         let data = self.storage.fs().read_file(DESKTOP_FILE).ok();
         console::apply_desktop_setting(data.as_deref().and_then(|d| core::str::from_utf8(d).ok()));
+        if self.storage.fs().read_file(TILE_FILE).ok().is_some_and(|d| d.trim_ascii() == b"on") {
+            console::set_tiling(true);
+        }
     }
 
     /// At boot: the text of `/system/banner`, if there is one (the first
@@ -1440,6 +1445,9 @@ impl Shell {
             ("desktop", []) if console::desktop_on() => {
                 let (cols, rows) = console::size();
                 println!("desktop: on, the terminal window has {cols}x{rows} characters ('desktop off' ends it)");
+                if console::tiling_on() {
+                    println!("windows are tiled ('desktop tile off' lets them float)");
+                }
                 if let Some((x, y)) = console::pointer() {
                     println!("mouse pointer at {x},{y}");
                 }
@@ -1639,6 +1647,16 @@ impl Shell {
             },
             ("terminal", _) => error("usage: terminal"),
             ("desktop", [state @ ("on" | "off")]) => self.desktop(state),
+            ("desktop", ["tile", state @ ("on" | "off")]) => {
+                let on = *state == "on";
+                console::set_tiling(on);
+                let _ = self.storage.fs().write_file(TILE_FILE, state.as_bytes());
+                if on {
+                    println!("windows are tiled: side by side, the newest splitting the space of the one before (saved)");
+                } else {
+                    println!("windows float again: drag them by the title bar, resize them by the grip (saved)");
+                }
+            }
             ("desktop", ["wallpaper", "none"]) => {
                 let _ = console::set_wallpaper(None);
                 // No saved wallpaper is fine too.
@@ -1664,7 +1682,7 @@ impl Shell {
                     Err(why) => error(&format!("desktop wallpaper {file}: {why}")),
                 }
             }
-            ("desktop", _) => error("usage: desktop [on | off | wallpaper FILE|none]"),
+            ("desktop", _) => error("usage: desktop [on | off | tile on|off | wallpaper FILE|none]"),
             ("install", []) => self.install_list(),
             ("install", [disk]) => self.install(disk, ""),
             ("install", [disk, option @ ("--erase" | "--reinstall")]) => self.install(disk, option),
@@ -3192,7 +3210,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("cpu [start|test|auto on|off]", "the processor: name, how many, clock, features; start the others; measure; at boot or not (saved)"),
     ("sleep SECONDS", "wait (Ctrl+C ends it)"),
     ("terminal", "one more terminal window on the desktop, with a shell of its own"),
-    ("desktop [on|off]", "graphical desktop: the terminal in a window (on by default; saved); 'desktop wallpaper FILE|none'"),
+    ("desktop [on|off]", "graphical desktop: the terminal in a window (on by default; saved); 'desktop wallpaper FILE|none'; 'desktop tile on|off' tiles the windows (saved)"),
     ("slots", "A/B kernel slots: which one runs, last trial"),
     ("crash panic|exception|hang", "deliberately crash the kernel: a panic, a CPU exception, or a hang the watchdog ends (tests crash reports)"),
     ("reboot, shutdown", "restart / power off"),
