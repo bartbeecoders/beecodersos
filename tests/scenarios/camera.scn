@@ -29,3 +29,7 @@ usage: camera timelapse FILE.avi SECONDS [MINUTES]   (a picture every 1-3600 s, 
 $ camera timelapse /t.avi 5 60
 ~ a picture every 5 s into /t.avi
 camera: no camera plugged in ('lsusb' lists the devices)
+$ camera on
+camera: no camera plugged in ('lsusb' lists the devices)
+$ camera off
+camera off

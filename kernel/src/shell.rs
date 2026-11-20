@@ -607,7 +607,9 @@ impl Shell {
         }
         *CAMERA_WANT.get() = size;
         let until = crate::time::uptime_ms() + 3000;
-        crate::thread::pause(|| {
+        // wait_until, not one pause: a pause may return before its condition
+        // holds, which made this report "did not answer" every time.
+        crate::thread::wait_until(|| {
             let state = CAMERA_STATE.get();
             crate::time::uptime_ms() >= until
                 || match size {
