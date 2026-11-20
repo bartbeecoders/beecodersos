@@ -1670,6 +1670,20 @@ impl Shell {
                 },
                 None => error("usage: timer DURATION [MESSAGE]   (90, 90s, 5m, 1h30m; up to a day) | timer off N"),
             },
+            ("alarm", [clock, message @ ..]) => match (crate::timer::parse_clock(clock), crate::time::now_unix()) {
+                (Some(minute), Some(unix)) => {
+                    let zone = crate::time::zone();
+                    let (offset, _) = crate::time::offset(zone, unix);
+                    let ms = crate::timer::ms_until(minute, unix, offset);
+                    match crate::timer::start(ms, &message.join(" ")) {
+                        Ok(id) => println!("alarm (timer {id}) at {clock}: in {} ('timer off {id}' cancels)", crate::timer::left_text(ms)),
+                        Err(why) => error(&format!("alarm: {why}")),
+                    }
+                }
+                (Some(_), None) => error("alarm: the clock is not set (see 'ntp')"),
+                (None, _) => error("usage: alarm HH:MM [MESSAGE]   (the next time the local clock shows it)"),
+            },
+            ("alarm", []) => error("usage: alarm HH:MM [MESSAGE]   (the next time the local clock shows it)"),
             ("timer", []) => error("usage: timer DURATION [MESSAGE]   (90, 90s, 5m, 1h30m; up to a day) | timer off N"),
             ("camera", []) => {
                 println!("{}", crate::usb::describe_cameras());
@@ -3131,7 +3145,8 @@ const COMMANDS: &[(&str, &str)] = &[
     ("lspci [-v]", "list PCI devices (-v: what each one can do)"),
     ("install [DISK]", "put the OS on a disk, or upgrade it (alone: list the disks)"),
     ("timer DURATION [MESSAGE]", "a kitchen timer (5m, 1h30m, 90s): a window and a tune when it is up; 'timer off N' cancels"),
-    ("timers", "the running timers and what is left of them"),
+    ("alarm HH:MM [MESSAGE]", "an alarm at the next HH:MM on the local clock: a window and a tune (it is a timer: 'timers', 'timer off N')"),
+    ("timers", "the running timers and alarms, and what is left of them"),
     ("lsusb", "USB controller and devices"),
     ("camera [raw|log]", "USB cameras: the picture formats and sizes they offer ('raw': the description as the camera gave it; 'log': what the driver noted)"),
     ("camera timelapse FILE.avi SECS [MIN]", "a time-lapse video: a picture every SECS seconds, played back at 10 a second"),

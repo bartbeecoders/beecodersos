@@ -1,4 +1,5 @@
-//! Kitchen timers (`timer 10m tea`): each one waits in a thread of its own;
+//! Kitchen timers (`timer 10m tea`) and alarms (`alarm 07:30 wake up`, at
+//! the next 07:30 on the local clock): each one waits in a thread of its own;
 //! when its time is up a window opens on the desktop with its message and
 //! the speaker plays a short tune (when the machine has sound). `timers`
 //! lists them, `timer off N` cancels one. They live in memory: a restart
@@ -55,6 +56,29 @@ pub fn parse_duration(text: &str) -> Option<u64> {
         return None; // digits without a unit at the end ("1m30")
     }
     Some(total).filter(|ms| (1..=MAX_MS).contains(ms))
+}
+
+/// "07:30" or "7:30" -> minutes after midnight; `None` otherwise.
+pub fn parse_clock(text: &str) -> Option<u32> {
+    let (h, m) = text.trim().split_once(':')?;
+    if h.is_empty() || h.len() > 2 || m.len() != 2 {
+        return None;
+    }
+    let (h, m): (u32, u32) = (h.parse().ok()?, m.parse().ok()?);
+    (h < 24 && m < 60).then_some(h * 60 + m)
+}
+
+/// Milliseconds from `unix` (seconds, UTC) until the next time the local
+/// clock shows `minute` (after midnight), `offset_min` ahead of UTC. A time
+/// that is now or past today means tomorrow.
+pub fn ms_until(minute: u32, unix: u64, offset_min: i32) -> u64 {
+    let local = unix as i64 + offset_min as i64 * 60;
+    let now_in_day = local.rem_euclid(86_400);
+    let mut wait = minute as i64 * 60 - now_in_day;
+    if wait <= 0 {
+        wait += 86_400;
+    }
+    wait as u64 * 1000
 }
 
 /// "1h 05m", "4m 10s", "12s": what is left, for `timers`.

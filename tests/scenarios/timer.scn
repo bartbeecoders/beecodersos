@@ -23,3 +23,12 @@ $ timers
 no timers ('timer 10m tea' starts one)
 $ timer soon
 usage: timer DURATION [MESSAGE]   (90, 90s, 5m, 1h30m; up to a day) | timer off N
+# alarm: at the next time the local clock shows (QEMU's clock is set from the host).
+$ alarm 25:00
+usage: alarm HH:MM [MESSAGE]   (the next time the local clock shows it)
+$ alarm 03:15 milk the bees
+~ ^alarm \(timer 3\) at 03:15: in (\d+h \d\dm|\d+m \d\ds|\d+s) \('timer off 3' cancels\)$
+$ timers
+~ ^  3 +\S.* left  milk the bees$
+$ timer off 3
+timer 3 cancelled
