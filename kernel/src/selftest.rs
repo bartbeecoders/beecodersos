@@ -1489,6 +1489,18 @@ fn timer_durations() -> TestResult {
     check_eq!(ms_until(420, six_utc, 60), 86_400_000); // 07:00 is now: tomorrow
     check_eq!(ms_until(360, six_utc, 60), 23 * 3_600_000); // 06:00 is past: tomorrow
     check_eq!(ms_until(30, six_utc, -300), 23 * 3_600_000 + 30 * 60_000); // 01:00 in New York: 00:30 is tomorrow
+    // Kept on disk: one line each; nonsense lines are skipped.
+    use crate::timer::{decode, encode, restore_action, Restore};
+    let saved = vec![(1_800_000_000u64, alloc::string::String::from("bake bread")), (1_800_000_100, alloc::string::String::new())];
+    check_eq!(encode(&saved), "1800000000 bake bread\n1800000100 \n");
+    check_eq!(decode(&encode(&saved)), saved);
+    check_eq!(decode("x tea\n12\n\n-5 no\n7 a b c"), vec![(12, alloc::string::String::new()), (7, alloc::string::String::from("a b c"))]);
+    check_eq!(encode(&[(5, alloc::string::String::from("line\nbreak"))]), "5 linebreak\n");
+    // At boot: still to come, late (at most an hour), or forgotten.
+    check_eq!(restore_action(1000, 940), Restore::Wait(60_000));
+    check_eq!(restore_action(1000, 1000), Restore::Late);
+    check_eq!(restore_action(1000, 1000 + 3600), Restore::Late);
+    check_eq!(restore_action(1000, 1000 + 3601), Restore::Forget);
     check_eq!((left_text(12_000), left_text(250_000), left_text(3_900_000), left_text(1)), (
         alloc::string::String::from("12s"),
         alloc::string::String::from("4m 10s"),

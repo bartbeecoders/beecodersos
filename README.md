@@ -1521,8 +1521,11 @@ desktop.
 - **Timers** (`kernel/src/timer.rs`): `timer 10m tea` (also `90`, `90s`,
   `1h30m`; up to a day) waits in a thread of its own; when the time is up a
   window "Timer N" opens with the message and the speaker plays a short
-  tune. `timers` lists them with what is left, `timer off N` cancels one;
-  they live in memory. `alarm 07:30 wake up` is a timer to the next 07:30
+  tune. `timers` lists them with what is left, `timer off N` cancels one.
+  They are kept in `/system/timers` (due time on the clock, and the message)
+  and come back after a restart, also an update's; one that came due while
+  the machine was off rings at boot, marked as missed, if it is at most an
+  hour late (`timer-saved.scn`). `alarm 07:30 wake up` is a timer to the next 07:30
   on the local clock (time zone from `timezone`). `timer.scn` lets one go
   off and reads its window.
 - **Wallpaper:** `desktop wallpaper FILE` puts a JPEG, PNG, GIF, BMP or PPM picture behind
