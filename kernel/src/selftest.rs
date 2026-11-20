@@ -48,6 +48,7 @@ macro_rules! check_eq {
 
 const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("event log: repeated commands are folded", eventlog_repeats),
+    ("windows: resized with the grip, in whole characters", wm_resize),
     ("timers: durations and what is left", timer_durations),
     ("crash: restart or halt afterwards", crash_then),
     ("gfx: the fast drawing paths give the same picture", gfx_fast_paths),
@@ -1194,7 +1195,7 @@ fn gfx_canvas() -> TestResult {
 fn wm_layout() -> TestResult {
     use crate::gfx::Rect;
     use crate::wm::{terminal_frame, Window};
-    let content = |frame: Rect| Window { title: String::new(), frame }.content();
+    let content = |frame: Rect| Window { title: String::new(), frame, resizable: true }.content();
     // Full HD: a window in the middle with desktop all around.
     let frame = terminal_frame(1920, 1080, 1).ok_or("no window on a full HD screen")?;
     let inside = content(frame);
@@ -1446,7 +1447,7 @@ fn display_g3() -> TestResult {
     check_eq!(FbCon::in_area(canvas, canvas.bounds(), &mut cells, 0).scale(), 1);
     // The terminal window with the double font holds whole double characters.
     let frame = wm::terminal_frame(2560, 1440, 2).ok_or("no window at 2560x1440")?;
-    let inside = wm::Window { title: String::new(), frame }.content();
+    let inside = wm::Window { title: String::new(), frame, resizable: true }.content();
     check_eq!((inside.width % 16, inside.height % 32), (0, 0));
     check!(inside.width / 16 >= 100 && frame.x + frame.width < 2560);
     check!(wm::terminal_frame(400, 300, 2).is_some() && wm::terminal_frame(320, 200, 2).is_none());
@@ -1745,6 +1746,38 @@ fn xhci_rings() -> TestResult {
     let status = 1 | 1 << 1 | 1 << 9 | 3 << 10 | 1 << 17 | 1 << 21;
     check_eq!(port_write(status, 1 << 4), 1 << 9 | 1 << 4);
     check_eq!(port_write(status, 1 << 21), 1 << 9 | 1 << 21);
+    Ok(())
+}
+
+fn wm_resize() -> TestResult {
+    use crate::gfx::Rect;
+    use crate::wm::{frame_size, Desktop, MouseEffect, GRIP};
+    let screen = Rect::new(0, 0, 640, 480);
+    let mut desk = Desktop::new();
+    desk.set_cell(8, 16);
+    let (w, h) = frame_size(40 * 8, 10 * 16);
+    let id = desk.open("Files", Rect::new(50, 60, w, h));
+    let fixed = desk.open("Terminal", Rect::new(300, 300, w, h));
+    desk.set_resizable(fixed, false);
+    check!(desk.window(fixed).and_then(|w| w.grip()).is_none());
+    desk.raise(id);
+    let grip = desk.window(id).and_then(|w| w.grip()).ok_or("no grip")?;
+    check_eq!((grip.x + GRIP, grip.y + GRIP), (50 + w - 2, 60 + h - 2));
+    // Press on the grip, pull 100 x 50 pixels: 12 more columns, 3 more lines.
+    desk.mouse(0, 0, 0, screen);
+    desk.mouse(0, -5000, -5000, screen);
+    desk.mouse(0, (grip.x + 2) as i32, (grip.y + 2) as i32, screen);
+    check_eq!(desk.mouse(1, 0, 0, screen), MouseEffect::Nothing);
+    check_eq!(desk.mouse(1, 100, 50, screen), MouseEffect::WindowMoved);
+    check_eq!(desk.window(id).map(|w| w.frame), Some(Rect::new(50, 60, frame_size(52 * 8, 13 * 16).0, frame_size(52 * 8, 13 * 16).1)));
+    check_eq!(desk.mouse(0, 0, 0, screen), MouseEffect::Resized(id));
+    check_eq!(desk.mouse(0, 0, 0, screen), MouseEffect::Nothing);
+    // Never smaller than 20 x 4 characters, never past the screen's edge.
+    let start = desk.window(id).ok_or("gone")?.frame;
+    check_eq!(desk.resized_frame(start, -5000, -5000, screen), Rect::new(50, 60, frame_size(20 * 8, 4 * 16).0, frame_size(20 * 8, 4 * 16).1));
+    let big = desk.resized_frame(start, 5000, 5000, screen);
+    check!(big.x + big.width <= 640 && big.y + big.height <= 480);
+    check_eq!((big.width - frame_size(0, 0).0) % 8, 0);
     Ok(())
 }
 
@@ -2353,7 +2386,7 @@ fn wm_windows() -> TestResult {
     check_eq!(desk.open("D", Rect::new(0, 0, 50, 50)), 3); // numbers are not used again
     check!(desk.close(3));
     // A window too narrow for a close box has none.
-    check!(wm::Window { title: String::new(), frame: Rect::new(0, 0, 20, 60) }.close_box().is_none());
+    check!(wm::Window { title: String::new(), frame: Rect::new(0, 0, 20, 60), resizable: true }.close_box().is_none());
     check_eq!(wm::frame_size(640, 400), (640 + 12, 400 + 12 + 24));
 
     // Contents: each window's picture is put in after its frame, back to

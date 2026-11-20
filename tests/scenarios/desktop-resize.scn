@@ -1,0 +1,20 @@
+# Windows are resized with the grip in their bottom right corner. The first
+# extra window lies at 32,32: 80x25 characters is a frame of 652x436, so
+# its grip is at 670..682, 454..466. Pulling it 160 x 80 pixels makes the
+# window 20 columns wider and 5 lines higher (812x516).
+@usb kbd mouse
+$ layout us
+$ files /
+~ in a new window
+# Before: its right border at x=683 (the console's window lies behind it).
+@screenshot 1920x1080 pixels 34,34=3a6ea5 683,300=1f3a5f 843,300=000000
+# The pointer starts in the middle (960,540).
+@mouse -284 -80
+@button left down
+@mouse 160 80
+@button left up
+$ sleep 1
+# After: the border moved to x=843, the bottom one to y=547.
+@screenshot 1920x1080 pixels 683,300=000000 843,300=1f3a5f 500,547=1f3a5f 500,467=000000
+$ threads
+~ files      (waiting|ready)

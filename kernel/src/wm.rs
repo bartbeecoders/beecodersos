@@ -9,7 +9,9 @@
 //!
 //! With a mouse (usb.rs) there is a pointer: pressing the left button on a
 //! window brings it to the top, on its title bar drags it, on the box at the
-//! right of the title bar asks to close it.
+//! right of the title bar asks to close it, and on the grip in its bottom
+//! right corner resizes it (in whole characters; its owner then lays out
+//! its content again).
 
 use crate::font::{GLYPH_HEIGHT, GLYPH_WIDTH};
 use crate::gfx::{Canvas, Rect};
@@ -24,6 +26,7 @@ const TITLE_TEXT: u32 = 0xFFFFFF;
 const BORDER_COLOR: u32 = 0x1F3A5F;
 const SHADOW_COLOR: u32 = 0x86B4D8;
 const CLOSE_BOX: u32 = 0xE06C5A;
+const GRIP_COLOR: u32 = 0x8A9BB0;
 /// Inside of a window before its owner draws: black, like the terminal.
 pub const CONTENT: u32 = 0x000000;
 
@@ -33,6 +36,8 @@ const BORDER: usize = 2;
 const TITLE_HEIGHT: usize = GLYPH_HEIGHT + 8;
 const PADDING: usize = 4;
 const SHADOW: usize = 6;
+/// The square in the bottom right corner that resizes a window.
+pub const GRIP: usize = 12;
 
 /// The smallest terminal worth a window, in characters.
 const MIN_COLS: usize = 20;
@@ -42,6 +47,8 @@ pub struct Window {
     pub title: String,
     /// The whole window: border, title bar and content.
     pub frame: Rect,
+    /// It has a grip and can be resized (the console's own window cannot).
+    pub resizable: bool,
 }
 
 impl Window {
@@ -63,6 +70,24 @@ impl Window {
         (inner_width > 2 * GLYPH_WIDTH + box_size).then(|| {
             Rect::new(self.frame.x + BORDER + inner_width - GLYPH_WIDTH - box_size, self.frame.y + BORDER + 6, box_size, box_size)
         })
+    }
+
+    /// The grip in the bottom right corner (over the content's corner).
+    pub fn grip(&self) -> Option<Rect> {
+        let f = self.frame;
+        (self.resizable && f.width > 3 * GRIP && f.height > 3 * GRIP)
+            .then(|| Rect::new(f.x + f.width - BORDER - GRIP, f.y + f.height - BORDER - GRIP, GRIP, GRIP))
+    }
+
+    /// Three short diagonal lines in the grip, drawn over the content.
+    fn draw_grip(&self, canvas: &Canvas) {
+        let Some(g) = self.grip() else { return };
+        for k in 0..3 {
+            let at = 4 * k + 2;
+            for d in 0..(GRIP - at) {
+                canvas.fill_rect(Rect::new(g.x + at + d, g.y + GRIP - 1 - d, 1, 1), GRIP_COLOR);
+            }
+        }
     }
 
     /// The frame: shadow, border, title bar with the title and a close box,
@@ -124,6 +149,8 @@ pub struct Pointer {
     buttons: u8,
     /// While the top window is being dragged: where in its frame it was grabbed.
     grab: Option<(usize, usize)>,
+    /// While the top window is being resized: its frame and the pointer when it started.
+    resize: Option<(Rect, usize, usize)>,
 }
 
 /// What a mouse event changed on the screen.
@@ -144,6 +171,9 @@ pub enum MouseEffect {
     Click { id: usize, x: usize, y: usize, raised: bool },
     /// The button went down on a button of the desktop (its place in the row).
     Launch(usize),
+    /// The button was let go after resizing this window: its owner lays
+    /// out its content for the new size.
+    Resized(usize),
 }
 
 pub struct Desktop {
@@ -159,6 +189,8 @@ pub struct Desktop {
     /// The clock at the right end of the row (empty: none), and the screen's width.
     clock: String,
     width: usize,
+    /// The size of a character in windows: resizing goes in whole ones.
+    cell: (usize, usize),
 }
 
 /// Where the row of desktop buttons starts, and how high a button is.
@@ -168,7 +200,45 @@ const BUTTON_GAP: usize = 8;
 
 impl Desktop {
     pub fn new() -> Self {
-        Desktop { windows: Vec::new(), ids: Vec::new(), next_id: 0, pointer: None, buttons: Vec::new(), clock: String::new(), width: 0 }
+        Desktop {
+            windows: Vec::new(),
+            ids: Vec::new(),
+            next_id: 0,
+            pointer: None,
+            buttons: Vec::new(),
+            clock: String::new(),
+            width: 0,
+            cell: (GLYPH_WIDTH, GLYPH_HEIGHT),
+        }
+    }
+
+    /// The size of a character in windows (the font, scaled): resizing
+    /// keeps whole characters.
+    pub fn set_cell(&mut self, width: usize, height: usize) {
+        self.cell = (width.max(1), height.max(1));
+    }
+
+    /// A window that cannot be resized (no grip): the console's own.
+    pub fn set_resizable(&mut self, id: usize, resizable: bool) {
+        if let Some(at) = self.position(id) {
+            self.windows[at].resizable = resizable;
+        }
+    }
+
+    /// The frame `start` resized by (dx, dy) pixels: whole characters, at
+    /// least MIN_COLS x MIN_ROWS of them, and within the screen.
+    pub fn resized_frame(&self, start: Rect, dx: i64, dy: i64, screen: Rect) -> Rect {
+        let (cw, ch) = self.cell;
+        let (extra_w, extra_h) = frame_size(0, 0);
+        let fit = |size: usize, by: i64, extra: usize, cell: usize, min: usize, room: usize| {
+            let wanted = (size as i64 + by).max(0) as usize;
+            let cells = (wanted.saturating_sub(extra) / cell).max(min);
+            let most = room.saturating_sub(extra) / cell;
+            cells.min(most.max(min)) * cell + extra
+        };
+        let width = fit(start.width, dx, extra_w, cw, MIN_COLS, screen.width.saturating_sub(start.x));
+        let height = fit(start.height, dy, extra_h, ch, MIN_ROWS, screen.height.saturating_sub(start.y));
+        Rect::new(start.x, start.y, width, height)
     }
 
     /// Put a row of buttons on the desktop (to start programs with the
@@ -218,7 +288,7 @@ impl Desktop {
     /// Add a window on top of the others; returns its number (the first
     /// window gets 0, and numbers are not used again).
     pub fn open(&mut self, title: &str, frame: Rect) -> usize {
-        self.windows.push(Window { title: String::from(title), frame });
+        self.windows.push(Window { title: String::from(title), frame, resizable: true });
         self.ids.push(self.next_id);
         self.next_id += 1;
         self.next_id - 1
@@ -308,6 +378,7 @@ impl Desktop {
         for (i, window) in self.windows.iter().enumerate() {
             window.draw(canvas, i + 1 == self.windows.len());
             content(self.ids[i], window);
+            window.draw_grip(canvas);
         }
     }
 }
@@ -324,6 +395,7 @@ impl Desktop {
             y: p.y.min(screen.height.saturating_sub(1)),
             buttons: 0,
             grab: None,
+            resize: None,
         });
     }
 
@@ -349,16 +421,23 @@ impl Desktop {
     /// button is let go, and stays completely on the screen.
     pub fn mouse(&mut self, buttons: u8, dx: i32, dy: i32, screen: Rect) -> MouseEffect {
         let first = self.pointer.is_none();
-        let old = self.pointer.unwrap_or(Pointer { x: screen.width / 2, y: screen.height / 2, buttons: 0, grab: None });
+        let old = self.pointer.unwrap_or(Pointer { x: screen.width / 2, y: screen.height / 2, buttons: 0, grab: None, resize: None });
         let step = |at: usize, by: i32, size: usize| {
             (at as i64 + by as i64).clamp(0, size.saturating_sub(1) as i64) as usize
         };
-        let mut new = Pointer { x: step(old.x, dx, screen.width), y: step(old.y, dy, screen.height), buttons, grab: old.grab };
+        let mut new = Pointer { x: step(old.x, dx, screen.width), y: step(old.y, dy, screen.height), buttons, grab: old.grab, resize: old.resize };
         let (was_down, is_down) = (old.buttons & 1 != 0, buttons & 1 != 0);
         let inside = |r: Rect| new.x >= r.x && new.x < r.x + r.width && new.y >= r.y && new.y < r.y + r.height;
         let (mut raised, mut close, mut click, mut launch) = (false, None, None, None);
         if !is_down {
             new.grab = None;
+            if new.resize.take().is_some() {
+                // Let go after resizing: its owner lays out the content again.
+                self.pointer = Some(new);
+                if let Some(id) = self.top() {
+                    return MouseEffect::Resized(id);
+                }
+            }
         } else if !was_down {
             // The topmost window under the pointer comes to the top.
             match self.windows.iter().rposition(|w| inside(w.frame)) {
@@ -369,6 +448,8 @@ impl Desktop {
             let top = self.windows.last().filter(|w| inside(w.frame));
             if top.and_then(|w| w.close_box()).is_some_and(inside) {
                 close = self.top();
+            } else if let Some(w) = top.filter(|w| w.grip().is_some_and(inside)) {
+                new.resize = Some((w.frame, new.x, new.y));
             } else {
                 new.grab = top.and_then(|w| {
                     let f = w.frame;
@@ -386,6 +467,15 @@ impl Desktop {
         }
         if let Some(button) = launch {
             return MouseEffect::Launch(button);
+        }
+        if let Some((start, sx, sy)) = new.resize {
+            let frame = self.resized_frame(start, new.x as i64 - sx as i64, new.y as i64 - sy as i64, screen);
+            if let Some(window) = self.windows.last_mut() {
+                if frame != window.frame {
+                    window.frame = frame;
+                    return MouseEffect::WindowMoved;
+                }
+            }
         }
         if let (Some((gx, gy)), Some(window)) = (new.grab, self.windows.last_mut()) {
             let f = window.frame;
