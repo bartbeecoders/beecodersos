@@ -1501,6 +1501,19 @@ fn timer_durations() -> TestResult {
     check_eq!(restore_action(1000, 1000), Restore::Late);
     check_eq!(restore_action(1000, 1000 + 3600), Restore::Late);
     check_eq!(restore_action(1000, 1000 + 3601), Restore::Forget);
+    // cal: November 2026 starts on a Sunday and has 30 days; today marked.
+    let nov = crate::clock::month_text(2026, 11, Some(20));
+    let lines: Vec<&str> = nov.lines().collect();
+    check_eq!(lines[0].trim(), "November 2026");
+    check_eq!(lines[1], " Mo  Tu  We  Th  Fr  Sa  Su");
+    check_eq!(lines[2], "                          1"); // under "Su"
+    check_eq!(lines[5], " 16  17  18  19 [20] 21  22");
+    check_eq!(lines[7], " 30");
+    check_eq!(lines.len(), 8);
+    // February 2024 (a leap year) starts on a Thursday, ends on the 29th.
+    let feb = crate::clock::month_text(2024, 2, None);
+    check!(feb.lines().nth(2).is_some_and(|l| l.starts_with("              1   2"))); // under "Th"
+    check!(feb.trim_end().ends_with("29") && !feb.contains("30") && !feb.contains('['));
     // On the desktop's clock.
     use crate::clock::timer_note;
     check_eq!(timer_note(240_000, "tea"), " · tea 4m");
