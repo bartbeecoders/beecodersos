@@ -1478,6 +1478,17 @@ fn timer_durations() -> TestResult {
     for bad in ["", "0", "0s", "25h", "1m30", "m", "5x", "-5m", "1.5h", "99999999999999999999h"] {
         check_eq!(parse_duration(bad), None);
     }
+    use crate::timer::{ms_until, parse_clock};
+    check_eq!((parse_clock("07:30"), parse_clock("7:30"), parse_clock("23:59"), parse_clock("00:00")), (Some(450), Some(450), Some(1439), Some(0)));
+    for bad in ["24:00", "7:60", "730", "7:3", ":30", "a:bc", "007:30"] {
+        check_eq!(parse_clock(bad), None);
+    }
+    // 2026-11-20 06:00 UTC is 07:00 in Brussels (+60): 07:30 is half an hour away.
+    let six_utc = 1795154400;
+    check_eq!(ms_until(450, six_utc, 60), 1_800_000);
+    check_eq!(ms_until(420, six_utc, 60), 86_400_000); // 07:00 is now: tomorrow
+    check_eq!(ms_until(360, six_utc, 60), 23 * 3_600_000); // 06:00 is past: tomorrow
+    check_eq!(ms_until(30, six_utc, -300), 23 * 3_600_000 + 30 * 60_000); // 01:00 in New York: 00:30 is tomorrow
     check_eq!((left_text(12_000), left_text(250_000), left_text(3_900_000), left_text(1)), (
         alloc::string::String::from("12s"),
         alloc::string::String::from("4m 10s"),
