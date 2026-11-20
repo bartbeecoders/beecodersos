@@ -49,7 +49,15 @@ pub struct Editor {
     search: Option<String>,
     /// What was looked for last (Ctrl+G looks again).
     last_search: String,
+    /// Ctrl+Z: earlier texts and cursors, the latest last.
+    undo: Vec<(Vec<Vec<char>>, usize, usize, bool)>,
+    /// The last change was typing letters: more letters join that step.
+    typing: bool,
 }
+
+/// Steps kept for Ctrl+Z (fewer for large texts: each keeps a whole copy).
+const UNDO_STEPS: usize = 50;
+const UNDO_BYTES: usize = 4 * 1024 * 1024;
 
 impl Editor {
     pub fn new(text: &str) -> Editor {
@@ -69,6 +77,8 @@ impl Editor {
             message: String::new(),
             search: None,
             last_search: String::new(),
+            undo: Vec::new(),
+            typing: false,
         }
     }
 
@@ -132,8 +142,29 @@ impl Editor {
         self.message = format!("\"{what}\" not found");
     }
 
+    /// Remember the text before a change (`typing`: letters join one step).
+    fn remember(&mut self, typing: bool) {
+        if typing && self.typing {
+            return;
+        }
+        self.typing = typing;
+        let size: usize = self.lines.iter().map(|l| l.len() + 1).sum();
+        let most = (UNDO_BYTES / size.max(1)).clamp(1, UNDO_STEPS);
+        while self.undo.len() >= most {
+            self.undo.remove(0);
+        }
+        self.undo.push((self.lines.clone(), self.row, self.col, self.modified));
+    }
+
     /// Handle one key. `page`: the number of text lines the window shows.
     pub fn key(&mut self, key: Key, page: usize) -> Action {
+        // Before a key that changes the text: remember it for Ctrl+Z.
+        match key {
+            Key::Char(_) if self.search.is_none() => self.remember(true),
+            Key::Tab | Key::Enter | Key::Backspace | Key::Delete | Key::Ctrl('k') if self.search.is_none() => self.remember(false),
+            Key::Ctrl('z') => {}
+            _ => self.typing = false,
+        }
         if key == Key::Resized {
             return Action::None; // drawn again for the new size; a question stays asked
         }
@@ -161,6 +192,16 @@ impl Editor {
         match key {
             Key::Ctrl('s') => return Action::Save,
             Key::Ctrl('f') => self.search = Some(String::new()),
+            Key::Ctrl('z') => match self.undo.pop() {
+                Some((lines, row, col, modified)) => {
+                    self.lines = lines;
+                    self.row = row;
+                    self.col = col;
+                    self.modified = modified;
+                    self.typing = false;
+                }
+                None => self.message = String::from("nothing to undo"),
+            },
             Key::Ctrl('g') if !self.last_search.is_empty() => {
                 let what = self.last_search.clone();
                 self.find(&what);
@@ -287,7 +328,7 @@ impl Editor {
         } else if self.message.is_empty() {
             let (line, col) = self.position();
             let state = if self.modified { " (changed)" } else { "" };
-            (format!(" {name}{state}  line {line} of {}, column {col}  |  Ctrl+S save  Ctrl+F find  Ctrl+Q leave", self.lines.len()), STATUS_ATTR)
+            (format!(" {name}{state}  line {line} of {}, column {col}  |  Ctrl+S save  Ctrl+Z undo  Ctrl+F find  Ctrl+Q leave", self.lines.len()), STATUS_ATTR)
         } else {
             (format!(" {}", self.message), if self.leaving || self.message.starts_with("NOT") { WARNING_ATTR } else { STATUS_ATTR })
         };

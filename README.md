@@ -1321,7 +1321,8 @@ desktop.
   saves, **Ctrl+Q** leaves (asked twice when changes are not saved),
   **Ctrl+F** asks in the status line what to find (any case; Enter goes to
   the next match, round past the end; Esc stops) and **Ctrl+G** finds it
-  again. The
+  again; **Ctrl+Z** takes changes back one step at a time (a word typed is
+  one step; up to 50 steps, fewer for very large files). The
   status line at the top shows the name, the place of the cursor and what
   just happened. Long lines scroll sideways. Text files up to 1 MiB; a file
   is written back with a line end after every line. Closing the window
