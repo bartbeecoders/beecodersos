@@ -1569,6 +1569,9 @@ desktop.
   made again at the new size (its text kept as far as it fits) and its
   program gets `Key::Resized` and draws itself anew. The console's own
   window keeps its size (`desktop-resize.scn`, self-test `wm_resize`).
+  **Folding up:** the yellow box left of the close box folds a window up to
+  its title bar (what lies behind shows again) and a second click unfolds
+  it at the height it had.
   **Buttons** at the top of the desktop start programs with a click:
   Terminal, Files (the file manager on the home folder), Notes (the
   editor on `notes.txt` there) and Web (the web page viewer on

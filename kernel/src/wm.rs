@@ -27,6 +27,7 @@ const BORDER_COLOR: u32 = 0x1F3A5F;
 const SHADOW_COLOR: u32 = 0x86B4D8;
 const CLOSE_BOX: u32 = 0xE06C5A;
 const GRIP_COLOR: u32 = 0x8A9BB0;
+const COLLAPSE_BOX: u32 = 0xF2C14E;
 /// Inside of a window before its owner draws: black, like the terminal.
 pub const CONTENT: u32 = 0x000000;
 
@@ -49,6 +50,8 @@ pub struct Window {
     pub frame: Rect,
     /// It has a grip and can be resized (the console's own window cannot).
     pub resizable: bool,
+    /// Folded up to its title bar: the height it had before.
+    pub collapsed: Option<usize>,
 }
 
 impl Window {
@@ -72,10 +75,33 @@ impl Window {
         })
     }
 
+    /// The box left of the close box: folds the window up to its title bar and back.
+    pub fn collapse_box(&self) -> Option<Rect> {
+        let close = self.close_box()?;
+        let x = close.x.checked_sub(close.width + GLYPH_WIDTH / 2)?;
+        (x > self.frame.x + BORDER + 4 * GLYPH_WIDTH).then(|| Rect::new(x, close.y, close.width, close.height))
+    }
+
+    /// The height of a window folded up to its title bar.
+    pub fn collapsed_height() -> usize {
+        2 * BORDER + TITLE_HEIGHT
+    }
+
+    /// Fold up to the title bar, or back to the height it had.
+    pub fn toggle_collapsed(&mut self) {
+        match self.collapsed.take() {
+            Some(height) => self.frame.height = height,
+            None => {
+                self.collapsed = Some(self.frame.height);
+                self.frame.height = Self::collapsed_height();
+            }
+        }
+    }
+
     /// The grip in the bottom right corner (over the content's corner).
     pub fn grip(&self) -> Option<Rect> {
         let f = self.frame;
-        (self.resizable && f.width > 3 * GRIP && f.height > 3 * GRIP)
+        (self.resizable && self.collapsed.is_none() && f.width > 3 * GRIP && f.height > 3 * GRIP)
             .then(|| Rect::new(f.x + f.width - BORDER - GRIP, f.y + f.height - BORDER - GRIP, GRIP, GRIP))
     }
 
@@ -101,10 +127,16 @@ impl Window {
         let bar_color = if focused { TITLE_BAR } else { TITLE_BAR_UNFOCUSED };
         canvas.fill_rect(bar, bar_color);
         let box_size = GLYPH_HEIGHT - 4;
-        let text_room = inner_width.saturating_sub(3 * GLYPH_WIDTH + box_size);
+        let text_room = inner_width.saturating_sub(4 * GLYPH_WIDTH + 2 * box_size);
         canvas.text(bar.x + GLYPH_WIDTH, bar.y + 4, &self.title, TITLE_TEXT, bar_color, text_room);
         if let Some(close) = self.close_box() {
             canvas.fill_rect(close, CLOSE_BOX);
+        }
+        if let Some(fold) = self.collapse_box() {
+            canvas.fill_rect(fold, COLLAPSE_BOX);
+            // A short bar: fold up / unfold.
+            let line = Rect::new(fold.x + 2, fold.y + fold.height / 2, fold.width.saturating_sub(4), 2);
+            canvas.fill_rect(line, BORDER_COLOR);
         }
         let below = Rect::new(
             f.x + BORDER,
@@ -288,7 +320,7 @@ impl Desktop {
     /// Add a window on top of the others; returns its number (the first
     /// window gets 0, and numbers are not used again).
     pub fn open(&mut self, title: &str, frame: Rect) -> usize {
-        self.windows.push(Window { title: String::from(title), frame, resizable: true });
+        self.windows.push(Window { title: String::from(title), frame, resizable: true, collapsed: None });
         self.ids.push(self.next_id);
         self.next_id += 1;
         self.next_id - 1
@@ -448,6 +480,12 @@ impl Desktop {
             let top = self.windows.last().filter(|w| inside(w.frame));
             if top.and_then(|w| w.close_box()).is_some_and(inside) {
                 close = self.top();
+            } else if top.and_then(|w| w.collapse_box()).is_some_and(inside) {
+                if let Some(window) = self.windows.last_mut() {
+                    window.toggle_collapsed();
+                }
+                self.pointer = Some(new);
+                return MouseEffect::WindowMoved;
             } else if let Some(w) = top.filter(|w| w.grip().is_some_and(inside)) {
                 new.resize = Some((w.frame, new.x, new.y));
             } else {

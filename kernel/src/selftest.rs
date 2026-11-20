@@ -1195,7 +1195,7 @@ fn gfx_canvas() -> TestResult {
 fn wm_layout() -> TestResult {
     use crate::gfx::Rect;
     use crate::wm::{terminal_frame, Window};
-    let content = |frame: Rect| Window { title: String::new(), frame, resizable: true }.content();
+    let content = |frame: Rect| Window { title: String::new(), frame, resizable: true, collapsed: None }.content();
     // Full HD: a window in the middle with desktop all around.
     let frame = terminal_frame(1920, 1080, 1).ok_or("no window on a full HD screen")?;
     let inside = content(frame);
@@ -1447,7 +1447,7 @@ fn display_g3() -> TestResult {
     check_eq!(FbCon::in_area(canvas, canvas.bounds(), &mut cells, 0).scale(), 1);
     // The terminal window with the double font holds whole double characters.
     let frame = wm::terminal_frame(2560, 1440, 2).ok_or("no window at 2560x1440")?;
-    let inside = wm::Window { title: String::new(), frame, resizable: true }.content();
+    let inside = wm::Window { title: String::new(), frame, resizable: true, collapsed: None }.content();
     check_eq!((inside.width % 16, inside.height % 32), (0, 0));
     check!(inside.width / 16 >= 100 && frame.x + frame.width < 2560);
     check!(wm::terminal_frame(400, 300, 2).is_some() && wm::terminal_frame(320, 200, 2).is_none());
@@ -1772,6 +1772,23 @@ fn wm_resize() -> TestResult {
     check_eq!(desk.window(id).map(|w| w.frame), Some(Rect::new(50, 60, frame_size(52 * 8, 13 * 16).0, frame_size(52 * 8, 13 * 16).1)));
     check_eq!(desk.mouse(0, 0, 0, screen), MouseEffect::Resized(id));
     check_eq!(desk.mouse(0, 0, 0, screen), MouseEffect::Nothing);
+    // The yellow box left of the close box folds the window up to its
+    // title bar (no content, no grip) and unfolds it again.
+    let fold = desk.window(id).and_then(|w| w.collapse_box()).ok_or("no collapse box")?;
+    let close = desk.window(id).and_then(|w| w.close_box()).ok_or("no close box")?;
+    check!(fold.x + fold.width < close.x && fold.y == close.y);
+    let height = desk.window(id).ok_or("gone")?.frame.height;
+    let at = desk.pointer().ok_or("no pointer")?;
+    desk.mouse(0, fold.x as i32 + 2 - at.x as i32, fold.y as i32 + 2 - at.y as i32, screen);
+    check_eq!(desk.mouse(1, 0, 0, screen), MouseEffect::WindowMoved);
+    let folded = desk.window(id).ok_or("gone")?;
+    check_eq!(folded.frame.height, crate::wm::Window::collapsed_height());
+    check_eq!(folded.content().height, 0);
+    check!(folded.grip().is_none());
+    desk.mouse(0, 0, 0, screen);
+    check_eq!(desk.mouse(1, 0, 0, screen), MouseEffect::WindowMoved);
+    check_eq!(desk.window(id).ok_or("gone")?.frame.height, height);
+    desk.mouse(0, 0, 0, screen);
     // Never smaller than 20 x 4 characters, never past the screen's edge.
     let start = desk.window(id).ok_or("gone")?.frame;
     check_eq!(desk.resized_frame(start, -5000, -5000, screen), Rect::new(50, 60, frame_size(20 * 8, 4 * 16).0, frame_size(20 * 8, 4 * 16).1));
@@ -2386,7 +2403,7 @@ fn wm_windows() -> TestResult {
     check_eq!(desk.open("D", Rect::new(0, 0, 50, 50)), 3); // numbers are not used again
     check!(desk.close(3));
     // A window too narrow for a close box has none.
-    check!(wm::Window { title: String::new(), frame: Rect::new(0, 0, 20, 60), resizable: true }.close_box().is_none());
+    check!(wm::Window { title: String::new(), frame: Rect::new(0, 0, 20, 60), resizable: true, collapsed: None }.close_box().is_none());
     check_eq!(wm::frame_size(640, 400), (640 + 12, 400 + 12 + 24));
 
     // Contents: each window's picture is put in after its frame, back to
