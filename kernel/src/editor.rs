@@ -111,12 +111,20 @@ impl Editor {
                     if hist_pos == self.history.len() {
                         draft = buf.clone();
                     }
-                    hist_pos -= 1;
-                    buf = self.history[hist_pos].chars().collect();
-                    cur = buf.len();
+                    // With something typed, only the lines that start with it.
+                    let prefix: String = draft.iter().collect();
+                    match history_step(&self.history, hist_pos, &prefix, true) {
+                        Some(at) => {
+                            hist_pos = at;
+                            buf = self.history[hist_pos].chars().collect();
+                            cur = buf.len();
+                        }
+                        None => continue,
+                    }
                 }
                 Key::Down if hist_pos < self.history.len() => {
-                    hist_pos += 1;
+                    let prefix: String = draft.iter().collect();
+                    hist_pos = history_step(&self.history, hist_pos, &prefix, false).unwrap_or(self.history.len());
                     buf = match self.history.get(hist_pos) {
                         Some(h) => h.chars().collect(),
                         None => draft.clone(),
@@ -149,4 +157,14 @@ pub fn completion(word: &str, choices: &[String]) -> Option<String> {
         shared = shared.min(first.chars().zip(c.chars()).take_while(|(a, b)| a == b).map(|(a, _)| a.len_utf8()).sum());
     }
     (shared > word.len()).then(|| String::from(&first[word.len()..shared]))
+}
+
+/// The next history line from `at` going back (`up`) or forward that
+/// starts with `prefix` (empty: any line); `None` when there is none.
+pub fn history_step(history: &[String], at: usize, prefix: &str, up: bool) -> Option<usize> {
+    if up {
+        (0..at.min(history.len())).rev().find(|&i| history[i].starts_with(prefix))
+    } else {
+        (at + 1..history.len()).find(|&i| history[i].starts_with(prefix))
+    }
 }

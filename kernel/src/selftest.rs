@@ -1504,6 +1504,15 @@ fn tab_completion() -> TestResult {
     check_eq!(completion("honey.", &s(&["honey.avi", "honey.jpg"])), None); // they part here
     check_eq!(completion("x", &s(&["timer"])), None);
     check_eq!(completion("", &s(&[])), None);
+    // Up with something typed: only history lines that start with it.
+    use crate::editor::history_step;
+    let h = s(&["ls /data", "cat a.txt", "ls /system", "echo hi"]);
+    check_eq!(history_step(&h, 4, "", true), Some(3));
+    check_eq!(history_step(&h, 4, "ls", true), Some(2));
+    check_eq!(history_step(&h, 2, "ls", true), Some(0));
+    check_eq!(history_step(&h, 0, "ls", true), None);
+    check_eq!(history_step(&h, 0, "ls", false), Some(2));
+    check_eq!(history_step(&h, 2, "ls", false), None);
     Ok(())
 }
 
