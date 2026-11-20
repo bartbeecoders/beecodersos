@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Make website/commands.html from the OS's own help (COMMANDS in kernel/src/shell.rs).
+"""Make website/commands.html from the OS's own help (COMMANDS in kernel/src/shell.rs)
+and its desktop shortcuts (KEYS in kernel/src/launcher.rs).
 
 Run it after commands change: python3 website/scripts/commands.py
 The page has no inline styles or scripts (the site's CSP forbids them).
@@ -21,6 +22,17 @@ commands = [(a.encode().decode("unicode_escape"), b.encode().decode("unicode_esc
 if len(commands) < 20:
     raise SystemExit(f"only {len(commands)} commands found: has the COMMANDS list changed shape?")
 
+# The desktop's keyboard shortcuts (KEYS in kernel/src/launcher.rs, which Super+K shows).
+launcher = (ROOT / "kernel" / "src" / "launcher.rs").read_text()
+keys_block = launcher[launcher.index("pub const KEYS:"):]
+keys_block = keys_block[: keys_block.index("\n];")]
+keys = [(a.encode().decode("unicode_escape"), b.encode().decode("unicode_escape")) for a, b in entry.findall(keys_block)]
+if len(keys) < 5:
+    raise SystemExit(f"only {len(keys)} keys found: has the KEYS list changed shape?")
+key_items = "\n".join(
+    f'      <div class="cmd"><dt><kbd>{html.escape(k)}</kbd></dt><dd>{html.escape(t)}</dd></div>' for k, t in keys
+)
+
 items = "\n".join(
     f'      <div class="cmd"><dt><code>{html.escape(name)}</code></dt><dd>{html.escape(text)}</dd></div>' for name, text in commands
 )
@@ -30,7 +42,7 @@ page = f"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Commands — BeeCodersOs</title>
-<meta name="description" content="Every command of BeeShell, the terminal of BeeCodersOs, as the OS's own help describes it.">
+<meta name="description" content="Every command of BeeShell, the terminal of BeeCodersOs, and every desktop shortcut, as the OS's own help describes them.">
 <meta name="theme-color" content="#0d0b07">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cpolygon points='50,4 92,27 92,73 50,96 8,73 8,27' fill='%23f5b301'/%3E%3Cpolygon points='50,30 70,41 70,63 50,74 30,63 30,41' fill='%230d0b07'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -63,6 +75,15 @@ page = f"""<!doctype html>
 {items}
     </dl>
   </section>
+  <section class="wrap commands" id="keys">
+    <p class="kicker">Desktop</p>
+    <h2>Every <em>key</em>.</h2>
+    <p class="sub">The desktop's keyboard shortcuts, as on Omarchy (<code>KEYS</code> in <code>kernel/src/launcher.rs</code>;
+      Super+K shows them on the machine itself).</p>
+    <dl class="cmds">
+{key_items}
+    </dl>
+  </section>
 </main>
 
 <footer class="wrap foot">
@@ -75,4 +96,4 @@ page = f"""<!doctype html>
 </html>
 """
 OUT.write_text(page)
-print(f"{OUT.relative_to(ROOT)}: {len(commands)} commands")
+print(f"{OUT.relative_to(ROOT)}: {len(commands)} commands, {len(keys)} keys")
