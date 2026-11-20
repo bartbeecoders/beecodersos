@@ -342,6 +342,13 @@ fn keyboard_us() -> TestResult {
     let codes = [0x1E, 0x9E, 0x2A, 0x1E, 0x9E, 0xAA, 0x02, 0x82, 0x36, 0x02, 0x82, 0xB6, 0x39, 0xB9];
     check_eq!(keyboard::decode_for_test(Layout::Us, &codes), vec![Char('a'), Char('A'), Char('1'), Char('!'), Char(' ')]);
     check_eq!(keyboard::decode_for_test(Layout::Us, &[0x1C, 0x0E, 0x0F, 0x01]), vec![Enter, Backspace, Tab, Escape]);
+    // Super (E0 5B) with a key: for the desktop. Shift counts; let go, keys are normal again.
+    use crate::input::SuperKey;
+    let codes = [0xE0, 0x5B, 0x1C, 0xE0, 0x4B, 0x2A, 0xE0, 0x4D, 0xAA, 0x11, 0xE0, 0xDB, 0x11];
+    check_eq!(
+        keyboard::decode_for_test(Layout::Us, &codes),
+        vec![Super(SuperKey::Enter, false), Super(SuperKey::Left, false), Super(SuperKey::Right, true), Super(SuperKey::Char('w'), false), Char('w')]
+    );
     Ok(())
 }
 
@@ -1195,7 +1202,7 @@ fn gfx_canvas() -> TestResult {
 fn wm_layout() -> TestResult {
     use crate::gfx::Rect;
     use crate::wm::{terminal_frame, Window};
-    let content = |frame: Rect| Window { title: String::new(), frame, resizable: true, collapsed: None, scroll: None }.content();
+    let content = |frame: Rect| Window { title: String::new(), frame, resizable: true, collapsed: None, scroll: None, saved: None }.content();
     // Full HD: a window in the middle with desktop all around.
     let frame = terminal_frame(1920, 1080, 1).ok_or("no window on a full HD screen")?;
     let inside = content(frame);
@@ -1447,7 +1454,7 @@ fn display_g3() -> TestResult {
     check_eq!(FbCon::in_area(canvas, canvas.bounds(), &mut cells, 0).scale(), 1);
     // The terminal window with the double font holds whole double characters.
     let frame = wm::terminal_frame(2560, 1440, 2).ok_or("no window at 2560x1440")?;
-    let inside = wm::Window { title: String::new(), frame, resizable: true, collapsed: None, scroll: None }.content();
+    let inside = wm::Window { title: String::new(), frame, resizable: true, collapsed: None, scroll: None, saved: None }.content();
     check_eq!((inside.width % 16, inside.height % 32), (0, 0));
     check!(inside.width / 16 >= 100 && frame.x + frame.width < 2560);
     check!(wm::terminal_frame(400, 300, 2).is_some() && wm::terminal_frame(320, 200, 2).is_none());
@@ -1822,6 +1829,29 @@ fn wm_resize() -> TestResult {
     }
     check!(tile_frames(0, area, (8, 16)).is_empty());
     check_eq!(tile_frames(9, Rect::new(0, 0, 100, 100), (8, 16)).len(), 9); // tiny: still one each, no panic
+    // Keyboard (Super keys): the neighbour in a direction, swapping in the
+    // tiling order, filling the screen and back.
+    use crate::wm::Dir;
+    let mut tiled = Desktop::new();
+    tiled.set_cell(8, 16);
+    let a = tiled.open("a", Rect::new(0, 0, 100, 100));
+    let b = tiled.open("b", Rect::new(0, 0, 100, 100));
+    let c = tiled.open("c", Rect::new(0, 0, 100, 100));
+    tiled.tile(area); // a left; b top right; c bottom right
+    // b (top right) and c (bottom right) lie about equally far: either will do.
+    check!(matches!(tiled.neighbour(a, Dir::Right), Some(x) if x == b || x == c));
+    check_eq!(tiled.neighbour(b, Dir::Down), Some(c));
+    check_eq!(tiled.neighbour(c, Dir::Left), Some(a));
+    check_eq!(tiled.neighbour(a, Dir::Left), None);
+    check!(tiled.swap(a, c));
+    tiled.tile(area);
+    let (fa, fc) = (tiled.window(a).ok_or("a")?.frame, tiled.window(c).ok_or("c")?.frame);
+    check!(fa.y > fc.y && fc.x < fa.x); // c now on the left, a bottom right
+    let before = tiled.window(b).ok_or("b")?.frame;
+    let full = tiled.toggle_full(b, area).ok_or("full")?;
+    check!(full.width > before.width && full.height > before.height);
+    check_eq!(tiled.top(), Some(b));
+    check_eq!(tiled.toggle_full(b, area), Some(before));
     // Never smaller than 20 x 4 characters, never past the screen's edge.
     let start = desk.window(id).ok_or("gone")?.frame;
     check_eq!(desk.resized_frame(start, -5000, -5000, screen), Rect::new(50, 60, frame_size(20 * 8, 4 * 16).0, frame_size(20 * 8, 4 * 16).1));
@@ -2436,7 +2466,7 @@ fn wm_windows() -> TestResult {
     check_eq!(desk.open("D", Rect::new(0, 0, 50, 50)), 3); // numbers are not used again
     check!(desk.close(3));
     // A window too narrow for a close box has none.
-    check!(wm::Window { title: String::new(), frame: Rect::new(0, 0, 20, 60), resizable: true, collapsed: None, scroll: None }.close_box().is_none());
+    check!(wm::Window { title: String::new(), frame: Rect::new(0, 0, 20, 60), resizable: true, collapsed: None, scroll: None, saved: None }.close_box().is_none());
     check_eq!(wm::frame_size(640, 400), (640 + 12, 400 + 12 + 24));
 
     // Contents: each window's picture is put in after its frame, back to
@@ -2589,8 +2619,13 @@ fn remote_keys() -> TestResult {
         Some(vec![Char('a'), Enter, Ctrl('s'), NextWindow, Up, PageDown, Char('{'), Char('}'), Escape])
     );
     check_eq!(parse_keys("{tab}{backspace}{delete}{down}{left}{right}{home}{end}{pageup}"), Some(vec![Tab, Backspace, Delete, Down, Left, Right, Home, End, PageUp]));
+    use crate::input::SuperKey;
+    check_eq!(
+        parse_keys("{super+enter}{super+shift+left}{super+W}{super+f}"),
+        Some(vec![Super(SuperKey::Enter, false), Super(SuperKey::Left, true), Super(SuperKey::Char('w'), false), Super(SuperKey::Char('f'), false)])
+    );
     // Not keys: unknown names, Ctrl with anything but one small letter, a brace left open.
-    for bad in ["{nosuchkey}", "{}", "{ctrl+}", "{ctrl+S}", "{ctrl+ab}", "{ctrl+1}", "abc{enter", "{", "{Enter}"] {
+    for bad in ["{super+}", "{super+shift+}", "{super+tab}", "{nosuchkey}", "{}", "{ctrl+}", "{ctrl+S}", "{ctrl+ab}", "{ctrl+1}", "abc{enter", "{", "{Enter}"] {
         check_eq!((bad, parse_keys(bad)), (bad, None));
     }
     // Bounded.

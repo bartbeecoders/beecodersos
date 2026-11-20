@@ -6,7 +6,7 @@
 //!
 //! The windows themselves, and what they show, belong to console.rs.
 
-use crate::input::Key;
+use crate::input::{Key, SuperKey};
 use crate::ring::Global;
 use crate::shell::Shell;
 use crate::{console, filemgr, keyboard, session, storage, textedit, thread, web};
@@ -195,11 +195,46 @@ pub fn route(key: Key) -> Option<Key> {
         console::next_window();
         return None;
     }
+    if let Key::Super(k, shift) = key {
+        super_key(k, shift);
+        return None;
+    }
     let Some(window) = console::focused_pane() else { return Some(key) };
     if let Some(terminal) = TERMINALS.get().iter().find(|t| t.window == window) {
         session::push_key(terminal.session, key);
     }
     None
+}
+
+/// Keys with Super, as on Omarchy: Super+Enter a terminal, Super+W closes
+/// the focused window, Super+arrows move the focus, Super+Shift+arrows move
+/// the window, Super+F fills the screen with it, Super+T tiles or floats.
+pub fn super_key(key: SuperKey, shift: bool) {
+    use crate::wm::Dir;
+    let dir = match key {
+        SuperKey::Left => Some(Dir::Left),
+        SuperKey::Right => Some(Dir::Right),
+        SuperKey::Up => Some(Dir::Up),
+        SuperKey::Down => Some(Dir::Down),
+        _ => None,
+    };
+    match (key, dir) {
+        (_, Some(dir)) if shift => console::swap_towards(dir),
+        (_, Some(dir)) => console::focus_towards(dir),
+        (SuperKey::Enter, _) => {
+            let _ = open_terminal();
+        }
+        (SuperKey::Char('w'), _) => console::close_focused(),
+        (SuperKey::Char('f'), _) => console::toggle_fullscreen(),
+        (SuperKey::Char('t'), _) => {
+            let on = !console::tiling_on();
+            console::set_tiling(on);
+            if let Some(mut storage) = storage::handle() {
+                let _ = storage.fs().write_file("/system/desktop-tile", if on { b"on" } else { b"off" });
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Keys from the host (remote control, hivectl.rs), typed into the window
@@ -213,6 +248,10 @@ pub fn type_keys(keys: &[Key]) -> Result<usize, &'static str> {
     for key in keys {
         if *key == Key::NextWindow {
             console::next_window();
+            continue;
+        }
+        if let Key::Super(k, shift) = *key {
+            super_key(k, shift);
             continue;
         }
         let terminal = console::focused_pane().and_then(|window| TERMINALS.get().iter().find(|t| t.window == window));

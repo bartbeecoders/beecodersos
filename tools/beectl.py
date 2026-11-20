@@ -13,7 +13,8 @@ through a running beehive (tools/beehive/beehive.py).
     beectl.py keys MACHINE "TEXT"            type TEXT in the window that has the focus, as on its
                                              keyboard. Keys by name: {enter} {tab} {esc} {backspace}
                                              {delete} {up} {down} {left} {right} {home} {end}
-                                             {pageup} {pagedown} {ctrl+s} {alt+tab} ({lbrace}: a {).
+                                             {pageup} {pagedown} {ctrl+s} {alt+tab} {super+left} {super+shift+right}
+                                             {super+enter} {super+w} {super+f} {super+t} ({lbrace}: a {).
                                              The console's own window takes no keys from afar:
                                              open another one first (run MACHINE "terminal")
     beectl.py deploy MACHINE [--kernel K] [--timeout 300]

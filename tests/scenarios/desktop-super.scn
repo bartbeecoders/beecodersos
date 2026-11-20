@@ -1,0 +1,35 @@
+# Super keys, as on Omarchy (here typed from the host: {super+...}). Tiled,
+# the console's window on the left (title bar at 20,42), the monitor on the
+# right (970,42); the focused one's title bar is blue (3a6ea5).
+@ai
+$ ai control on
+$ desktop tile on
+~ windows are tiled
+$ monitor
+the system monitor in a new window: q leaves
+$ sleep 1
+@screenshot 1920x1080 pixels 970,42=3a6ea5 20,42=8a9bb0
+# Super+Left: the focus goes to the window on the left.
+@ctl keys {machine} "{super+left}"
+$ sleep 1
+@screenshot 1920x1080 pixels 20,42=3a6ea5 970,42=8a9bb0
+# Super+Shift+Right: the console's window moves to the right, the monitor left.
+@ctl keys {machine} "{super+shift+right}"
+$ sleep 1
+@screenshot 1920x1080 pixels 970,42=3a6ea5 20,42=8a9bb0
+# Super+F: it fills the screen (its title bar runs from left to right); again: back.
+@ctl keys {machine} "{super+f}"
+$ sleep 1
+@screenshot 1920x1080 pixels 20,42=3a6ea5 970,42=3a6ea5
+@ctl keys {machine} "{super+f}"
+$ sleep 1
+@screenshot 1920x1080 pixels 970,42=3a6ea5 20,42=8a9bb0
+# Super+Enter: a new terminal window; Super+W closes it.
+@ctl keys {machine} "{super+enter}"
+$ sleep 1
+$ threads
+~ terminal +(waiting|ready|running)
+@ctl keys {machine} "{super+w}"
+$ sleep 1
+$ threads
+!~ terminal
