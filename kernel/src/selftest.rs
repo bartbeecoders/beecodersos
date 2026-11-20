@@ -47,6 +47,7 @@ macro_rules! check_eq {
 }
 
 const TESTS: &[(&str, fn() -> TestResult)] = &[
+    ("event log: repeated commands are folded", eventlog_repeats),
     ("crash: restart or halt afterwards", crash_then),
     ("gfx: the fast drawing paths give the same picture", gfx_fast_paths),
     ("screen in memory: changed parts are copied, in batches", screen_in_memory),
@@ -1462,6 +1463,20 @@ fn display_g3() -> TestResult {
     check_eq!(paging::entry_with_wc(0xFD00_109B), 0xFD00_008B); // other caching bits go
     check_eq!(paging::entry_with_wc(0xFD00_0082), 0xFD00_0082); // not present: untouched
     check_eq!(paging::entry_with_wc(0x0010_0003), 0x0010_0003); // points to a page table: untouched
+    Ok(())
+}
+
+fn eventlog_repeats() -> TestResult {
+    use crate::eventlog::{Repeats, REPEAT_MS};
+    let mut r = Repeats::new();
+    check_eq!(r.check("uptime", "ok", 1000), Some(0)); // the first is written
+    for i in 0..250 {
+        check_eq!(r.check("uptime", "ok", 1200 + i * 200), None); // five a second: left out
+    }
+    check_eq!(r.check("ls", "ok", 70_000), Some(250)); // another command: written, with the count
+    check_eq!(r.check("ls", "error", 70_100), Some(0)); // another outcome counts as different
+    check_eq!(r.check("ls", "error", 70_200), None);
+    check_eq!(r.check("ls", "error", 70_100 + REPEAT_MS), Some(1)); // a minute later: written again
     Ok(())
 }
 

@@ -443,7 +443,10 @@ found and fixed (by a person or, later, an AI):
 - **Event log** `/system/log/events.jsonl` (JSON lines, rotated at 64 KiB):
   every boot (build, boot number, time to shell) and every command (name,
   ok / error / notfound, duration). Commands are logged by **name only**, not
-  their arguments. `log [N]` shows the last entries.
+  their arguments. `log [N]` shows the last entries. The same command with
+  the same outcome again within a minute is not written again; the next line
+  carries `"repeats_left_out":N` (a remote tool asking `uptime` five times a
+  second once pushed a day of history out of the log).
 - **Missing commands:** an unknown command is logged, and BeeShell suggests the
   closest real one (`mkdri` -> "did you mean 'mkdir'?").
 - **Wishes and feedback:** `wish a text editor`, `feedback "ls could use colors"`

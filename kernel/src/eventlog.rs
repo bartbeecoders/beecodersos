@@ -16,6 +16,41 @@ const OLD_LOG: &str = "/system/log/events.old.jsonl";
 /// Rotate to events.old.jsonl past this size.
 const MAX_SIZE: u64 = 64 * 1024;
 
+/// Commands repeated in a row (a script or a remote tool asking `uptime`
+/// five times a second) would push everything else out of the log: the
+/// same command with the same outcome again within this time is not
+/// written again; the next line written says how many were left out.
+pub const REPEAT_MS: u64 = 60_000;
+
+#[derive(Default)]
+pub struct Repeats {
+    last: Option<(String, String)>,
+    at_ms: u64,
+    left_out: u32,
+}
+
+impl Repeats {
+    pub const fn new() -> Repeats {
+        Repeats { last: None, at_ms: 0, left_out: 0 }
+    }
+
+    /// Should a command event be written now? `Some(n)`: yes, and `n`
+    /// repeats of the one before were left out; `None`: it is a repeat.
+    pub fn check(&mut self, cmd: &str, status: &str, now_ms: u64) -> Option<u32> {
+        let same = self.last.as_ref().is_some_and(|(c, s)| c == cmd && s == status);
+        if same && now_ms.saturating_sub(self.at_ms) < REPEAT_MS {
+            self.left_out += 1;
+            return None;
+        }
+        let left_out = core::mem::take(&mut self.left_out);
+        self.last = Some((String::from(cmd), String::from(status)));
+        self.at_ms = now_ms;
+        Some(left_out)
+    }
+}
+
+pub static REPEATS: crate::ring::Global<Repeats> = crate::ring::Global::new(Repeats::new());
+
 /// Start an event: timestamp, uptime and event name are filled in.
 pub fn event(name: &str) -> Obj {
     Obj::new()
