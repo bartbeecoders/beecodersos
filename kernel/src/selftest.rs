@@ -1501,6 +1501,11 @@ fn timer_durations() -> TestResult {
     check_eq!(restore_action(1000, 1000), Restore::Late);
     check_eq!(restore_action(1000, 1000 + 3600), Restore::Late);
     check_eq!(restore_action(1000, 1000 + 3601), Restore::Forget);
+    // On the desktop's clock.
+    use crate::clock::timer_note;
+    check_eq!(timer_note(240_000, "tea"), " · tea 4m");
+    check_eq!(timer_note(1, ""), " · timer 1m");
+    check_eq!(timer_note(5_400_000, "a very long message"), " · a very long 1h30");
     check_eq!((left_text(12_000), left_text(250_000), left_text(3_900_000), left_text(1)), (
         alloc::string::String::from("12s"),
         alloc::string::String::from("4m 10s"),

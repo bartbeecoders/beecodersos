@@ -138,8 +138,10 @@ pub fn restore_action(due: u64, now: u64) -> Restore {
     }
 }
 
-/// Write the running timers to the file (nothing without a clock).
+/// Write the running timers to the file (nothing without a clock), and
+/// show the soonest one on the desktop's clock.
 fn save() {
+    crate::clock::refresh();
     let Some(unix) = time::now_unix() else { return };
     let now = time::uptime_ms();
     let list: Vec<(u64, String)> = TIMERS.get().iter().map(|t| (unix + t.due_ms.saturating_sub(now).div_ceil(1000), t.message.clone())).collect();

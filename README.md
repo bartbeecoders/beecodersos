@@ -1525,7 +1525,8 @@ desktop.
   They are kept in `/system/timers` (due time on the clock, and the message)
   and come back after a restart, also an update's; one that came due while
   the machine was off rings at boot, marked as missed, if it is at most an
-  hour late (`timer-saved.scn`). `alarm 07:30 wake up` is a timer to the next 07:30
+  hour late (`timer-saved.scn`). The desktop's clock shows the soonest one
+  and the minutes left: `Fri 20 Nov 05:50 · tea 4m`. `alarm 07:30 wake up` is a timer to the next 07:30
   on the local clock (time zone from `timezone`). `timer.scn` lets one go
   off and reads its window.
 - **Wallpaper:** `desktop wallpaper FILE` puts a JPEG, PNG, GIF, BMP or PPM picture behind
