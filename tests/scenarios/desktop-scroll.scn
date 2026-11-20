@@ -1,0 +1,46 @@
+# Scroll bars: a folder of 30 files does not fit the file manager's window
+# (23 lines); a bar appears along its right edge (668..678 from y=62), the
+# thumb at the top. A click below the thumb pages down: the thumb moves.
+@usb kbd mouse
+$ layout us
+$ mkdir /many
+$ echo 01 > /many/f01
+$ echo 02 > /many/f02
+$ echo 03 > /many/f03
+$ echo 04 > /many/f04
+$ echo 05 > /many/f05
+$ echo 06 > /many/f06
+$ echo 07 > /many/f07
+$ echo 08 > /many/f08
+$ echo 09 > /many/f09
+$ echo 10 > /many/f10
+$ echo 11 > /many/f11
+$ echo 12 > /many/f12
+$ echo 13 > /many/f13
+$ echo 14 > /many/f14
+$ echo 15 > /many/f15
+$ echo 16 > /many/f16
+$ echo 17 > /many/f17
+$ echo 18 > /many/f18
+$ echo 19 > /many/f19
+$ echo 20 > /many/f20
+$ echo 21 > /many/f21
+$ echo 22 > /many/f22
+$ echo 23 > /many/f23
+$ echo 24 > /many/f24
+$ echo 25 > /many/f25
+$ echo 26 > /many/f26
+$ echo 27 > /many/f27
+$ echo 28 > /many/f28
+$ echo 29 > /many/f29
+$ echo 30 > /many/f30
+$ files /many
+~ in a new window
+$ sleep 1
+@screenshot 1920x1080 pixels 673,70=8a9bb0 673,400=2b3a55
+# The pointer starts in the middle (960,540).
+@mouse -287 -140
+@button left down
+@button left up
+$ sleep 1
+@screenshot 1920x1080 pixels 673,70=2b3a55

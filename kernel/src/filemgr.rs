@@ -261,6 +261,11 @@ impl Browser {
         Action::None
     }
 
+    /// For the scroll bar: the first entry shown, how many fit, how many there are.
+    pub fn scroll(&self, rows: usize) -> (usize, usize, usize) {
+        (self.top, rows.max(3) - 2, self.entries.len())
+    }
+
     /// What a window of `cols` by `rows` characters shows: `rows` lines of
     /// `cols` cells (VGA format), and the cell for the cursor. First the
     /// status line (the folder, or a question), then the entries with the
@@ -328,6 +333,8 @@ pub fn run(window: usize, start: String, mut storage: Storage) {
             let (lines, cursor) = browser.render(cols, rows);
             console::pane_show(window, &lines, cursor);
         }
+        let (first, shown, total) = if icons { (0, 1, 1) } else { browser.scroll(rows) };
+        console::pane_scroll(window, first, shown, total);
         let mut key = input::read_key();
         if key == Key::Ctrl('d') && session::current().is_none_or(session::is_closed) {
             return; // the window was closed

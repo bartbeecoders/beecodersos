@@ -28,6 +28,10 @@ const SHADOW_COLOR: u32 = 0x86B4D8;
 const CLOSE_BOX: u32 = 0xE06C5A;
 const GRIP_COLOR: u32 = 0x8A9BB0;
 const COLLAPSE_BOX: u32 = 0xF2C14E;
+const SCROLL_TRACK: u32 = 0x2B3A55;
+const SCROLL_THUMB: u32 = 0x8A9BB0;
+/// How wide a scroll bar is (over the right edge of the content).
+pub const SCROLL_WIDTH: usize = 10;
 /// Inside of a window before its owner draws: black, like the terminal.
 pub const CONTENT: u32 = 0x000000;
 
@@ -52,6 +56,9 @@ pub struct Window {
     pub resizable: bool,
     /// Folded up to its title bar: the height it had before.
     pub collapsed: Option<usize>,
+    /// What its program shows of a longer text: (first line shown, lines
+    /// shown, lines in all). A scroll bar is drawn when not all fit.
+    pub scroll: Option<(usize, usize, usize)>,
 }
 
 impl Window {
@@ -73,6 +80,32 @@ impl Window {
         (inner_width > 2 * GLYPH_WIDTH + box_size).then(|| {
             Rect::new(self.frame.x + BORDER + inner_width - GLYPH_WIDTH - box_size, self.frame.y + BORDER + 6, box_size, box_size)
         })
+    }
+
+    /// The scroll bar along the right edge of the content (above the grip),
+    /// when the program shows only part of what it has.
+    pub fn scroll_bar(&self) -> Option<Rect> {
+        let (_, shown, total) = self.scroll?;
+        let c = self.content();
+        (total > shown && c.width > 4 * SCROLL_WIDTH && c.height > 3 * GRIP)
+            .then(|| Rect::new(c.x + c.width - SCROLL_WIDTH, c.y, SCROLL_WIDTH, c.height.saturating_sub(GRIP)))
+    }
+
+    /// The thumb: where in the track the part shown lies, and how much of it.
+    pub fn scroll_thumb(&self) -> Option<Rect> {
+        let bar = self.scroll_bar()?;
+        let (first, shown, total) = self.scroll?;
+        let height = (bar.height * shown / total.max(1)).clamp(GRIP.min(bar.height), bar.height);
+        let room = bar.height - height;
+        let most = total.saturating_sub(shown).max(1);
+        let y = bar.y + room * first.min(most) / most;
+        Some(Rect::new(bar.x + 2, y, bar.width - 4, height))
+    }
+
+    fn draw_scroll_bar(&self, canvas: &Canvas) {
+        let (Some(bar), Some(thumb)) = (self.scroll_bar(), self.scroll_thumb()) else { return };
+        canvas.fill_rect(bar, SCROLL_TRACK);
+        canvas.fill_rect(thumb, SCROLL_THUMB);
     }
 
     /// The box left of the close box: folds the window up to its title bar and back.
@@ -206,6 +239,9 @@ pub enum MouseEffect {
     /// The button was let go after resizing this window: its owner lays
     /// out its content for the new size.
     Resized(usize),
+    /// The button went down on a window's scroll bar, above (`up`) or
+    /// below its thumb: its program shows the page before or after.
+    Scroll { id: usize, up: bool },
 }
 
 pub struct Desktop {
@@ -270,6 +306,16 @@ impl Desktop {
     /// keeps whole characters.
     pub fn set_cell(&mut self, width: usize, height: usize) {
         self.cell = (width.max(1), height.max(1));
+    }
+
+    /// What a window's program shows of a longer text (see `Window::scroll`);
+    /// true when that changes the scroll bar.
+    pub fn set_scroll(&mut self, id: usize, scroll: Option<(usize, usize, usize)>) -> bool {
+        let Some(at) = self.position(id) else { return false };
+        let scroll = scroll.filter(|(_, shown, total)| total > shown);
+        let changed = self.windows[at].scroll != scroll;
+        self.windows[at].scroll = scroll;
+        changed
     }
 
     /// A window that cannot be resized (no grip): the console's own.
@@ -342,7 +388,7 @@ impl Desktop {
     /// Add a window on top of the others; returns its number (the first
     /// window gets 0, and numbers are not used again).
     pub fn open(&mut self, title: &str, frame: Rect) -> usize {
-        self.windows.push(Window { title: String::from(title), frame, resizable: true, collapsed: None });
+        self.windows.push(Window { title: String::from(title), frame, resizable: true, collapsed: None, scroll: None });
         self.ids.push(self.next_id);
         self.next_id += 1;
         self.next_id - 1
@@ -432,6 +478,7 @@ impl Desktop {
         for (i, window) in self.windows.iter().enumerate() {
             window.draw(canvas, i + 1 == self.windows.len());
             content(self.ids[i], window);
+            window.draw_scroll_bar(canvas);
             if !self.tiling {
                 window.draw_grip(canvas);
             }
@@ -510,6 +557,25 @@ impl Desktop {
                 }
                 self.pointer = Some(new);
                 return MouseEffect::WindowMoved;
+            } else if let (Some(bar), Some(thumb)) = (top.and_then(|w| w.scroll_bar()), top.and_then(|w| w.scroll_thumb())) {
+                if inside(bar) && !inside(thumb) {
+                    let up = new.y < thumb.y;
+                    self.pointer = Some(new);
+                    if let Some(id) = self.top() {
+                        return MouseEffect::Scroll { id, up };
+                    }
+                }
+                if !inside(bar) {
+                    new.grab = top.filter(|_| !self.tiling).and_then(|w| {
+                        let f = w.frame;
+                        (new.y < f.y + BORDER + TITLE_HEIGHT).then(|| (new.x - f.x, new.y - f.y))
+                    });
+                    click = top.map(|w| w.content()).filter(|c| inside(*c)).map(|c| (new.x - c.x, new.y - c.y));
+                    if let Some(w) = top.filter(|w| !self.tiling && w.grip().is_some_and(inside)) {
+                        new.resize = Some((w.frame, new.x, new.y));
+                        click = None;
+                    }
+                }
             } else if let Some(w) = top.filter(|w| !self.tiling && w.grip().is_some_and(inside)) {
                 new.resize = Some((w.frame, new.x, new.y));
             } else {

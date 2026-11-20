@@ -613,6 +613,7 @@ pub fn run(window: usize, start: String, mut storage: Storage) {
         let (lines, cursor) = viewer.render(cols, rows);
         console::pane_show(window, &lines, cursor);
         draw_pictures(window, &viewer, rows);
+        console::pane_scroll(window, viewer.top, rows.saturating_sub(2).max(1), viewer.page.lines.len());
         let key = input::read_key();
         if key == Key::Ctrl('d') && session::current().is_none_or(session::is_closed) {
             return; // the window was closed
