@@ -258,6 +258,11 @@ fn step() {
             session::push_key(terminal.session, Key::Click(col, row));
         }
     }
+    for window in console::take_resized() {
+        if let Some(terminal) = TERMINALS.get().iter().find(|t| t.window == window) {
+            session::push_key(terminal.session, Key::Resized);
+        }
+    }
     for button in console::take_launches() {
         // Nothing to tell when it does not work (too many windows): the
         // desktop simply stays as it is.

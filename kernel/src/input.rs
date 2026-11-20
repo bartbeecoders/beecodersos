@@ -31,6 +31,9 @@ pub enum Key {
     Click(u16, u16),
     /// The (ACPI) power button was pressed, e.g. virt-manager "Shut Down".
     PowerButton,
+    /// The program's window was resized: it draws its content again for
+    /// the new size (`console::pane_size`).
+    Resized,
 }
 
 /// The next key from the machine's keyboard that is meant for the console:

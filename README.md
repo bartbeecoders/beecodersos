@@ -1563,6 +1563,12 @@ desktop.
 - **Mouse** (USB, see the USB section): a pointer appears when the mouse
   first moves, and the window on top can be dragged by its title bar; it
   stays completely on the screen. `desktop` shows where the pointer is.
+  **Resizing:** the grip in a window's bottom right corner (three short
+  lines) resizes it with the mouse, in whole characters, at least 20 x 4 and
+  never past the screen's edge; on letting go the window's content is
+  made again at the new size (its text kept as far as it fits) and its
+  program gets `Key::Resized` and draws itself anew. The console's own
+  window keeps its size (`desktop-resize.scn`, self-test `wm_resize`).
   **Buttons** at the top of the desktop start programs with a click:
   Terminal, Files (the file manager on the home folder), Notes (the
   editor on `notes.txt` there) and Web (the web page viewer on

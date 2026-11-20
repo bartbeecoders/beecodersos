@@ -224,8 +224,9 @@ fn compose(rect: Rect) {
             PANES.get().iter().find(|p| p.window == id).map(|p| p.surface.canvas())
         };
         if let Some(content) = content {
+            // Clipped: while a window is being resized its content may not fit yet.
             let at = window.content();
-            canvas.blit(&content, at.x, at.y);
+            canvas.clipped(at).blit(&content, at.x, at.y);
         }
     });
     damage(rect.clip(&shadow.back.bounds()));
@@ -300,6 +301,8 @@ static PANES: Global<Vec<Pane>> = Global::new(Vec::new());
 static CLOSING: Global<Vec<usize>> = Global::new(Vec::new());
 
 static CLICKS: Global<Vec<(usize, u16, u16)>> = Global::new(Vec::new());
+/// Windows resized since the last look, for their programs (desk.rs).
+static RESIZED: Global<Vec<usize>> = Global::new(Vec::new());
 static LAUNCHES: Global<Vec<usize>> = Global::new(Vec::new());
 
 /// The buttons on the desktop, left to right: what a click on each starts
@@ -768,6 +771,9 @@ fn lay_out(target: Target, desktop: bool) -> bool {
         .and_then(|frame| {
             let mut desk = wm::Desktop::new();
             let id = desk.open("Terminal", frame);
+            // The console's own window keeps the size the screen gives it.
+            desk.set_resizable(id, false);
+            desk.set_cell(GLYPH_WIDTH * scale, GLYPH_HEIGHT * scale);
             let inside = desk.window(id)?.content();
             let surface = Surface::new(inside.width, inside.height, target.mode.format)?;
             desk.set_pointer(*POINTER.get(), canvas.bounds());
@@ -861,6 +867,11 @@ pub fn mouse_event(buttons: u8, dx: i32, dy: i32) {
                 }
             }
         }
+        MouseEffect::Resized(id) => {
+            resize_pane(id);
+            compose(bounds);
+            show(true);
+        }
         MouseEffect::Launch(button) => {
             if LAUNCHES.get().len() < 4 {
                 LAUNCHES.get().push(button);
@@ -869,6 +880,52 @@ pub fn mouse_event(buttons: u8, dx: i32, dy: i32) {
             crate::desk::start();
         }
     }
+}
+
+/// A window was resized with the mouse: a new surface and console of its
+/// content's size, with the old text copied in as far as it fits (a
+/// picture is not: its program draws it again on `Key::Resized`).
+fn resize_pane(id: usize) {
+    let Some(content) = DESKTOP.get().as_ref().and_then(|d| d.window(id)).map(|w| w.content()) else { return };
+    let Some(pane) = PANES.get().iter_mut().find(|p| p.window == id) else { return };
+    let scale = pane.con.scale();
+    let (cw, ch) = (GLYPH_WIDTH * scale, GLYPH_HEIGHT * scale);
+    let (cols, rows) = (content.width / cw, content.height / ch);
+    if cols == 0 || rows == 0 || (cols, rows) == (pane.con.width(), pane.con.height()) {
+        return;
+    }
+    let Some(surface) = Surface::new(cols * cw, rows * ch, pane.surface.canvas().format()) else { return };
+    let (old_cols, old_rows) = (pane.con.width(), pane.con.height());
+    let mut cells = alloc::vec![0u16; cols * rows];
+    // The last lines of the text stay (the cursor is near the bottom).
+    let skip = old_rows.saturating_sub(rows);
+    for row in 0..rows.min(old_rows) {
+        for col in 0..cols.min(old_cols) {
+            cells[row * cols + col] = pane.con.cells()[(row + skip) * old_cols + col];
+        }
+    }
+    let (old_row, old_col) = pane.con.pos();
+    let attr = pane.con.attr();
+    // The console keeps a reference to its cells; they live as long as it does, in the same `Pane`.
+    let slice: &'static mut [u16] = unsafe { core::slice::from_raw_parts_mut(cells.as_mut_ptr(), cells.len()) };
+    let mut con = FbCon::in_area(surface.canvas(), surface.canvas().bounds(), slice, scale);
+    con.set_attr(attr);
+    con.set_pos(old_row.saturating_sub(skip).min(rows - 1), old_col.min(cols - 1));
+    if !pane.picture {
+        con.redraw();
+    }
+    // The new console first: the old one points into the old cells.
+    pane.con = con;
+    pane._cells = cells;
+    pane.surface = surface;
+    if RESIZED.get().len() < 16 && !RESIZED.get().contains(&id) {
+        RESIZED.get().push(id);
+    }
+}
+
+/// Windows resized since the last call, for their programs.
+pub fn take_resized() -> Vec<usize> {
+    core::mem::take(RESIZED.get())
 }
 
 /// Clicks inside windows since the last call: (window, column, line).
@@ -901,7 +958,7 @@ pub fn take_launches() -> Vec<usize> {
 
 /// Is there something the mouse asked for that desk.rs has not done yet?
 pub fn mouse_work() -> bool {
-    !CLICKS.get().is_empty() || !LAUNCHES.get().is_empty() || !CLOSING.get().is_empty()
+    !CLICKS.get().is_empty() || !LAUNCHES.get().is_empty() || !CLOSING.get().is_empty() || !RESIZED.get().is_empty()
 }
 
 /// Where the pointer is on the desktop: for `desktop` and the tests.
