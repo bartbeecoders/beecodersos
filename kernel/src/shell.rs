@@ -1483,7 +1483,7 @@ impl Shell {
                     }
                 }
                 match crate::desk::open_picture(&path) {
-                    Ok((_, w, h, 1)) => println!("{path} ({w} x {h} pixels) in a new window: arrows go to the other pictures here, q leaves"),
+                    Ok((_, w, h, 1)) => println!("{path} ({w} x {h} pixels) in a new window: arrows go to the other pictures here, s plays them as a slideshow, q leaves"),
                     Ok((_, w, h, n)) => println!("{path} ({w} x {h} pixels, {n} frames) in a new window: space pauses, n steps, q leaves"),
                     Err(why) => error(&format!("view {file}: {why}")),
                 }

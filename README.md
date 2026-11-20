@@ -1404,7 +1404,8 @@ desktop.
   The arrow keys (and Page Up / Page Down) go to the previous and next
   picture in the same folder, in name order, round and round, and the
   window's title follows; `view FOLDER` starts at its first picture (handy
-  for what `camera watch` saved).
+  for what `camera watch` saved), and `s` plays them as a slideshow (the
+  next picture every 5 seconds; `s` again stops it).
   The lines are scaled on every processor in use (`console::pane_picture`);
   a window that shows a picture is not covered again by its text. Files
   are untrusted: `kernel/src/image.rs` checks every size, refuses

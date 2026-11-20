@@ -10,7 +10,7 @@ $ display mode 800x600
 $ screenshot /screen.bmp
 saved the screen (800 x 600) to /screen.bmp (1406 KiB)
 $ view /screen.bmp
-/screen.bmp (800 x 600 pixels) in a new window: arrows go to the other pictures here, q leaves
+/screen.bmp (800 x 600 pixels) in a new window: arrows go to the other pictures here, s plays them as a slideshow, q leaves
 $ sleep 1
 @screenshot 800x600 pixels 60,200=202020 660,200=202020 95,66=a8d0f0
 $ threads
@@ -23,7 +23,7 @@ $ threads
 $ screenshot /screen.png
 ~ ^saved the screen \(800 x 600\) to /screen\.png \(\d\d KiB\)$
 $ view /screen.png
-/screen.png (800 x 600 pixels) in a new window: arrows go to the other pictures here, q leaves
+/screen.png (800 x 600 pixels) in a new window: arrows go to the other pictures here, s plays them as a slideshow, q leaves
 $ sleep 1
 @screenshot 800x600 pixels 60,200=202020 660,200=202020 95,66=a8d0f0
 @ctl keys {machine} "q"
@@ -32,7 +32,7 @@ $ sleep 1
 $ screenshot /screen.gif
 ~ ^saved the screen \(800 x 600\) to /screen\.gif \(\d+ KiB\)$
 $ view /screen.gif
-/screen.gif (800 x 600 pixels) in a new window: arrows go to the other pictures here, q leaves
+/screen.gif (800 x 600 pixels) in a new window: arrows go to the other pictures here, s plays them as a slideshow, q leaves
 $ sleep 1
 @screenshot 800x600 pixels 60,200=202020 660,200=202020
 @ctl keys {machine} "q"
@@ -61,7 +61,7 @@ $ threads
 $ screenshot /screen.jpg
 ~ ^saved the screen \(800 x 600\) to /screen\.jpg \(\d+ KiB\)$
 $ view /screen.jpg
-/screen.jpg (800 x 600 pixels) in a new window: arrows go to the other pictures here, q leaves
+/screen.jpg (800 x 600 pixels) in a new window: arrows go to the other pictures here, s plays them as a slideshow, q leaves
 $ sleep 1
 @screenshot 800x600 pixels 60,200=202020 660,200=202020
 # The arrow keys go through the folder's pictures in name order, round and
@@ -78,6 +78,11 @@ $ sleep 1
 $ sleep 1
 @ctl text {machine}
 ~ View: screen\.jpg
+# s: a slideshow, the next picture every 5 seconds.
+@ctl keys {machine} "s"
+$ sleep 6
+@ctl text {machine}
+~ View: screen\.png
 @ctl keys {machine} "q"
 $ sleep 1
 # A folder: its first picture.

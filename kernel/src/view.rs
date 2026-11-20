@@ -2,7 +2,8 @@
 //! JPEG, PNG, GIF, BMP or PPM picture from the disk, as large as fits, and
 //! plays an animated GIF (space pauses and goes on, `n` shows the next
 //! frame). The arrow keys (and Page Up / Page Down) go to the previous and
-//! next picture in the same folder, in name order, round and round. `q` leaves.
+//! next picture in the same folder, in name order, round and round; `s`
+//! starts and stops a slideshow (the next picture every 5 seconds). `q` leaves.
 
 use crate::input::{self, Key};
 use crate::storage::Storage;
@@ -104,9 +105,10 @@ pub fn run(window: usize, picture: Picture, path: String, mut storage: Storage) 
         None => (String::from("/"), path.clone()),
     };
     let mut picture = Some(picture);
+    let mut slideshow = false;
     loop {
         let then = match picture.take() {
-            Some(Picture::Still(still)) => show(window, &still),
+            Some(Picture::Still(still)) => show(window, &still, &mut slideshow),
             Some(Picture::Moving(moving)) => play(window, &moving),
             None => wait_for_key(window),
         };
@@ -148,11 +150,27 @@ fn wait_for_key(window: usize) -> Then {
     }
 }
 
-/// One still picture until a key says what next. Any other key shows it again.
-fn show(window: usize, still: &image::Image) -> Then {
+/// How long a slideshow shows each picture.
+pub const SLIDE_MS: u64 = 5000;
+
+/// One still picture until a key (or the slideshow) says what next. Any
+/// other key shows it again.
+fn show(window: usize, still: &image::Image, slideshow: &mut bool) -> Then {
+    if console::pane_picture(window, still).is_none() {
+        return Then::Leave;
+    }
+    let mut due = time::uptime_ms() + SLIDE_MS;
     loop {
-        if console::pane_picture(window, still).is_none() {
+        let on = *slideshow;
+        thread::wait_until(|| input::pending() || !console::pane_exists(window) || (on && time::uptime_ms() >= due));
+        if !console::pane_exists(window) {
             return Then::Leave;
+        }
+        if !input::pending() {
+            if on && time::uptime_ms() >= due {
+                return Then::Step(1); // the slideshow's next picture
+            }
+            continue;
         }
         let key = input::read_key();
         if leaves(&key) {
@@ -160,6 +178,13 @@ fn show(window: usize, still: &image::Image) -> Then {
         }
         if let Some(step) = step_of(&key) {
             return Then::Step(step);
+        }
+        if key == Key::Char('s') {
+            *slideshow = !*slideshow;
+            due = time::uptime_ms() + SLIDE_MS;
+        }
+        if console::pane_picture(window, still).is_none() {
+            return Then::Leave;
         }
     }
 }
