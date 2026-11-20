@@ -18,3 +18,16 @@ $ sleep 1
 @screenshot 1920x1080 pixels 683,300=000000 843,300=1f3a5f 500,547=1f3a5f 500,467=000000
 $ threads
 ~ files      (waiting|ready)
+# The yellow box left of the close box (now at 806..818, 40..52; the pointer
+# is at 836,540 after the resize) folds the
+# window up to its title bar: below it the console's window shows again.
+@mouse -28 -494
+@button left down
+@button left up
+$ sleep 1
+@screenshot 1920x1080 pixels 300,36=3a6ea5 300,300=000000 843,300=000000 807,41=f2c14e
+# A second click unfolds it.
+@button left down
+@button left up
+$ sleep 1
+@screenshot 1920x1080 pixels 843,300=1f3a5f 500,547=1f3a5f
