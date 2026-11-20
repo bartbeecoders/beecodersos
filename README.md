@@ -326,6 +326,10 @@ The choice is saved in `/system/keyboard` and restored at boot.
 
 Serial input bypasses the layout: the host terminal has already translated keys.
 
+**Output to a file:** `COMMAND ... > FILE` writes what any command prints
+to FILE, `>> FILE` adds it at the end (`ls /data > files.txt`,
+`grep honey notes.txt >> found.txt`); error messages still come to the
+screen (`console::capture_start`; `redirect.scn`).
 **Line editing:** ←/→, Home/End, Backspace/Delete, ↑/↓ history (with something
 typed, only the commands that start with it: `history-prefix.scn`), Esc clears the
 line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
@@ -334,7 +338,7 @@ name, the others as a file or folder (also after a path, `/data/ho`); one
 match is completed (with a space, or `/` for a folder), several as far as
 they agree (`tab-complete.scn`).
 
-**Commands:** `help`, `whoami`, `users`, `useradd`, `userdel`, `passwd`, `login`, `logout`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
+**Commands:** `help`, `whoami`, `users`, `useradd`, `userdel`, `passwd`, `login`, `logout`, `clear`, `echo`, `ls`, `cd`, `pwd`,
 `cat`, `head`, `tail`, `wc`, `grep`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `timezone`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `do`, `ai`,
 `slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `cpu`, `monitor`, `view`, `screenshot`, `record`, `sound`, `beep`, `play`, `tune`, `timer`, `alarm`, `timers`, `cal`, `lsusb`, `camera`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `vnc`, `arp`, `lspci [-v]`, `threads`, `find`, `du`, `selftest`, `crash panic|exception|hang`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.

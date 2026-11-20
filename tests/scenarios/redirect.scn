@@ -1,0 +1,20 @@
+# Any command's output can go to a file (> writes, >> adds); errors still
+# come to the screen.
+$ mkdir /hive
+$ echo honey > /hive/jar.txt
+$ echo wax >> /hive/jar.txt
+$ ls /hive > /list.txt
+$ cat /list.txt
+~ jar\.txt
+$ grep wax /hive/jar.txt > /found.txt
+$ cat /found.txt
+2: wax
+$ cal 2 2024 >> /found.txt
+$ cat /found.txt
+2: wax
+~ February 2024
+$ ls /nope > /err.txt
+~ /nope: no such
+$ cat /err.txt
+$ echo done
+done
