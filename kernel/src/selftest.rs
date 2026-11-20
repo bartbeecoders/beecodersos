@@ -1217,7 +1217,7 @@ fn gfx_canvas() -> TestResult {
 fn wm_layout() -> TestResult {
     use crate::gfx::Rect;
     use crate::wm::{terminal_frame, Window};
-    let content = |frame: Rect| Window { title: String::new(), frame, resizable: true, collapsed: None, scroll: None, saved: None, workspace: 1 }.content();
+    let content = |frame: Rect| Window { title: String::new(), frame, resizable: true, collapsed: None, scroll: None, saved: None, workspace: 1, floating: false }.content();
     // Full HD: a window in the middle with desktop all around.
     let frame = terminal_frame(1920, 1080, 1).ok_or("no window on a full HD screen")?;
     let inside = content(frame);
@@ -1469,7 +1469,7 @@ fn display_g3() -> TestResult {
     check_eq!(FbCon::in_area(canvas, canvas.bounds(), &mut cells, 0).scale(), 1);
     // The terminal window with the double font holds whole double characters.
     let frame = wm::terminal_frame(2560, 1440, 2).ok_or("no window at 2560x1440")?;
-    let inside = wm::Window { title: String::new(), frame, resizable: true, collapsed: None, scroll: None, saved: None, workspace: 1 }.content();
+    let inside = wm::Window { title: String::new(), frame, resizable: true, collapsed: None, scroll: None, saved: None, workspace: 1, floating: false }.content();
     check_eq!((inside.width % 16, inside.height % 32), (0, 0));
     check!(inside.width / 16 >= 100 && frame.x + frame.width < 2560);
     check!(wm::terminal_frame(400, 300, 2).is_some() && wm::terminal_frame(320, 200, 2).is_none());
@@ -2514,7 +2514,7 @@ fn wm_windows() -> TestResult {
     check_eq!(desk.open("D", Rect::new(0, 0, 50, 50)), 3); // numbers are not used again
     check!(desk.close(3));
     // A window too narrow for a close box has none.
-    check!(wm::Window { title: String::new(), frame: Rect::new(0, 0, 20, 60), resizable: true, collapsed: None, scroll: None, saved: None, workspace: 1 }.close_box().is_none());
+    check!(wm::Window { title: String::new(), frame: Rect::new(0, 0, 20, 60), resizable: true, collapsed: None, scroll: None, saved: None, workspace: 1, floating: false }.close_box().is_none());
     check_eq!(wm::frame_size(640, 400), (640 + 12, 400 + 12 + 24));
 
     // Contents: each window's picture is put in after its frame, back to

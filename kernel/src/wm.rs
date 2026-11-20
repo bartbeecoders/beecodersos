@@ -63,6 +63,8 @@ pub struct Window {
     pub saved: Option<Rect>,
     /// The workspace it is on (1-9); only the current one's windows show.
     pub workspace: usize,
+    /// Never tiled: it stays where it is, over the others (the launcher).
+    pub floating: bool,
 }
 
 impl Window {
@@ -383,7 +385,8 @@ impl Desktop {
     /// size changed.
     pub fn tile(&mut self, area: Rect) -> Vec<usize> {
         self.tile_order.retain(|id| self.ids.contains(id));
-        let order: Vec<usize> = self.tile_order.iter().filter_map(|id| self.position(*id)).filter(|&i| self.visible(i)).collect();
+        let order: Vec<usize> =
+            self.tile_order.iter().filter_map(|id| self.position(*id)).filter(|&i| self.visible(i) && !self.windows[i].floating).collect();
         let frames = tile_frames(order.len(), area, self.cell);
         let mut changed = Vec::new();
         for (&i, frame) in order.iter().zip(frames) {
@@ -412,6 +415,13 @@ impl Desktop {
         let changed = self.windows[at].scroll != scroll;
         self.windows[at].scroll = scroll;
         changed
+    }
+
+    /// A window that is never tiled and stays over the others.
+    pub fn set_floating(&mut self, id: usize) {
+        if let Some(at) = self.position(id) {
+            self.windows[at].floating = true;
+        }
     }
 
     /// A window that cannot be resized (no grip): the console's own.
@@ -484,7 +494,7 @@ impl Desktop {
     /// Add a window on top of the others; returns its number (the first
     /// window gets 0, and numbers are not used again).
     pub fn open(&mut self, title: &str, frame: Rect) -> usize {
-        self.windows.push(Window { title: String::from(title), frame, resizable: true, collapsed: None, scroll: None, saved: None, workspace: self.current });
+        self.windows.push(Window { title: String::from(title), frame, resizable: true, collapsed: None, scroll: None, saved: None, workspace: self.current, floating: false });
         self.ids.push(self.next_id);
         self.tile_order.push(self.next_id);
         self.next_id += 1;

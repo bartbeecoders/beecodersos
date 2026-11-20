@@ -119,7 +119,8 @@ pub fn open_timer_alert(id: u32, text: &str) -> Result<usize, &'static str> {
 
 /// The launcher (Super+Space): the programs to start, by name.
 pub fn open_launcher() -> Result<usize, &'static str> {
-    open("Start", "launcher", false, crate::launcher::run)
+    // Floating in the middle, over the (maybe tiled) windows, as on Omarchy.
+    open_with("Start", "launcher", false, Some((64, 12)), crate::launcher::run)
 }
 
 /// The pictures in the home folder: the first in the picture viewer (the
@@ -178,8 +179,23 @@ pub fn start() {
 
 /// A window, a session for its keys, and a thread that runs `program` in it.
 fn open(title: &str, thread_name: &str, prints: bool, program: impl FnOnce(usize) + 'static) -> Result<usize, &'static str> {
+    open_with(title, thread_name, prints, None, program)
+}
+
+/// `open`, with a size (characters) for a floating window in the middle.
+fn open_with(
+    title: &str,
+    thread_name: &str,
+    prints: bool,
+    floating: Option<(usize, usize)>,
+    program: impl FnOnce(usize) + 'static,
+) -> Result<usize, &'static str> {
     let session = session::open().ok_or("too many sessions")?;
-    let window = match console::open_pane(title) {
+    let opened = match floating {
+        Some(size) => console::open_pane_sized(title, size, true),
+        None => console::open_pane(title),
+    };
+    let window = match opened {
         Ok(window) => window,
         Err(why) => {
             session::remove(session);
