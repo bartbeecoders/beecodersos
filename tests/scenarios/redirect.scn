@@ -18,3 +18,15 @@ $ ls /nope > /err.txt
 $ cat /err.txt
 $ echo done
 done
+# sort: the lines in order; -u each once, -r last first; to a file too.
+$ echo pear > /fruit.txt
+$ echo apple >> /fruit.txt
+$ echo pear >> /fruit.txt
+$ sort -u /fruit.txt
+apple
+pear
+$ sort -r /fruit.txt > /sorted.txt
+$ head -n 1 /sorted.txt
+pear
+$ sort
+usage: sort [-r] [-u] FILE   (-r: last first, -u: each line once)

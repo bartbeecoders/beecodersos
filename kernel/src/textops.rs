@@ -59,3 +59,22 @@ pub fn parse_count<'a>(args: &[&'a str]) -> Option<(usize, &'a str)> {
         _ => None,
     }
 }
+
+/// The lines of `text` in order (`reverse`: last first; `unique`: each
+/// line once), each ending with a line end.
+pub fn sort_lines(text: &str, reverse: bool, unique: bool) -> alloc::string::String {
+    let mut lines: alloc::vec::Vec<&str> = text.lines().collect();
+    lines.sort_unstable();
+    if unique {
+        lines.dedup();
+    }
+    if reverse {
+        lines.reverse();
+    }
+    let mut out = alloc::string::String::new();
+    for line in lines {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}

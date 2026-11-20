@@ -1176,6 +1176,20 @@ impl Shell {
                 Some((n, file)) => self.head_tail(file, n, cmd == "tail"),
                 None => error(&format!("usage: {cmd} [-n N] FILE   (the {} 10 lines unless N is given)", if cmd == "tail" { "last" } else { "first" })),
             },
+            ("sort", args) if !args.is_empty() => {
+                let (flags, file): (Vec<&str>, Vec<&str>) = args.iter().partition(|a| a.starts_with('-'));
+                let known = flags.iter().all(|f| matches!(*f, "-r" | "-u" | "-ru" | "-ur"));
+                match (known, file.as_slice()) {
+                    (true, [file]) => {
+                        let Some(text) = self.read_text(file) else { return };
+                        let reverse = flags.iter().any(|f| f.contains('r'));
+                        let unique = flags.iter().any(|f| f.contains('u'));
+                        print!("{}", textops::sort_lines(&text, reverse, unique));
+                    }
+                    _ => error("usage: sort [-r] [-u] FILE   (-r: last first, -u: each line once)"),
+                }
+            }
+            ("sort", _) => error("usage: sort [-r] [-u] FILE   (-r: last first, -u: each line once)"),
             ("wc", [file]) => {
                 let Some(text) = self.read_text(file) else { return };
                 let (lines, words, bytes) = textops::count(&text);
@@ -3245,6 +3259,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("cat FILE", "show a file"),
     ("head|tail [-n N] FILE", "the first / last N lines of a file (10 unless N is given)"),
     ("wc FILE", "count the lines, words and bytes of a file"),
+    ("sort [-r] [-u] FILE", "the lines of a file in order (-r: last first, -u: each line once)"),
     ("grep [-i] TEXT PATH", "lines that contain TEXT, in a file or every file of a folder"),
     ("touch FILE", "create an empty file"),
     ("mkdir DIR", "create a directory (with parents)"),

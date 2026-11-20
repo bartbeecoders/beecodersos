@@ -3196,6 +3196,9 @@ fn web_viewer() -> TestResult {
 
 fn text_tools() -> TestResult {
     use crate::textops::*;
+    check_eq!(sort_lines("pear\napple\npear\nfig", false, false), "apple\nfig\npear\npear\n");
+    check_eq!(sort_lines("pear\napple\npear\nfig", true, true), "pear\nfig\napple\n");
+    check_eq!(sort_lines("", false, false), "");
     let text = "one\ntwo\nthree\nfour\n";
     check_eq!(head(text, 2), "one\ntwo\n");
     check_eq!(head(text, 9), text);
