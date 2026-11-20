@@ -1,0 +1,25 @@
+# Kitchen timers: `timer` starts one, `timers` lists them, `timer off`
+# cancels; when the time is up a window opens with the message.
+@ai
+$ ai control on
+$ timers
+no timers ('timer 10m tea' starts one)
+$ timer 1h bake bread
+timer 1: 1h 00m (a window and a tune when it is up)
+$ timer 2s tea is ready
+timer 2: 2s (a window and a tune when it is up)
+$ timers
+~ ^  2 +[12]s left  tea is ready$
+~ ^  1 +(1h 00m|59m \d\ds) left  bake bread$
+$ timer off 1
+timer 1 cancelled
+$ timer off 1
+timer: no timer 1 ('timers' lists them)
+$ sleep 3
+@ctl text {machine}
+~ ^--- window \d+: Timer 2 ---$
+~ Time is up: tea is ready
+$ timers
+no timers ('timer 10m tea' starts one)
+$ timer soon
+usage: timer DURATION [MESSAGE]   (90, 90s, 5m, 1h30m; up to a day) | timer off N

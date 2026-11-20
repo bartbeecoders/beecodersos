@@ -1650,6 +1650,27 @@ impl Shell {
             ("install", [disk, option @ ("--erase" | "--reinstall")]) => self.install(disk, option),
             ("install", _) => error("usage: install [DISK [--reinstall | --erase]]   (install alone lists the disks)"),
             ("lsusb", []) => println!("{}", crate::usb::describe()),
+            ("timers", []) => {
+                let all = crate::timer::list();
+                if all.is_empty() {
+                    println!("no timers ('timer 10m tea' starts one)");
+                }
+                for (id, left, message) in all {
+                    println!("{id:>3}  {:>8} left  {message}", crate::timer::left_text(left));
+                }
+            }
+            ("timer", ["off", n]) => match n.parse::<u32>() {
+                Ok(id) if crate::timer::cancel(id) => println!("timer {id} cancelled"),
+                _ => error(&format!("timer: no timer {n} ('timers' lists them)")),
+            },
+            ("timer", [duration, message @ ..]) => match crate::timer::parse_duration(duration) {
+                Some(ms) => match crate::timer::start(ms, &message.join(" ")) {
+                    Ok(id) => println!("timer {id}: {} (a window and a tune when it is up)", crate::timer::left_text(ms)),
+                    Err(why) => error(&format!("timer: {why}")),
+                },
+                None => error("usage: timer DURATION [MESSAGE]   (90, 90s, 5m, 1h30m; up to a day) | timer off N"),
+            },
+            ("timer", []) => error("usage: timer DURATION [MESSAGE]   (90, 90s, 5m, 1h30m; up to a day) | timer off N"),
             ("camera", []) => {
                 println!("{}", crate::usb::describe_cameras());
                 match crate::usb::CAMERA_STATE.get().clone() {
@@ -3109,6 +3130,8 @@ const COMMANDS: &[(&str, &str)] = &[
     ("arp", "neighbours learned on the local network"),
     ("lspci [-v]", "list PCI devices (-v: what each one can do)"),
     ("install [DISK]", "put the OS on a disk, or upgrade it (alone: list the disks)"),
+    ("timer DURATION [MESSAGE]", "a kitchen timer (5m, 1h30m, 90s): a window and a tune when it is up; 'timer off N' cancels"),
+    ("timers", "the running timers and what is left of them"),
     ("lsusb", "USB controller and devices"),
     ("camera [raw|log]", "USB cameras: the picture formats and sizes they offer ('raw': the description as the camera gave it; 'log': what the driver noted)"),
     ("camera timelapse FILE.avi SECS [MIN]", "a time-lapse video: a picture every SECS seconds, played back at 10 a second"),

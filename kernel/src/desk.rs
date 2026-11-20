@@ -101,6 +101,22 @@ pub fn open_camera() -> Result<usize, &'static str> {
     open("Camera", "camera", false, move |window| crate::webcam::run(window, folder, storage))
 }
 
+/// A timer's time is up: a small window with its message until a key or
+/// the close box.
+pub fn open_timer_alert(id: u32, text: &str) -> Result<usize, &'static str> {
+    let text = String::from(text);
+    open(&format!("Timer {id}"), "timer-alert", false, move |window| {
+        console::pane_write(window, &format!("\n  {text}\n\n  Any key closes this window.\n"));
+        while console::pane_exists(window) {
+            thread::wait_until(|| crate::input::pending() || !console::pane_exists(window));
+            if crate::input::pending() {
+                let _ = crate::input::read_key();
+                break;
+            }
+        }
+    })
+}
+
 /// Open the system monitor in a window.
 pub fn open_monitor() -> Result<usize, &'static str> {
     open("Monitor", "monitor", false, crate::monitor::run)
