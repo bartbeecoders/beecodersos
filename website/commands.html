@@ -4,13 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Commands — BeeCodersOs</title>
-<meta name="description" content="Every command of BeeShell, the terminal of BeeCodersOs, as the OS's own help describes it.">
+<meta name="description" content="Every command of BeeShell, the terminal of BeeCodersOs, and every desktop shortcut, as the OS's own help describes them.">
 <meta name="theme-color" content="#0d0b07">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cpolygon points='50,4 92,27 92,73 50,96 8,73 8,27' fill='%23f5b301'/%3E%3Cpolygon points='50,30 70,41 70,63 50,74 30,63 30,41' fill='%230d0b07'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=258">
+<link rel="stylesheet" href="style.css?v=292">
 </head>
 <body>
 
@@ -30,7 +30,7 @@
   <section class="wrap commands">
     <p class="kicker">BeeShell</p>
     <h2>Every <em>command</em>.</h2>
-    <p class="sub">What <code>help</code> shows in BeeCodersOs build 258: 81 entries, taken from the
+    <p class="sub">What <code>help</code> shows in BeeCodersOs build 292: 81 entries, taken from the
       OS's own source (<code>COMMANDS</code> in <code>kernel/src/shell.rs</code>), so this page says what the OS says.
       Paths can be relative; <code>"quotes"</code> group words.</p>
     <dl class="cmds">
@@ -111,10 +111,32 @@
       <div class="cmd"><dt><code>cpu [start|test|auto on|off]</code></dt><dd>the processor: name, how many, clock, features; start the others; measure; at boot or not (saved)</dd></div>
       <div class="cmd"><dt><code>sleep SECONDS</code></dt><dd>wait (Ctrl+C ends it)</dd></div>
       <div class="cmd"><dt><code>terminal</code></dt><dd>one more terminal window on the desktop, with a shell of its own</dd></div>
-      <div class="cmd"><dt><code>desktop [on|off]</code></dt><dd>graphical desktop: the terminal in a window (on by default; saved); &#x27;desktop wallpaper FILE|none&#x27;</dd></div>
+      <div class="cmd"><dt><code>desktop [on|off]</code></dt><dd>graphical desktop: the terminal in a window (on by default; saved); &#x27;desktop wallpaper FILE|none&#x27;; &#x27;desktop tile on|off&#x27; tiles the windows (saved)</dd></div>
       <div class="cmd"><dt><code>slots</code></dt><dd>A/B kernel slots: which one runs, last trial</dd></div>
       <div class="cmd"><dt><code>crash panic|exception|hang</code></dt><dd>deliberately crash the kernel: a panic, a CPU exception, or a hang the watchdog ends (tests crash reports)</dd></div>
       <div class="cmd"><dt><code>reboot, shutdown</code></dt><dd>restart / power off</dd></div>
+    </dl>
+  </section>
+  <section class="wrap commands" id="keys">
+    <p class="kicker">Desktop</p>
+    <h2>Every <em>key</em>.</h2>
+    <p class="sub">The desktop's keyboard shortcuts, as on Omarchy (<code>KEYS</code> in <code>kernel/src/launcher.rs</code>;
+      Super+K shows them on the machine itself).</p>
+    <dl class="cmds">
+      <div class="cmd"><dt><kbd>Super+Space</kbd></dt><dd>the launcher: programs by name</dd></div>
+      <div class="cmd"><dt><kbd>Super+Enter</kbd></dt><dd>a new terminal</dd></div>
+      <div class="cmd"><dt><kbd>Super+W</kbd></dt><dd>close the window</dd></div>
+      <div class="cmd"><dt><kbd>Super+arrows</kbd></dt><dd>go to the window that way</dd></div>
+      <div class="cmd"><dt><kbd>Super+Shift+arrows</kbd></dt><dd>swap the window with that one</dd></div>
+      <div class="cmd"><dt><kbd>Super+F</kbd></dt><dd>fill the screen, and back</dd></div>
+      <div class="cmd"><dt><kbd>Super+T</kbd></dt><dd>tile the windows, or let them float</dd></div>
+      <div class="cmd"><dt><kbd>Super+1-9</kbd></dt><dd>show another workspace</dd></div>
+      <div class="cmd"><dt><kbd>Super+Shift+1-9</kbd></dt><dd>send the window to a workspace</dd></div>
+      <div class="cmd"><dt><kbd>Super+K</kbd></dt><dd>these keys</dd></div>
+      <div class="cmd"><dt><kbd>Alt+Tab</kbd></dt><dd>the next window</dd></div>
+      <div class="cmd"><dt><kbd>Shift+PgUp/PgDn</kbd></dt><dd>look back in a terminal</dd></div>
+      <div class="cmd"><dt><kbd>Ctrl+C</kbd></dt><dd>stop a command</dd></div>
+      <div class="cmd"><dt><kbd>q / Esc</kbd></dt><dd>leave most windows</dd></div>
     </dl>
   </section>
 </main>
