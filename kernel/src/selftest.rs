@@ -2567,6 +2567,29 @@ fn text_editor() -> TestResult {
     check_eq!((e.text().as_str(), e.modified(), e.position()), ("one\ntwo\n", false, (1, 1)));
     check_eq!(Editor::new("").text(), "\n"); // a new file: one empty line
     check_eq!(Editor::new("a\r\nb").text(), "a\nb\n"); // DOS line ends go, a missing last one comes
+    // Ctrl+F: the status line asks; Enter goes to the next match (any case),
+    // Ctrl+G to the one after, round past the end; Esc stops; nothing changes.
+    let mut f = Editor::new("bees and honey\nmore Honey here\nend");
+    keys(&mut f, &[Key::Ctrl('f')]);
+    typed(&mut f, "honey");
+    let (lines, _) = f.render("x", 60, 4);
+    check!(row_text(&lines[0]).starts_with(" Find: honey_"));
+    keys(&mut f, &[Key::Enter]);
+    check_eq!(f.position(), (1, 10));
+    keys(&mut f, &[Key::Ctrl('g')]);
+    check_eq!(f.position(), (2, 6));
+    keys(&mut f, &[Key::Ctrl('g')]);
+    check_eq!(f.position(), (1, 10)); // from the top again
+    keys(&mut f, &[Key::Ctrl('f')]);
+    typed(&mut f, "bumblebee");
+    keys(&mut f, &[Key::Enter]);
+    check_eq!(f.position(), (1, 10)); // not found: the cursor stays
+    let (lines, _) = f.render("x", 60, 4);
+    check!(row_text(&lines[0]).contains("not found"));
+    keys(&mut f, &[Key::Ctrl('f'), Key::Char('z'), Key::Escape]);
+    check_eq!((f.position(), f.modified()), ((1, 10), false));
+    keys(&mut f, &[Key::Resized]); // a new window size is no key
+    check_eq!(f.modified(), false);
 
     // Typing, Enter in the middle of a line, Backspace and Delete across lines.
     keys(&mut e, &[Key::End]);
