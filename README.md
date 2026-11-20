@@ -1317,7 +1317,9 @@ desktop.
 - **Text editor:** `edit FILE` opens a file (or a new one) in a window of
   its own (`kernel/src/textedit.rs`). Type to insert; arrows, Home, End,
   Page Up and Page Down move; Enter keeps the indent of the line; Tab goes to
-  the next multiple of four; Ctrl+K cuts the rest of the line. **Ctrl+S**
+  the next multiple of four; Ctrl+K cuts the rest of the line (at its end:
+  the line end; cuts in a row gather whole lines) and Ctrl+U pastes it, also
+  in another editor window (one clipboard for all). **Ctrl+S**
   saves, **Ctrl+Q** leaves (asked twice when changes are not saved),
   **Ctrl+F** asks in the status line what to find (any case; Enter goes to
   the next match, round past the end; Esc stops) and **Ctrl+G** finds it

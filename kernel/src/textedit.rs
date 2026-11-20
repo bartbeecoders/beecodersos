@@ -53,7 +53,12 @@ pub struct Editor {
     undo: Vec<(Vec<Vec<char>>, usize, usize, bool)>,
     /// The last change was typing letters: more letters join that step.
     typing: bool,
+    /// The last key was Ctrl+K: another one adds to the clipboard.
+    cutting: bool,
 }
+
+/// What Ctrl+K cut, for Ctrl+U: shared by every editor window.
+static CLIPBOARD: crate::ring::Global<String> = crate::ring::Global::new(String::new());
 
 /// Steps kept for Ctrl+Z (fewer for large texts: each keeps a whole copy).
 const UNDO_STEPS: usize = 50;
@@ -79,6 +84,7 @@ impl Editor {
             last_search: String::new(),
             undo: Vec::new(),
             typing: false,
+            cutting: false,
         }
     }
 
@@ -161,7 +167,7 @@ impl Editor {
         // Before a key that changes the text: remember it for Ctrl+Z.
         match key {
             Key::Char(_) if self.search.is_none() => self.remember(true),
-            Key::Tab | Key::Enter | Key::Backspace | Key::Delete | Key::Ctrl('k') if self.search.is_none() => self.remember(false),
+            Key::Tab | Key::Enter | Key::Backspace | Key::Delete | Key::Ctrl('k') | Key::Ctrl('u') if self.search.is_none() => self.remember(false),
             Key::Ctrl('z') => {}
             _ => self.typing = false,
         }
@@ -187,6 +193,10 @@ impl Editor {
             return Action::None;
         }
         self.message.clear();
+        // Ctrl+K in a row gathers; any other key starts the next cut afresh.
+        if key != Key::Ctrl('k') {
+            self.cutting = false;
+        }
         let was_leaving = core::mem::take(&mut self.leaving);
         let page = page.max(1);
         match key {
@@ -254,14 +264,42 @@ impl Editor {
                 }
             }
             Key::Ctrl('k') => {
-                // Cut the rest of the line; at its end, join the next line.
+                // Cut the rest of the line; at its end, join the next line
+                // (the line end is cut). Cuts in a row gather on the clipboard.
+                let clip = CLIPBOARD.get();
+                if !self.cutting {
+                    clip.clear();
+                }
                 if self.col < self.lines[self.row].len() {
-                    self.lines[self.row].truncate(self.col);
+                    clip.extend(self.lines[self.row].drain(self.col..));
                     self.modified = true;
                 } else if self.row + 1 < self.lines.len() {
                     let line = self.lines.remove(self.row + 1);
                     self.lines[self.row].extend(line);
+                    clip.push('\n');
                     self.modified = true;
+                }
+                if clip.len() > MAX_FILE {
+                    clip.truncate(MAX_FILE);
+                }
+                self.cutting = true;
+            }
+            Key::Ctrl('u') => {
+                // Paste what was cut (in any editor window) at the cursor.
+                let clip = CLIPBOARD.get().clone();
+                if clip.is_empty() {
+                    self.message = String::from("nothing to paste: Ctrl+K cuts");
+                }
+                for c in clip.chars() {
+                    if c == '\n' {
+                        let rest = self.lines[self.row].split_off(self.col);
+                        self.lines.insert(self.row + 1, rest);
+                        self.row += 1;
+                        self.col = 0;
+                        self.modified = true;
+                    } else {
+                        self.insert(c);
+                    }
                 }
             }
             Key::Left => {
