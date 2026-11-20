@@ -860,6 +860,7 @@ pub fn mouse_event(buttons: u8, dx: i32, dy: i32) {
     let _rebuilding = Rebuilding::start();
     let (Some(desk), Some(shadow)) = (DESKTOP.get().as_mut(), SHADOW.get().as_ref()) else { return };
     let bounds = shadow.back.bounds();
+    desk.set_time(time::uptime_ms().max(1));
     match desk.mouse(buttons, dx, dy, bounds) {
         MouseEffect::Nothing => {}
         MouseEffect::PointerMoved(old) => {
@@ -898,6 +899,7 @@ pub fn mouse_event(buttons: u8, dx: i32, dy: i32) {
             show(true);
         }
         MouseEffect::Workspace(n) => switch_workspace(n),
+        MouseEffect::TitleDoubleClick(_) => toggle_fullscreen(),
         MouseEffect::Scroll { id, up } => {
             // A terminal scrolls its own history; another program gets Page Up / Down.
             let terminal = id == TERMINAL || PANES.get().iter().any(|p| p.window == id && p.con.history_view().2 > p.con.history_view().1);

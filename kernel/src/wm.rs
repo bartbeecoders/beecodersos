@@ -250,6 +250,8 @@ pub enum MouseEffect {
     Scroll { id: usize, up: bool },
     /// The button went down on the box of a workspace: show it.
     Workspace(usize),
+    /// A double-click on this window's title bar: fill the screen, or go back.
+    TitleDoubleClick(usize),
 }
 
 pub struct Desktop {
@@ -273,7 +275,14 @@ pub struct Desktop {
     tile_order: Vec<usize>,
     /// The workspace shown (Super+1-9).
     current: usize,
+    /// The time now (set before each mouse event; 0: no clock, no double-clicks).
+    now_ms: u64,
+    /// The last press on a title bar: the window and when (for a double-click).
+    last_title_press: Option<(usize, u64)>,
 }
+
+/// Two presses on the same title bar within this many milliseconds: a double-click.
+pub const DOUBLE_CLICK_MS: u64 = 600;
 
 /// Workspaces: 1 to this; boxes for the first `WORKSPACE_BOXES` left of the buttons.
 pub const WORKSPACES: usize = 9;
@@ -309,7 +318,14 @@ impl Desktop {
             tiling: false,
             tile_order: Vec::new(),
             current: 1,
+            now_ms: 0,
+            last_title_press: None,
         }
+    }
+
+    /// The time, for telling a double-click (`mouse` is called right after).
+    pub fn set_time(&mut self, now_ms: u64) {
+        self.now_ms = now_ms;
     }
 
     /// The workspace shown.
@@ -759,6 +775,18 @@ impl Desktop {
             } else if let Some(w) = top.filter(|w| !self.tiling && w.grip().is_some_and(inside)) {
                 new.resize = Some((w.frame, new.x, new.y));
             } else {
+                let on_title = top.is_some_and(|w| new.y < w.frame.y + BORDER + TITLE_HEIGHT);
+                if on_title && self.now_ms > 0 {
+                    if let Some(id) = self.top() {
+                        let double = self.last_title_press.is_some_and(|(w, at)| w == id && self.now_ms.saturating_sub(at) <= DOUBLE_CLICK_MS);
+                        if double {
+                            self.last_title_press = None;
+                            self.pointer = Some(Pointer { grab: None, ..new });
+                            return MouseEffect::TitleDoubleClick(id);
+                        }
+                        self.last_title_press = Some((id, self.now_ms));
+                    }
+                }
                 new.grab = top.filter(|_| !self.tiling).and_then(|w| {
                     let f = w.frame;
                     (new.y < f.y + BORDER + TITLE_HEIGHT).then(|| (new.x - f.x, new.y - f.y))

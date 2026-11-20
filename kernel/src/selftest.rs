@@ -1936,6 +1936,24 @@ fn wm_resize() -> TestResult {
     check_eq!(tiled.top(), None); // an empty workspace: nothing has the focus
     tiled.switch_to(1);
     check!(tiled.top() == Some(a) || tiled.top() == Some(c));
+    // A double-click on a title bar (two presses within 600 ms; only with
+    // a clock): fill the screen. Slower presses are not one.
+    let mut dc = Desktop::new();
+    let w = dc.open("w", Rect::new(100, 100, 300, 200));
+    dc.mouse(0, 0, 0, screen);
+    let at = dc.pointer().ok_or("no pointer")?;
+    dc.mouse(0, 150 - at.x as i32, 105 - at.y as i32, screen); // on the title bar
+    dc.set_time(1000);
+    dc.mouse(1, 0, 0, screen);
+    dc.mouse(0, 0, 0, screen);
+    dc.set_time(1200);
+    check_eq!(dc.mouse(1, 0, 0, screen), MouseEffect::TitleDoubleClick(w));
+    dc.mouse(0, 0, 0, screen);
+    dc.set_time(5000);
+    dc.mouse(1, 0, 0, screen);
+    dc.mouse(0, 0, 0, screen);
+    dc.set_time(5800);
+    check!(dc.mouse(1, 0, 0, screen) != MouseEffect::TitleDoubleClick(w));
     // Never smaller than 20 x 4 characters, never past the screen's edge.
     let start = desk.window(id).ok_or("gone")?.frame;
     check_eq!(desk.resized_frame(start, -5000, -5000, screen), Rect::new(50, 60, frame_size(20 * 8, 4 * 16).0, frame_size(20 * 8, 4 * 16).1));

@@ -1589,7 +1589,9 @@ desktop.
   self-test `wm_resize`).
   **Folding up:** the yellow box left of the close box folds a window up to
   its title bar (what lies behind shows again) and a second click unfolds
-  it at the height it had.
+  it at the height it had. A **double-click on a title bar** (two presses
+  within 600 ms) fills the screen with the window, as Super+F; another one
+  gives it back its place (`desktop-doubleclick.scn`).
   **Scroll bars:** a program that shows only part of a longer list or text
   (the file manager, the editor, the web viewer) says so
   (`console::pane_scroll`), and its window gets a bar along the right edge
