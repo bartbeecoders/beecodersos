@@ -1789,6 +1789,23 @@ fn wm_resize() -> TestResult {
     check_eq!(desk.mouse(1, 0, 0, screen), MouseEffect::WindowMoved);
     check_eq!(desk.window(id).ok_or("gone")?.frame.height, height);
     desk.mouse(0, 0, 0, screen);
+    // Tiling ("dwindle"): one window takes it all, two lie side by side,
+    // a third splits the right one; gaps of 8, whole characters, no overlap.
+    use crate::wm::{tile_frames, GAP};
+    let area = Rect::new(0, 30, 1920, 1050);
+    let one = tile_frames(1, area, (8, 16));
+    check_eq!((one[0].x, one[0].y), (GAP, 30 + GAP));
+    check!(one[0].x + one[0].width <= 1920 - GAP && one[0].y + one[0].height <= 1080 - GAP);
+    let three = tile_frames(3, area, (8, 16));
+    check!(three[0].x + three[0].width + GAP <= three[1].x);
+    check_eq!(three[1].x, three[2].x);
+    check!(three[1].y + three[1].height + GAP <= three[2].y);
+    for f in three.iter() {
+        let (extra_w, extra_h) = frame_size(0, 0);
+        check_eq!(((f.width - extra_w) % 8, (f.height - extra_h) % 16), (0, 0));
+    }
+    check!(tile_frames(0, area, (8, 16)).is_empty());
+    check_eq!(tile_frames(9, Rect::new(0, 0, 100, 100), (8, 16)).len(), 9); // tiny: still one each, no panic
     // Never smaller than 20 x 4 characters, never past the screen's edge.
     let start = desk.window(id).ok_or("gone")?.frame;
     check_eq!(desk.resized_frame(start, -5000, -5000, screen), Rect::new(50, 60, frame_size(20 * 8, 4 * 16).0, frame_size(20 * 8, 4 * 16).1));

@@ -344,6 +344,7 @@ pub fn open_pane(title: &str) -> Result<usize, &'static str> {
     let Some(desk) = DESKTOP.get().as_mut() else { return Err("windows need the desktop (see desktop)") };
     let window = desk.open(title, frame);
     PANES.get().push(Pane { window, _cells: cells, con, surface, picture: false });
+    retile();
     compose(bounds);
     show(true);
     Ok(window)
@@ -543,6 +544,7 @@ pub fn close_pane(window: usize) {
     if let Some(desk) = DESKTOP.get().as_mut() {
         desk.close(window);
     }
+    retile();
     if let Some(bounds) = SHADOW.get().as_ref().map(|s| s.back.bounds()) {
         compose(bounds);
     }
@@ -771,8 +773,6 @@ fn lay_out(target: Target, desktop: bool) -> bool {
         .and_then(|frame| {
             let mut desk = wm::Desktop::new();
             let id = desk.open("Terminal", frame);
-            // The console's own window keeps the size the screen gives it.
-            desk.set_resizable(id, false);
             desk.set_cell(GLYPH_WIDTH * scale, GLYPH_HEIGHT * scale);
             let inside = desk.window(id)?.content();
             let surface = Surface::new(inside.width, inside.height, target.mode.format)?;
@@ -803,10 +803,14 @@ fn lay_out(target: Target, desktop: bool) -> bool {
     }
     let on = desk.is_some();
     *SCREEN.get() = Screen::Graphics(screen);
-    *DESKTOP.get() = desk;
+    *DESKTOP.get() = desk.map(|mut d| {
+        d.tiling = *TILING.get();
+        d
+    });
     *CONSOLE_SURFACE.get() = surface;
     *SHADOW.get() = shadow;
     *PENDING.get() = Rect::new(0, 0, 0, 0);
+    retile();
     drop(rebuilding);
     if on {
         compose(canvas.bounds());
@@ -867,6 +871,11 @@ pub fn mouse_event(buttons: u8, dx: i32, dy: i32) {
                 }
             }
         }
+        MouseEffect::Resized(TERMINAL) => {
+            resize_terminal();
+            compose(bounds);
+            show(true);
+        }
         MouseEffect::Resized(id) => {
             resize_pane(id);
             compose(bounds);
@@ -880,6 +889,76 @@ pub fn mouse_event(buttons: u8, dx: i32, dy: i32) {
             crate::desk::start();
         }
     }
+}
+
+/// Windows are tiled (`desktop tile on`), as on Omarchy.
+static TILING: Global<bool> = Global::new(false);
+
+pub fn tiling_on() -> bool {
+    *TILING.get()
+}
+
+/// Tile the windows, or let them float again (they keep their places).
+pub fn set_tiling(on: bool) {
+    *TILING.get() = on;
+    if let Some(desk) = DESKTOP.get().as_mut() {
+        desk.tiling = on;
+    }
+    retile();
+    if let Some(bounds) = SHADOW.get().as_ref().map(|s| s.back.bounds()) {
+        let _rebuilding = Rebuilding::start();
+        compose(bounds);
+    }
+    show(true);
+}
+
+/// While tiling: lay all windows out again (a window came or went), and
+/// make the content of those whose size changed anew.
+fn retile() {
+    if !*TILING.get() {
+        return;
+    }
+    let Some(bounds) = SHADOW.get().as_ref().map(|s| s.back.bounds()) else { return };
+    let Some(desk) = DESKTOP.get().as_mut() else { return };
+    let top = wm::top_bar_height();
+    let area = Rect::new(0, top, bounds.width, bounds.height.saturating_sub(top));
+    for id in desk.tile(area) {
+        if id == TERMINAL {
+            resize_terminal();
+        } else {
+            resize_pane(id);
+        }
+    }
+}
+
+/// The console's own window was resized: its console is made again in a
+/// surface of the new size, with its last lines of text (as when the screen
+/// changes size).
+fn resize_terminal() {
+    let Some(content) = DESKTOP.get().as_ref().and_then(|d| d.window(TERMINAL)).map(|w| w.content()) else { return };
+    let Screen::Graphics(old) = SCREEN.get() else { return };
+    let scale = old.scale();
+    let (cw, ch) = (GLYPH_WIDTH * scale, GLYPH_HEIGHT * scale);
+    let (cols, rows) = (content.width / cw, content.height / ch);
+    if cols == 0 || rows == 0 || cols * rows > fbcon::MAX_CELLS || (cols, rows) == (old.width(), old.height()) {
+        return;
+    }
+    let Some(format) = CONSOLE_SURFACE.get().as_ref().map(|s| s.canvas().format()) else { return };
+    let Some(surface) = Surface::new(cols * cw, rows * ch, format) else { return };
+    let (cells, old_cols, (row, col), attr) = (Vec::from(old.cells()), old.width(), old.pos(), old.attr());
+    let mut screen = FbCon::in_area(surface.canvas(), surface.canvas().bounds(), CELLS.get(), scale);
+    screen.clear();
+    let skip = (row + 1).saturating_sub(rows);
+    for r in skip..=row {
+        for c in 0..old_cols.min(cols) {
+            screen.put_cell(r - skip, c, cells[r * old_cols + c]);
+        }
+    }
+    screen.set_pos(row.saturating_sub(skip), col.min(cols - 1));
+    screen.set_attr(attr);
+    screen.sync_cursor();
+    *SCREEN.get() = Screen::Graphics(screen);
+    *CONSOLE_SURFACE.get() = Some(surface);
 }
 
 /// A window was resized with the mouse: a new surface and console of its
