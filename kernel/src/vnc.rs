@@ -274,6 +274,9 @@ pub fn changed_tiles(old: &[u32], new: &[u32], width: usize, height: usize) -> V
 pub struct Keys {
     ctrl: bool,
     alt: bool,
+    shift: bool,
+    /// Super held: keys go to the desktop as Key::Super (Omarchy shortcuts).
+    sup: bool,
 }
 
 impl Keys {
@@ -282,10 +285,28 @@ impl Keys {
         match name {
             KeyName::Modifier(Modifier::Control) => self.ctrl = down,
             KeyName::Modifier(Modifier::Alt) => self.alt = down,
+            KeyName::Modifier(Modifier::Shift) => self.shift = down,
+            KeyName::Modifier(Modifier::Super) => self.sup = down,
             _ => {}
         }
         if !down {
             return None;
+        }
+        if self.sup {
+            use crate::input::SuperKey;
+            let key = match name {
+                KeyName::Enter => SuperKey::Enter,
+                KeyName::Left => SuperKey::Left,
+                KeyName::Right => SuperKey::Right,
+                KeyName::Up => SuperKey::Up,
+                KeyName::Down => SuperKey::Down,
+                KeyName::Char(c) if c == ' ' || c.is_ascii_alphanumeric() => SuperKey::Char(c.to_ascii_lowercase()),
+                _ => return None,
+            };
+            return Some(Key::Super(key, self.shift));
+        }
+        if self.shift && matches!(name, KeyName::PageUp | KeyName::PageDown) {
+            return Some(Key::ScrollBack(name == KeyName::PageUp));
         }
         Some(match name {
             KeyName::Char(c) if self.ctrl && c.is_ascii_alphabetic() => Key::Ctrl(c.to_ascii_lowercase()),

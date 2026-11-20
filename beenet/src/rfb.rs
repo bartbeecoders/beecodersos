@@ -303,6 +303,8 @@ pub enum Modifier {
     Shift,
     Control,
     Alt,
+    /// Super (the Windows key): the desktop's shortcuts.
+    Super,
     Other,
 }
 
@@ -328,6 +330,7 @@ pub fn keysym(sym: u32) -> Option<KeyName> {
         0xFFE1 | 0xFFE2 => KeyName::Modifier(Modifier::Shift),
         0xFFE3 | 0xFFE4 => KeyName::Modifier(Modifier::Control),
         0xFFE9 | 0xFFEA | 0xFFE7 | 0xFFE8 => KeyName::Modifier(Modifier::Alt),
+        0xFFEB | 0xFFEC => KeyName::Modifier(Modifier::Super),
         0xFFE5..=0xFFEE => KeyName::Modifier(Modifier::Other),
         _ => return None,
     })

@@ -1110,7 +1110,10 @@ in Raw rectangles of the 64x64 tiles that changed since its last update
 (at most 20 updates a second), in any true-color format of 8, 16 or 32
 bits it asks for. Its keys are typed as on this machine's keyboard
 (`keyboard::push_key`; no layout applies, the viewer sends characters;
-Control+letter, Alt+Tab), its mouse moves the desktop's pointer. Protocol
+Control+letter, Alt+Tab, Super with Enter, arrows, space, letters and
+digits for the desktop's shortcuts, Shift+Page Up/Down for scrollback;
+Super+Shift+digit cannot pass, as the viewer sends the shifted character),
+its mouse moves the desktop's pointer. Protocol
 versions 3.3, 3.7 and 3.8. Tests: `rfb` unit tests (DES known answers,
 messages in pieces, a 4 GB clipboard and 65,535 encodings bounded,
 pixel formats, keysyms), a self-test (keys, changed tiles) and `vnc.scn`
