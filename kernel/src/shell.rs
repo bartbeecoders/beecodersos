@@ -1058,12 +1058,12 @@ impl Shell {
         if !self.logging {
             return;
         }
-        let ev = eventlog::event("cmd")
-            .str("cmd", &name)
-            .str("status", status)
-            .num("ms", (time::uptime_ms() - start) as i64)
-            .finish();
-        eventlog::write(&mut self.storage.fs(), ev);
+        let Some(left_out) = eventlog::REPEATS.get().check(&name, status, time::uptime_ms()) else { return };
+        let mut ev = eventlog::event("cmd").str("cmd", &name).str("status", status).num("ms", (time::uptime_ms() - start) as i64);
+        if left_out > 0 {
+            ev = ev.num("repeats_left_out", left_out as i64);
+        }
+        eventlog::write(&mut self.storage.fs(), ev.finish());
     }
 
     fn execute(&mut self, line: &str) {

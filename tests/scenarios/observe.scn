@@ -42,3 +42,10 @@ $! crash exception
 ~ \[crash\] the previous boot crashed \(b\d+, exception\): CPU exception 6: Invalid opcode at rip=0x[0-9a-f]+
 $ cat /system/crash/history.jsonl
 ~ "kind":"exception","build":"\d+","cmd":"crash","msg":"CPU exception 6
+# A command repeated in a row is written once; the next line says how many were left out.
+$ pwd
+$ pwd
+$ pwd
+$ whoami
+$ log 3
+~ "cmd":"whoami","status":"ok","ms":\d+,"repeats_left_out":2
