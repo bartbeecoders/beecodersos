@@ -34,6 +34,9 @@ pub enum Key {
     /// The program's window was resized: it draws its content again for
     /// the new size (`console::pane_size`).
     Resized,
+    /// Shift+Page Up (true) or Shift+Page Down: the focused terminal looks
+    /// back through the lines that scrolled off (the desktop does it).
+    ScrollBack(bool),
     /// A key with the Super (Windows) key held: for the desktop, as on
     /// Omarchy (desk.rs); no program sees it.
     Super(SuperKey, bool),

@@ -15,6 +15,11 @@ use crate::display::Mode;
 use crate::font::{GLYPH_HEIGHT, GLYPH_WIDTH};
 use crate::gfx::{Canvas, Rect};
 use crate::vga::{self, Color};
+use alloc::collections::VecDeque;
+use alloc::vec::Vec;
+
+/// Lines kept for looking back.
+pub const HISTORY: usize = 1000;
 
 /// Most cells the screen keeps (320x100: enough for 2560x1600). A larger
 /// screen shows fewer lines than would fit.
@@ -47,6 +52,10 @@ pub struct FbCon<'a> {
     row: usize,
     attr: u8,
     scrolls: usize,
+    /// Lines that scrolled off the top, oldest first (at most `HISTORY`).
+    history: VecDeque<Vec<u16>>,
+    /// How many lines back the view is (Shift+Page Up); 0: the live text.
+    back: usize,
     /// Cell that shows the cursor.
     cursor: Option<usize>,
     /// Font size: 1 = 8x16 pixels per character, 2 = 16x32.
@@ -78,7 +87,22 @@ impl<'a> FbCon<'a> {
             rows = rows.min(cells.len() / cols);
         }
         let cols = if rows == 0 { 0 } else { cols };
-        FbCon { canvas, area, cells, cols, rows, col: 0, row: 0, attr: 0x07, scrolls: 0, cursor: None, scale, dirty: Rect::new(0, 0, 0, 0) }
+        FbCon {
+            canvas,
+            area,
+            cells,
+            cols,
+            rows,
+            col: 0,
+            row: 0,
+            attr: 0x07,
+            scrolls: 0,
+            history: VecDeque::new(),
+            back: 0,
+            cursor: None,
+            scale,
+            dirty: Rect::new(0, 0, 0, 0),
+        }
     }
 
     /// Font size: 1 or 2.
@@ -160,6 +184,7 @@ impl<'a> FbCon<'a> {
         if self.cols == 0 {
             return;
         }
+        self.live();
         match c {
             '\n' => self.new_line(),
             '\r' => self.col = 0,
@@ -185,6 +210,7 @@ impl<'a> FbCon<'a> {
 
     /// Put a ready-made cell (VGA format) on the screen; outside it: ignored.
     pub fn put_cell(&mut self, row: usize, col: usize, cell: u16) {
+        self.live();
         if row < self.rows && col < self.cols {
             self.set_cell(row * self.cols + col, cell);
         }
@@ -231,9 +257,54 @@ impl<'a> FbCon<'a> {
         fits
     }
 
+    /// The text kept for looking back: (first line shown, lines shown,
+    /// lines in all), counting the history and the screen.
+    pub fn history_view(&self) -> (usize, usize, usize) {
+        (self.history.len() - self.back, self.rows, self.history.len() + self.rows)
+    }
+
+    /// Text that came in while looking back: show the live text again.
+    fn live(&mut self) {
+        if self.back > 0 {
+            self.back = 0;
+            self.redraw();
+        }
+    }
+
+    /// Look `lines` further back (negative: forward again), within what is
+    /// kept. The live text is not changed; new text brings it back.
+    pub fn scroll_back(&mut self, lines: isize) {
+        let back = (self.back as isize + lines).clamp(0, self.history.len() as isize) as usize;
+        if back != self.back {
+            self.back = back;
+            self.redraw();
+        }
+    }
+
     /// Draw every cell again (after something else drew on the screen).
     pub fn redraw(&mut self) {
         if self.cols == 0 {
+            return;
+        }
+        if self.back > 0 {
+            // Looking back: lines from the history, then the top of the screen.
+            self.canvas.fill_rect(self.area, PALETTE[0]);
+            self.touch(self.area);
+            let start = self.history.len() - self.back;
+            for row in 0..self.rows {
+                let line: &[u16] = match self.history.get(start + row) {
+                    Some(old) => old,
+                    None => {
+                        let r = row - self.back;
+                        &self.cells[r * self.cols..(r + 1) * self.cols]
+                    }
+                };
+                for (col, cell) in line.iter().take(self.cols).enumerate() {
+                    let (fg, bg) = (PALETTE[(cell >> 8) as usize & 0x0F], PALETTE[(cell >> 12) as usize]);
+                    let (x, y) = self.origin(row * self.cols + col);
+                    self.canvas.glyph(x, y, *cell as u8, fg, bg, self.scale);
+                }
+            }
             return;
         }
         self.canvas.fill_rect(self.area, PALETTE[(self.attr >> 4) as usize]);
@@ -273,6 +344,10 @@ impl<'a> FbCon<'a> {
             return;
         }
         let (cols, last) = (self.cols, self.cols * (self.rows - 1));
+        if self.history.len() == HISTORY {
+            self.history.pop_front();
+        }
+        self.history.push_back(self.cells[..cols].to_vec());
         for i in 0..last {
             self.set_cell(i, self.cells[i + cols]);
         }

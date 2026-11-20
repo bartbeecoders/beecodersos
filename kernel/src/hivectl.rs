@@ -85,6 +85,8 @@ pub fn parse_keys(text: &str) -> Option<alloc::vec::Vec<Key>> {
                 "pageup" => Key::PageUp,
                 "pagedown" => Key::PageDown,
                 "alt+tab" => Key::NextWindow,
+                "shift+pageup" => Key::ScrollBack(true),
+                "shift+pagedown" => Key::ScrollBack(false),
                 "lbrace" => Key::Char('{'),
                 name if name.starts_with("super+") => {
                     use crate::input::SuperKey;

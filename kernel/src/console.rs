@@ -255,6 +255,8 @@ fn show(force: bool) {
         return;
     }
     if DESKTOP.get().is_some() {
+        update_terminal_scroll_bars();
+        let Screen::Graphics(screen) = SCREEN.get() else { return };
         window_changed(TERMINAL, screen.take_dirty());
         for i in 0..PANES.get().len() {
             let pane = &mut PANES.get()[i];
@@ -884,7 +886,11 @@ pub fn mouse_event(buttons: u8, dx: i32, dy: i32) {
             show(true);
         }
         MouseEffect::Scroll { id, up } => {
-            if SCROLLS.get().len() < 16 {
+            // A terminal scrolls its own history; another program gets Page Up / Down.
+            let terminal = id == TERMINAL || PANES.get().iter().any(|p| p.window == id && p.con.history_view().2 > p.con.history_view().1);
+            if terminal {
+                scroll_window(id, up);
+            } else if SCROLLS.get().len() < 16 {
                 SCROLLS.get().push((id, up));
             }
         }
@@ -985,6 +991,57 @@ pub fn toggle_fullscreen() {
         resize_pane(top);
     }
     redraw_all();
+}
+
+/// Look a page back (`up`) or forward through what scrolled off the top
+/// of a terminal window (the console's own, or another).
+fn scroll_window(id: usize, up: bool) {
+    let page = |rows: usize| rows.saturating_sub(1).max(1) as isize;
+    if id == TERMINAL {
+        if let Screen::Graphics(screen) = SCREEN.get() {
+            let lines = page(screen.height());
+            screen.scroll_back(if up { lines } else { -lines });
+        }
+    } else if let Some(pane) = PANES.get().iter_mut().find(|p| p.window == id) {
+        let lines = page(pane.con.height());
+        pane.con.scroll_back(if up { lines } else { -lines });
+    }
+    show(true);
+}
+
+/// Shift+Page Up / Down: the focused window looks back or forward.
+pub fn scroll_focused(up: bool) {
+    if let Some(top) = DESKTOP.get().as_ref().and_then(|d| d.top()) {
+        scroll_window(top, up);
+    } else if let Screen::Graphics(screen) = SCREEN.get() {
+        // No desktop: the whole screen is the console.
+        let lines = screen.height().saturating_sub(1).max(1) as isize;
+        screen.scroll_back(if up { lines } else { -lines });
+        show(true);
+    }
+}
+
+/// Terminals show on their scroll bar where in their history they are.
+fn update_terminal_scroll_bars() {
+    let Some(desk) = DESKTOP.get().as_mut() else { return };
+    let mut changed = Vec::new();
+    if let Screen::Graphics(screen) = SCREEN.get() {
+        let view = screen.history_view();
+        if view.2 > view.1 && desk.set_scroll(TERMINAL, Some(view)) {
+            changed.push(TERMINAL);
+        }
+    }
+    for pane in PANES.get().iter() {
+        let view = pane.con.history_view();
+        if view.2 > view.1 && desk.set_scroll(pane.window, Some(view)) {
+            changed.push(pane.window);
+        }
+    }
+    for id in changed {
+        if let Some(bar) = desk.window(id).and_then(|w| w.scroll_bar()) {
+            compose(bar);
+        }
+    }
 }
 
 /// Super+W: the focused window closes (not the console's own).

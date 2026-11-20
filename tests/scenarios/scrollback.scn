@@ -1,0 +1,13 @@
+# The console keeps what scrolled off the top: its window gets a scroll bar
+# (1834..1844 from y=104 at 1920x1080), the thumb at the bottom; Shift+Page
+# Up looks a page back (the thumb leaves the bottom), new text comes back.
+@ai
+$ ai control on
+$ help
+$ help
+@screenshot 1920x1080 pixels 1839,985=8a9bb0
+@ctl keys {machine} "{shift+pageup}"
+# (no command typed here: new text in the console brings the live view back)
+@screenshot 1920x1080 pixels 1839,985=2b3a55
+@ctl keys {machine} "{shift+pagedown}"
+@screenshot 1920x1080 pixels 1839,985=8a9bb0

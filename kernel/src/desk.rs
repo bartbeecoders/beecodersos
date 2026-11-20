@@ -199,6 +199,10 @@ pub fn route(key: Key) -> Option<Key> {
         super_key(k, shift);
         return None;
     }
+    if let Key::ScrollBack(up) = key {
+        console::scroll_focused(up);
+        return None;
+    }
     let Some(window) = console::focused_pane() else { return Some(key) };
     if let Some(terminal) = TERMINALS.get().iter().find(|t| t.window == window) {
         session::push_key(terminal.session, key);
@@ -252,6 +256,10 @@ pub fn type_keys(keys: &[Key]) -> Result<usize, &'static str> {
         }
         if let Key::Super(k, shift) = *key {
             super_key(k, shift);
+            continue;
+        }
+        if let Key::ScrollBack(up) = *key {
+            console::scroll_focused(up);
             continue;
         }
         let terminal = console::focused_pane().and_then(|window| TERMINALS.get().iter().find(|t| t.window == window));
