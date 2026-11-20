@@ -1599,7 +1599,11 @@ desktop.
   the current one's windows show (and are tiled), and the boxes left of the
   desktop buttons show workspaces 1-5 (blue: shown, lighter: has windows;
   a click shows it). On an empty workspace nothing has the focus and typed
-  keys go nowhere (`desktop-workspaces.scn`). `desktop tile off` lets them float
+  keys go nowhere (`desktop-workspaces.scn`). **Launcher:** Super+Space
+  opens "Start" (`kernel/src/launcher.rs`): the programs by name (Terminal,
+  Files, Notes, Web, Camera, Monitor, Pictures); typing narrows the list
+  (names that start with it first), the arrows or a click choose, Enter
+  starts it and the launcher closes, Esc closes it (`desktop-launcher.scn`). `desktop tile off` lets them float
   where they are (`desktop-tile.scn`, `desktop-resize-terminal.scn`).
   **Buttons** at the top of the desktop start programs with a click:
   Terminal, Files (the file manager on the home folder), Notes (the

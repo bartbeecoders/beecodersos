@@ -1,0 +1,20 @@
+# The launcher (Super+Space, as on Omarchy): typing narrows the list,
+# Enter starts the chosen program and the launcher closes.
+@ai
+$ ai control on
+@ctl keys {machine} "{super+space}"
+$ sleep 1
+$ threads
+~ launcher +(waiting|ready|running)
+@ctl text {machine}
+~ --- window \d+: Start ---
+~ Terminal +a shell in a window
+@ctl keys {machine} "mon"
+@ctl text {machine}
+~ Start: mon
+~ Monitor +processors, memory
+@ctl keys {machine} "{enter}"
+$ sleep 1
+$ threads
+~ monitor +(waiting|ready|running)
+!~ launcher

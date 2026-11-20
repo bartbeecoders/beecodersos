@@ -60,6 +60,7 @@ mod install;
 mod json;
 mod interrupts;
 mod keyboard;
+mod launcher;
 mod layouts;
 mod net;
 mod paging;

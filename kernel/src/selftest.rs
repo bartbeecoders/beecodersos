@@ -50,6 +50,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("event log: repeated commands are folded", eventlog_repeats),
     ("windows: resized with the grip, in whole characters", wm_resize),
     ("timers: durations and what is left", timer_durations),
+    ("launcher: finding programs by name", launcher_search),
     ("crash: restart or halt afterwards", crash_then),
     ("gfx: the fast drawing paths give the same picture", gfx_fast_paths),
     ("screen in memory: changed parts are copied, in batches", screen_in_memory),
@@ -1486,6 +1487,21 @@ fn display_g3() -> TestResult {
     check_eq!(paging::entry_with_wc(0xFD00_109B), 0xFD00_008B); // other caching bits go
     check_eq!(paging::entry_with_wc(0xFD00_0082), 0xFD00_0082); // not present: untouched
     check_eq!(paging::entry_with_wc(0x0010_0003), 0x0010_0003); // points to a page table: untouched
+    Ok(())
+}
+
+fn launcher_search() -> TestResult {
+    use crate::launcher::{matches, PROGRAMS};
+    check_eq!(matches("").len(), PROGRAMS.len()); // nothing typed: all, in order
+    check_eq!(matches("")[0], 0);
+    let name = |i: usize| PROGRAMS[i].0;
+    check_eq!(matches("mon").iter().map(|&i| name(i)).collect::<Vec<_>>(), vec!["Monitor"]);
+    check_eq!(matches("TERM").first().map(|&i| name(i)), Some("Terminal")); // any case
+    // A name that starts with it comes before one that only mentions it.
+    let found: Vec<&str> = matches("c").iter().map(|&i| name(i)).collect();
+    check_eq!(found.first().copied(), Some("Camera"));
+    check!(found.contains(&"Pictures")); // "pictures" has a c in it
+    check!(matches("zzz").is_empty());
     Ok(())
 }
 
