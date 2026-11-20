@@ -1224,6 +1224,26 @@ impl Shell {
                 Ok(v) => println!("{v}"),
                 Err(e) => error(&format!("calc: {e}")),
             },
+            ("cal", args) if args.len() <= 2 => {
+                let local = time::now_unix().map(|unix| {
+                    let (minutes, _) = time::offset(time::zone(), unix);
+                    time::civil_from_days((unix as i64 + minutes as i64 * 60).div_euclid(86_400))
+                });
+                let wanted = match (args, local) {
+                    ([], Some((y, m, _))) => Some((y, m)),
+                    ([m, y], _) => m.parse::<u32>().ok().filter(|m| (1..=12).contains(m)).zip(y.parse::<i64>().ok().filter(|y| (1..=9999).contains(y))).map(|(m, y)| (y, m)),
+                    _ => None,
+                };
+                match wanted {
+                    Some((y, m)) => {
+                        let today = local.filter(|(ly, lm, _)| (*ly, *lm) == (y, m)).map(|(_, _, d)| d);
+                        println!("{}", crate::clock::month_text(y, m, today));
+                    }
+                    None if args.is_empty() => error("cal: the clock is not set (see 'ntp'); 'cal MONTH YEAR' still works"),
+                    None => error("usage: cal [MONTH YEAR]   (e.g. cal 12 2026)"),
+                }
+            }
+            ("cal", _) => error("usage: cal [MONTH YEAR]   (e.g. cal 12 2026)"),
             ("date", []) => match time::now_unix() {
                 Some(t) if time::zone() == time::Zone::Utc => println!("{}", time::iso8601(t)),
                 Some(t) => println!("{}   ({})", time::local(time::zone(), t), time::iso8601(t)),
@@ -3147,6 +3167,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("timer DURATION [MESSAGE]", "a kitchen timer (5m, 1h30m, 90s): a window and a tune when it is up; 'timer off N' cancels"),
     ("alarm HH:MM [MESSAGE]", "an alarm at the next HH:MM on the local clock: a window and a tune (it is a timer: 'timers', 'timer off N')"),
     ("timers", "the running timers and alarms, and what is left of them"),
+    ("cal [MONTH YEAR]", "a month's calendar, weeks from Monday, today in [brackets]"),
     ("lsusb", "USB controller and devices"),
     ("camera [raw|log]", "USB cameras: the picture formats and sizes they offer ('raw': the description as the camera gave it; 'log': what the driver noted)"),
     ("camera timelapse FILE.avi SECS [MIN]", "a time-lapse video: a picture every SECS seconds, played back at 10 a second"),

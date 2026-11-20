@@ -4,7 +4,7 @@
 
 use crate::{console, thread, time};
 use alloc::format;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use core::sync::atomic::{AtomicBool, Ordering};
 
 /// Set to show the clock again now (the time zone changed).
@@ -52,4 +52,39 @@ pub fn start() {
         let minute = now / 60;
         thread::pause(|| AGAIN.swap(false, Ordering::SeqCst) || time::now_unix().is_some_and(|t| t / 60 != minute));
     });
+}
+
+/// A month as `cal` shows it: the title, then weeks from Monday; `today`
+/// (a day of this month) is marked with brackets.
+pub fn month_text(year: i64, month: u32, today: Option<u32>) -> String {
+    const MONTHS: [&str; 12] = [
+        "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December",
+    ];
+    let first = time::days_from_civil(year, month, 1);
+    let next = if month == 12 { time::days_from_civil(year + 1, 1, 1) } else { time::days_from_civil(year, month + 1, 1) };
+    let days = (next - first) as u32;
+    // 1970-01-01 was a Thursday: Monday = 0.
+    let weekday = (first + 3).rem_euclid(7) as u32;
+    let title = format!("{} {year}", MONTHS[(month - 1) as usize % 12]);
+    let mut text = format!("{:^28}\n", title).trim_end().to_string();
+    text += "\n Mo  Tu  We  Th  Fr  Sa  Su\n";
+    let mut col = 0;
+    for _ in 0..weekday {
+        text += "    ";
+        col += 1;
+    }
+    for d in 1..=days {
+        if Some(d) == today {
+            text += &format!("[{d:>2}]");
+        } else {
+            text += &format!(" {d:>2} ");
+        }
+        col += 1;
+        if col == 7 {
+            text = String::from(text.trim_end());
+            text.push('\n');
+            col = 0;
+        }
+    }
+    String::from(text.trim_end())
 }
