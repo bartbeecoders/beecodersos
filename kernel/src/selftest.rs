@@ -52,6 +52,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("timers: durations and what is left", timer_durations),
     ("launcher: finding programs by name", launcher_search),
     ("sizes for people (du)", human_sizes),
+    ("Tab completion: what it adds", tab_completion),
     ("crash: restart or halt afterwards", crash_then),
     ("gfx: the fast drawing paths give the same picture", gfx_fast_paths),
     ("screen in memory: changed parts are copied, in batches", screen_in_memory),
@@ -1488,6 +1489,21 @@ fn display_g3() -> TestResult {
     check_eq!(paging::entry_with_wc(0xFD00_109B), 0xFD00_008B); // other caching bits go
     check_eq!(paging::entry_with_wc(0xFD00_0082), 0xFD00_0082); // not present: untouched
     check_eq!(paging::entry_with_wc(0x0010_0003), 0x0010_0003); // points to a page table: untouched
+    Ok(())
+}
+
+fn tab_completion() -> TestResult {
+    use crate::editor::completion;
+    let s = |v: &[&str]| v.iter().map(|x| alloc::string::String::from(*x)).collect::<Vec<_>>();
+    // One choice: the rest of it and a space; a folder: no space after its '/'.
+    check_eq!(completion("tim", &s(&["timer", "times"])), Some(alloc::string::String::from("e")));
+    check_eq!(completion("time", &s(&["timer"])), Some(alloc::string::String::from("r ")));
+    check_eq!(completion("/da", &s(&["/data/"])), Some(alloc::string::String::from("ta/")));
+    check_eq!(completion("ho", &s(&["honey.avi", "honey.jpg", "honeycomb.png"])), Some(alloc::string::String::from("ney")));
+    check_eq!(completion("honey", &s(&["honey.avi", "honey.jpg"])), Some(alloc::string::String::from(".")));
+    check_eq!(completion("honey.", &s(&["honey.avi", "honey.jpg"])), None); // they part here
+    check_eq!(completion("x", &s(&["timer"])), None);
+    check_eq!(completion("", &s(&[])), None);
     Ok(())
 }
 

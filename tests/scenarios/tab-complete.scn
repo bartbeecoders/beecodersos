@@ -1,0 +1,9 @@
+# Tab completes: a command as the first word, else a file or folder.
+$ mkdir /hive
+$ echo honey > /hive/jar.txt
+$ ech	hello
+hello
+# (a Tab at the end of a line is stripped by the runner: a word follows)
+$ cp /hi	j	/copy.txt
+$ cat /copy.txt
+honey

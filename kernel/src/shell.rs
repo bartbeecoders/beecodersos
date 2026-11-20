@@ -986,7 +986,10 @@ impl Shell {
         loop {
             self.show_notices();
             self.prompt();
-            match self.editor.read_line() {
+            let cwd = self.cwd.clone();
+            let storage = &mut self.storage;
+            let line = self.editor.read_line_with(&mut |word, first| completions(storage, &cwd, word, first));
+            match line {
                 Line::Text(line) => self.run_line(&line),
                 Line::Cancelled => {}
                 Line::ClearScreen => console::clear(),
@@ -3595,4 +3598,43 @@ pub fn human_size(bytes: u64) -> String {
         unit += 1;
     }
     format!("{value:.1} {}", UNITS[unit])
+}
+
+/// What a word could become, for Tab: as the first word a command name;
+/// otherwise a file or folder (folders end in '/'), looked up in the folder
+/// the word points into (relative to `cwd`).
+fn completions(storage: &mut Storage, cwd: &str, word: &str, first: bool) -> Vec<String> {
+    if first {
+        let mut names: Vec<String> = COMMANDS
+            .iter()
+            .flat_map(|(usage, _)| usage.split(',').map(|part| part.trim().split([' ', '|']).next().unwrap_or("")))
+            .filter(|name| !name.is_empty() && name.starts_with(word))
+            .map(String::from)
+            .collect();
+        names.sort();
+        names.dedup();
+        return names;
+    }
+    let (dir_part, prefix) = match word.rfind('/') {
+        Some(at) => (&word[..=at], &word[at + 1..]),
+        None => ("", word),
+    };
+    let folder = if dir_part.starts_with('/') {
+        String::from(dir_part)
+    } else if dir_part.is_empty() {
+        String::from(cwd)
+    } else {
+        format!("{}/{}", cwd.trim_end_matches('/'), dir_part)
+    };
+    let folder = match folder.trim_end_matches('/') {
+        "" => "/",
+        trimmed => trimmed,
+    };
+    let Ok(entries) = storage.fs().read_dir(folder) else { return Vec::new() };
+    entries
+        .into_iter()
+        .filter(|e| e.name.starts_with(prefix))
+        .take(200)
+        .map(|e| format!("{dir_part}{}{}", e.name, if e.kind == FileKind::Directory { "/" } else { "" }))
+        .collect()
 }
