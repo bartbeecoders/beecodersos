@@ -1,0 +1,23 @@
+# A double-click on a window's title bar fills the screen with it (as
+# Super+F), a second one gives it back its place. The first extra window's
+# title bar is at 32..684, 34..58; filling the screen its right border is
+# at 1907.
+@usb kbd mouse
+$ layout us
+$ files /
+~ in a new window
+@screenshot 1920x1080 pixels 1907,300=a8d0f0
+# The pointer starts in the middle (960,540).
+@mouse -660 -495
+@button left down
+@button left up
+@button left down
+@button left up
+$ sleep 1
+@screenshot 1920x1080 pixels 1907,300=1f3a5f
+@button left down
+@button left up
+@button left down
+@button left up
+$ sleep 1
+@screenshot 1920x1080 pixels 1907,300=a8d0f0 683,300=1f3a5f
