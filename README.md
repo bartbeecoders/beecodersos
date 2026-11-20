@@ -1584,7 +1584,12 @@ desktop.
   remains. Opening or closing a window lays them out again, and each one's
   content is made anew for its size (also the console's own window, which
   can now be resized like the others). While tiling, windows are not
-  dragged, resized or folded by hand. `desktop tile off` lets them float
+  dragged, resized or folded by hand. **Keys, as on Omarchy:**
+  Super+Enter opens a terminal, Super+W closes the focused window,
+  Super+arrows move the focus to the window that way, Super+Shift+arrows
+  swap the window with that one, Super+F fills the screen with it (again:
+  back), Super+T tiles or floats (`desktop-super.scn`; from the host:
+  `beectl keys MACHINE "{super+left}"`). `desktop tile off` lets them float
   where they are (`desktop-tile.scn`, `desktop-resize-terminal.scn`).
   **Buttons** at the top of the desktop start programs with a click:
   Terminal, Files (the file manager on the home folder), Notes (the

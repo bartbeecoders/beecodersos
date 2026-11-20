@@ -59,6 +59,8 @@ pub struct Window {
     /// What its program shows of a longer text: (first line shown, lines
     /// shown, lines in all). A scroll bar is drawn when not all fit.
     pub scroll: Option<(usize, usize, usize)>,
+    /// Filling the screen (Super+F): the frame it had before.
+    pub saved: Option<Rect>,
 }
 
 impl Window {
@@ -261,6 +263,17 @@ pub struct Desktop {
     cell: (usize, usize),
     /// Windows are tiled (`tile`): they cannot be dragged or resized by hand.
     pub tiling: bool,
+    /// The order windows are tiled in (oldest first; Super+Shift+arrow swaps).
+    tile_order: Vec<usize>,
+}
+
+/// A direction for moving the focus or a window with the keyboard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dir {
+    Left,
+    Right,
+    Up,
+    Down,
 }
 
 /// Where the row of desktop buttons starts, and how high a button is.
@@ -280,6 +293,7 @@ impl Desktop {
             width: 0,
             cell: (GLYPH_WIDTH, GLYPH_HEIGHT),
             tiling: false,
+            tile_order: Vec::new(),
         }
     }
 
@@ -287,13 +301,14 @@ impl Desktop {
     /// `tile_frames`); folded windows unfold. Returns the windows whose
     /// size changed.
     pub fn tile(&mut self, area: Rect) -> Vec<usize> {
-        let mut order: Vec<usize> = (0..self.windows.len()).collect();
-        order.sort_by_key(|&i| self.ids[i]);
+        self.tile_order.retain(|id| self.ids.contains(id));
+        let order: Vec<usize> = self.tile_order.iter().filter_map(|id| self.position(*id)).collect();
         let frames = tile_frames(order.len(), area, self.cell);
         let mut changed = Vec::new();
         for (&i, frame) in order.iter().zip(frames) {
             let window = &mut self.windows[i];
             window.collapsed = None;
+            window.saved = None;
             if (window.frame.width, window.frame.height) != (frame.width, frame.height) {
                 changed.push(self.ids[i]);
             }
@@ -388,8 +403,9 @@ impl Desktop {
     /// Add a window on top of the others; returns its number (the first
     /// window gets 0, and numbers are not used again).
     pub fn open(&mut self, title: &str, frame: Rect) -> usize {
-        self.windows.push(Window { title: String::from(title), frame, resizable: true, collapsed: None, scroll: None });
+        self.windows.push(Window { title: String::from(title), frame, resizable: true, collapsed: None, scroll: None, saved: None });
         self.ids.push(self.next_id);
+        self.tile_order.push(self.next_id);
         self.next_id += 1;
         self.next_id - 1
     }
@@ -447,7 +463,67 @@ impl Desktop {
         let Some(at) = self.position(id) else { return false };
         self.windows.remove(at);
         self.ids.remove(at);
+        self.tile_order.retain(|i| *i != id);
         true
+    }
+
+    /// The window next to `id` in direction `dir`: of those whose middle
+    /// lies that way, the nearest (distance across counts double).
+    pub fn neighbour(&self, id: usize, dir: Dir) -> Option<usize> {
+        let middle = |r: Rect| ((r.x + r.width / 2) as i64, (r.y + r.height / 2) as i64);
+        let (x, y) = middle(self.window(id)?.frame);
+        self.ids
+            .iter()
+            .zip(self.windows.iter())
+            .filter(|(other, _)| **other != id)
+            .filter_map(|(other, w)| {
+                let (ox, oy) = middle(w.frame);
+                let (ahead, across) = match dir {
+                    Dir::Left => (x - ox, (oy - y).abs()),
+                    Dir::Right => (ox - x, (oy - y).abs()),
+                    Dir::Up => (y - oy, (ox - x).abs()),
+                    Dir::Down => (oy - y, (ox - x).abs()),
+                };
+                (ahead > 0).then_some((ahead + 2 * across, *other))
+            })
+            .min()
+            .map(|(_, other)| other)
+    }
+
+    /// Put a window somewhere else (another size too).
+    pub fn place(&mut self, id: usize, frame: Rect) {
+        if let Some(at) = self.position(id) {
+            self.windows[at].frame = frame;
+            self.windows[at].collapsed = None;
+        }
+    }
+
+    /// Swap the places of two windows in the tiling order.
+    pub fn swap(&mut self, a: usize, b: usize) -> bool {
+        let (Some(i), Some(j)) = (self.tile_order.iter().position(|x| *x == a), self.tile_order.iter().position(|x| *x == b)) else {
+            return false;
+        };
+        self.tile_order.swap(i, j);
+        true
+    }
+
+    /// Fill `area` with a window (on top), or give it back the frame it had.
+    /// Returns its new frame.
+    pub fn toggle_full(&mut self, id: usize, area: Rect) -> Option<Rect> {
+        let at = self.position(id)?;
+        let cell = self.cell;
+        let window = &mut self.windows[at];
+        window.collapsed = None;
+        window.frame = match window.saved.take() {
+            Some(frame) => frame,
+            None => {
+                window.saved = Some(window.frame);
+                tile_frames(1, area, cell)[0]
+            }
+        };
+        let frame = window.frame;
+        self.raise(id);
+        Some(frame)
     }
 
     /// Draw the background and every window frame. The owners then draw

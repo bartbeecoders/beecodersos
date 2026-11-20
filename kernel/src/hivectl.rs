@@ -60,7 +60,8 @@ pub const MAX_KEYS: usize = 2000;
 /// The keys a text stands for: every character is typed as it is (a line
 /// end is Enter), and names in braces are keys: `{enter}` `{tab}` `{esc}`
 /// `{backspace}` `{delete}` `{up}` `{down}` `{left}` `{right}` `{home}`
-/// `{end}` `{pageup}` `{pagedown}` `{alt+tab}` `{ctrl+LETTER}`, and
+/// `{end}` `{pageup}` `{pagedown}` `{alt+tab}` `{ctrl+LETTER}`,
+/// `{super+KEY}` / `{super+shift+KEY}` (KEY: enter, an arrow, a letter), and
 /// `{lbrace}` for a `{` itself. `None`: an unknown name, a brace that is
 /// not closed, or too many keys.
 pub fn parse_keys(text: &str) -> Option<alloc::vec::Vec<Key>> {
@@ -85,6 +86,24 @@ pub fn parse_keys(text: &str) -> Option<alloc::vec::Vec<Key>> {
                 "pagedown" => Key::PageDown,
                 "alt+tab" => Key::NextWindow,
                 "lbrace" => Key::Char('{'),
+                name if name.starts_with("super+") => {
+                    use crate::input::SuperKey;
+                    let rest = &name[6..];
+                    let (shift, rest) = match rest.strip_prefix("shift+") {
+                        Some(r) => (true, r),
+                        None => (false, rest),
+                    };
+                    let key = match rest {
+                        "enter" => SuperKey::Enter,
+                        "left" => SuperKey::Left,
+                        "right" => SuperKey::Right,
+                        "up" => SuperKey::Up,
+                        "down" => SuperKey::Down,
+                        one if one.len() == 1 && one.as_bytes()[0].is_ascii_alphanumeric() => SuperKey::Char(one.as_bytes()[0].to_ascii_lowercase() as char),
+                        _ => return None,
+                    };
+                    Key::Super(key, shift)
+                }
                 name => match name.strip_prefix("ctrl+").map(str::as_bytes) {
                     Some([letter @ b'a'..=b'z']) => Key::Ctrl(*letter as char),
                     _ => return None,

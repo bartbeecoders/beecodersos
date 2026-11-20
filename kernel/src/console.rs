@@ -919,6 +919,81 @@ pub fn set_tiling(on: bool) {
     show(true);
 }
 
+/// The part of the screen windows are laid out in: below the button row.
+fn work_area() -> Option<Rect> {
+    let bounds = SHADOW.get().as_ref().map(|s| s.back.bounds())?;
+    let top = wm::top_bar_height();
+    Some(Rect::new(0, top, bounds.width, bounds.height.saturating_sub(top)))
+}
+
+/// After the keyboard changed windows (Super keys): draw it all again.
+fn redraw_all() {
+    if let Some(bounds) = SHADOW.get().as_ref().map(|s| s.back.bounds()) {
+        let _rebuilding = Rebuilding::start();
+        compose(bounds);
+    }
+    show(true);
+}
+
+/// Super+arrow: the focus goes to the window that way.
+pub fn focus_towards(dir: wm::Dir) {
+    let Some(desk) = DESKTOP.get().as_mut() else { return };
+    let Some(top) = desk.top() else { return };
+    if let Some(next) = desk.neighbour(top, dir) {
+        desk.raise(next);
+        redraw_all();
+    }
+}
+
+/// Super+Shift+arrow: the focused window swaps places with the one that way.
+pub fn swap_towards(dir: wm::Dir) {
+    let Some(desk) = DESKTOP.get().as_mut() else { return };
+    let Some(top) = desk.top() else { return };
+    let Some(other) = desk.neighbour(top, dir) else { return };
+    if *TILING.get() {
+        desk.swap(top, other);
+        retile();
+    } else {
+        // Floating: the two frames change places (sizes too).
+        let (Some(a), Some(b)) = (desk.window(top).map(|w| w.frame), desk.window(other).map(|w| w.frame)) else { return };
+        desk.place(top, b);
+        desk.place(other, a);
+        for id in [top, other] {
+            if id == TERMINAL {
+                resize_terminal();
+            } else {
+                resize_pane(id);
+            }
+        }
+    }
+    redraw_all();
+}
+
+/// Super+F: the focused window fills the screen, or goes back.
+pub fn toggle_fullscreen() {
+    let Some(area) = work_area() else { return };
+    let Some(desk) = DESKTOP.get().as_mut() else { return };
+    let Some(top) = desk.top() else { return };
+    let was_full = desk.window(top).is_some_and(|w| w.saved.is_some());
+    desk.toggle_full(top, area);
+    if was_full {
+        retile();
+    }
+    if top == TERMINAL {
+        resize_terminal();
+    } else {
+        resize_pane(top);
+    }
+    redraw_all();
+}
+
+/// Super+W: the focused window closes (not the console's own).
+pub fn close_focused() {
+    if let Some(top) = DESKTOP.get().as_ref().and_then(|d| d.top()).filter(|id| *id != TERMINAL) {
+        CLOSING.get().push(top);
+    }
+}
+
 /// While tiling: lay all windows out again (a window came or went), and
 /// make the content of those whose size changed anew.
 fn retile() {

@@ -34,6 +34,21 @@ pub enum Key {
     /// The program's window was resized: it draws its content again for
     /// the new size (`console::pane_size`).
     Resized,
+    /// A key with the Super (Windows) key held: for the desktop, as on
+    /// Omarchy (desk.rs); no program sees it.
+    Super(SuperKey, bool),
+}
+
+/// The keys the desktop knows with Super; the bool of `Key::Super` is Shift.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SuperKey {
+    Enter,
+    Left,
+    Right,
+    Up,
+    Down,
+    /// A letter or digit (lowercase).
+    Char(char),
 }
 
 /// The next key from the machine's keyboard that is meant for the console:

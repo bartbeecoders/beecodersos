@@ -155,6 +155,8 @@ struct Decoder {
     rctrl: bool,
     alt: bool,
     altgr: bool,
+    /// The Super (Windows) key: keys with it go to the desktop.
+    gui: bool,
     caps: bool,
     num: bool,
     dead: Option<char>,
@@ -173,6 +175,7 @@ impl Decoder {
             rctrl: false,
             alt: false,
             altgr: false,
+            gui: false,
             caps: false,
             num: true,
             dead: None,
@@ -219,6 +222,7 @@ impl Decoder {
             (true, 0x1D) => self.rctrl = pressed,
             (false, 0x38) => self.alt = pressed,
             (true, 0x38) => self.altgr = pressed,
+            (true, 0x5B) | (true, 0x5C) => self.gui = pressed, // left and right Super
             (true, 0x2A) | (true, 0x36) => {} // fake shifts around PrtSc etc.
             _ if pressed => return self.press(e0, code),
             _ => {}
@@ -227,6 +231,23 @@ impl Decoder {
     }
 
     fn press(&mut self, e0: bool, code: u8) -> Option<Key> {
+        if self.gui {
+            use crate::input::SuperKey;
+            let shift = self.shift();
+            let key = match (e0, code) {
+                (_, 0x1C) => SuperKey::Enter,
+                (true, 0x4B) => SuperKey::Left,
+                (true, 0x4D) => SuperKey::Right,
+                (true, 0x48) => SuperKey::Up,
+                (true, 0x50) => SuperKey::Down,
+                (false, _) => match self.layout.map(code, false, false)? {
+                    Mapped::Char(c) if c.is_ascii_alphanumeric() => SuperKey::Char(c.to_ascii_lowercase()),
+                    _ => return None,
+                },
+                _ => return None,
+            };
+            return Some(Key::Super(key, shift));
+        }
         let nav = |code| match code {
             0x47 => Some(Key::Home),
             0x48 => Some(Key::Up),
