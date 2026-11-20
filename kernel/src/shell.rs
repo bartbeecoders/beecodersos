@@ -1161,8 +1161,10 @@ impl Shell {
             ("pwd", []) => println!("{}", self.cwd),
             ("cd", []) => self.cwd = String::from("/"),
             ("cd", [dir]) => self.cd(dir),
-            ("ls" | "dir", []) => self.ls(&self.cwd.clone()),
-            ("ls" | "dir", [dir]) => self.ls(&self.abs(dir)),
+            ("ls" | "dir", []) => self.ls(&self.cwd.clone(), false),
+            ("ls" | "dir", ["-s"]) => self.ls(&self.cwd.clone(), true),
+            ("ls" | "dir", ["-s", dir]) => self.ls(&self.abs(dir), true),
+            ("ls" | "dir", [dir]) => self.ls(&self.abs(dir), false),
             ("find", [what]) => self.find(&self.cwd.clone(), what),
             ("find", [dir, what]) => self.find(&self.abs(dir), what),
             ("find", _) => error("usage: find [FOLDER] TEXT   (paths below FOLDER whose name contains TEXT, any case)"),
@@ -2965,9 +2967,22 @@ impl Shell {
         }
     }
 
-    fn ls(&mut self, path: &str) {
+    /// `ls [-s] [DIR]`: folders and files (`by_size`: the files largest first,
+    /// with sizes for people, and the total).
+    fn ls(&mut self, path: &str, by_size: bool) {
         let listing = self.storage.fs().read_dir(path);
         match listing {
+            Ok(mut entries) if by_size => {
+                entries.sort_by(|a, b| (b.kind == FileKind::Directory).cmp(&(a.kind == FileKind::Directory)).then(b.size.cmp(&a.size)));
+                let total: u64 = entries.iter().filter(|e| e.kind == FileKind::File).map(|e| e.size).sum();
+                for e in entries {
+                    match e.kind {
+                        FileKind::Directory => println!("  {:>10}  {}/", "<dir>", e.name),
+                        FileKind::File => println!("  {:>10}  {}", human_size(e.size), e.name),
+                    }
+                }
+                println!("  {:>10}  in the files here", human_size(total));
+            }
             Ok(entries) => {
                 for e in entries {
                     match e.kind {
@@ -3254,7 +3269,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("login, logout", "log in at the console / log out (with accounts, the console asks at boot)"),
     ("clear", "clear the screen (or Ctrl+L)"),
     ("echo TEXT [> FILE]", "print text, or write (>) / append (>>) to a file"),
-    ("ls [DIR]", "list a directory"),
+    ("ls [-s] [DIR]", "list a directory (-s: files by size, largest first, and their total)"),
     ("cd [DIR], pwd", "change / show the current directory"),
     ("cat FILE", "show a file"),
     ("head|tail [-n N] FILE", "the first / last N lines of a file (10 unless N is given)"),
