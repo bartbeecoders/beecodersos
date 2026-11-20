@@ -328,6 +328,10 @@ Serial input bypasses the layout: the host terminal has already translated keys.
 
 **Line editing:** ←/→, Home/End, Backspace/Delete, ↑/↓ history, Esc clears the
 line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
+**Tab** completes the word under the cursor: the first word as a command
+name, the others as a file or folder (also after a path, `/data/ho`); one
+match is completed (with a space, or `/` for a folder), several as far as
+they agree (`tab-complete.scn`).
 
 **Commands:** `help`, `whoami`, `users`, `useradd`, `userdel`, `passwd`, `login`, `logout`, `clear`, `echo` (with `>` / `>>` redirection), `ls`, `cd`, `pwd`,
 `cat`, `head`, `tail`, `wc`, `grep`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,

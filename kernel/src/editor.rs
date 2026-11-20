@@ -33,6 +33,12 @@ impl Editor {
 
     /// Read one line. The prompt must already be printed.
     pub fn read_line(&mut self) -> Line {
+        self.read_line_with(&mut |_, _| Vec::new())
+    }
+
+    /// `read_line` with Tab completion: `complete(word, first)` gives what
+    /// the word under the cursor could become (`first`: it is the command).
+    pub fn read_line_with(&mut self, complete: &mut dyn FnMut(&str, bool) -> Vec<String>) -> Line {
         let mark = console::mark();
         let mut buf: Vec<char> = Vec::new();
         let mut cur = 0;
@@ -68,10 +74,17 @@ impl Editor {
                     buf.insert(cur, c);
                     cur += 1;
                 }
-                Key::Tab if buf.len() + 4 <= MAX_LINE => {
-                    for _ in 0..4 {
-                        buf.insert(cur, ' ');
-                        cur += 1;
+                Key::Tab => {
+                    let before: String = buf[..cur].iter().collect();
+                    let start = before.rfind(' ').map_or(0, |i| i + 1);
+                    let first = before[..start].trim().is_empty();
+                    let word = &before[start..];
+                    let Some(more) = completion(word, &complete(word, first)) else { continue };
+                    for c in more.chars() {
+                        if buf.len() < MAX_LINE {
+                            buf.insert(cur, c);
+                            cur += 1;
+                        }
                     }
                 }
                 Key::Backspace if cur > 0 => {
@@ -115,4 +128,25 @@ impl Editor {
             console::redraw_line(&mark, &buf, old_len, cur, old_cur, tail_edit);
         }
     }
+}
+
+/// What Tab adds to `word`, given what it could become: the rest of the
+/// one choice (then a space, or nothing after a folder's '/'), or as much
+/// as all the choices share. `None`: nothing to add.
+pub fn completion(word: &str, choices: &[String]) -> Option<String> {
+    let fits: Vec<&String> = choices.iter().filter(|c| c.starts_with(word)).collect();
+    let first = fits.first()?;
+    if fits.len() == 1 {
+        let mut more = String::from(&first[word.len()..]);
+        if !more.ends_with('/') && !first.ends_with('/') {
+            more.push(' ');
+        }
+        return Some(more);
+    }
+    // The longest beginning they all share.
+    let mut shared = first.len();
+    for c in fits.iter().skip(1) {
+        shared = shared.min(first.chars().zip(c.chars()).take_while(|(a, b)| a == b).map(|(a, _)| a.len_utf8()).sum());
+    }
+    (shared > word.len()).then(|| String::from(&first[word.len()..shared]))
 }
