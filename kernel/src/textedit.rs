@@ -45,6 +45,10 @@ pub struct Editor {
     leaving: bool,
     /// Shown in the status line until the next key.
     message: String,
+    /// Ctrl+F: the text being typed to look for (the status line asks).
+    search: Option<String>,
+    /// What was looked for last (Ctrl+G looks again).
+    last_search: String,
 }
 
 impl Editor {
@@ -54,7 +58,18 @@ impl Editor {
         if lines.len() > 1 && lines.last().is_some_and(|l| l.is_empty()) {
             lines.pop();
         }
-        Editor { lines, row: 0, col: 0, top: 0, left: 0, modified: false, leaving: false, message: String::new() }
+        Editor {
+            lines,
+            row: 0,
+            col: 0,
+            top: 0,
+            left: 0,
+            modified: false,
+            leaving: false,
+            message: String::new(),
+            search: None,
+            last_search: String::new(),
+        }
     }
 
     /// The whole text; every line ends with a line end.
@@ -87,13 +102,69 @@ impl Editor {
         }
     }
 
+    /// Look for `what` (any case) after the cursor, round past the end;
+    /// the cursor goes to the start of what was found.
+    fn find(&mut self, what: &str) {
+        let needle: Vec<char> = what.chars().flat_map(|c| c.to_lowercase()).collect();
+        if needle.is_empty() {
+            return;
+        }
+        let lower = |line: &[char]| -> Vec<char> { line.iter().flat_map(|c| c.to_lowercase()).collect() };
+        let at = |line: &[char], from: usize| -> Option<usize> {
+            let line = lower(line);
+            (from..line.len().saturating_sub(needle.len() - 1)).find(|&i| line[i..i + needle.len()] == needle[..])
+        };
+        let n = self.lines.len();
+        for step in 0..=n {
+            let row = (self.row + step) % n;
+            let from = if step == 0 { self.col + 1 } else { 0 };
+            let found = if step == n { at(&self.lines[row][..self.col.min(self.lines[row].len())], 0) } else { at(&self.lines[row], from) };
+            if let Some(col) = found {
+                let wrapped = row < self.row || (row == self.row && col <= self.col);
+                self.row = row;
+                self.col = col;
+                if wrapped {
+                    self.message = format!("\"{what}\" found (from the top again)");
+                }
+                return;
+            }
+        }
+        self.message = format!("\"{what}\" not found");
+    }
+
     /// Handle one key. `page`: the number of text lines the window shows.
     pub fn key(&mut self, key: Key, page: usize) -> Action {
+        if key == Key::Resized {
+            return Action::None; // drawn again for the new size; a question stays asked
+        }
+        if let Some(text) = self.search.as_mut() {
+            match key {
+                Key::Char(c) if text.chars().count() < 60 => text.push(c),
+                Key::Backspace => {
+                    text.pop();
+                }
+                Key::Enter => {
+                    let what = self.search.take().unwrap_or_default();
+                    if !what.is_empty() {
+                        self.last_search = what.clone();
+                        self.find(&what);
+                    }
+                }
+                Key::Escape | Key::Ctrl('f') | Key::Ctrl('q') => self.search = None,
+                _ => {}
+            }
+            return Action::None;
+        }
         self.message.clear();
         let was_leaving = core::mem::take(&mut self.leaving);
         let page = page.max(1);
         match key {
             Key::Ctrl('s') => return Action::Save,
+            Key::Ctrl('f') => self.search = Some(String::new()),
+            Key::Ctrl('g') if !self.last_search.is_empty() => {
+                let what = self.last_search.clone();
+                self.find(&what);
+            }
             Key::Ctrl('q') => {
                 if !self.modified || was_leaving {
                     return Action::Quit;
@@ -211,10 +282,12 @@ impl Editor {
         let cell = |c: char, attr: u8| (attr as u16) << 8 | crate::vga::cp437(c) as u16;
         let mut out = Vec::with_capacity(rows);
         // Status line: the message if there is one, else name, state and keys.
-        let (status, attr) = if self.message.is_empty() {
+        let (status, attr) = if let Some(text) = &self.search {
+            (format!(" Find: {text}_   (Enter finds, Esc stops)"), STATUS_ATTR)
+        } else if self.message.is_empty() {
             let (line, col) = self.position();
             let state = if self.modified { " (changed)" } else { "" };
-            (format!(" {name}{state}  line {line} of {}, column {col}  |  Ctrl+S save  Ctrl+Q leave", self.lines.len()), STATUS_ATTR)
+            (format!(" {name}{state}  line {line} of {}, column {col}  |  Ctrl+S save  Ctrl+F find  Ctrl+Q leave", self.lines.len()), STATUS_ATTR)
         } else {
             (format!(" {}", self.message), if self.leaving || self.message.starts_with("NOT") { WARNING_ATTR } else { STATUS_ATTR })
         };

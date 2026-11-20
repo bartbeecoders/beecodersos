@@ -1318,7 +1318,10 @@ desktop.
   its own (`kernel/src/textedit.rs`). Type to insert; arrows, Home, End,
   Page Up and Page Down move; Enter keeps the indent of the line; Tab goes to
   the next multiple of four; Ctrl+K cuts the rest of the line. **Ctrl+S**
-  saves, **Ctrl+Q** leaves (asked twice when changes are not saved). The
+  saves, **Ctrl+Q** leaves (asked twice when changes are not saved),
+  **Ctrl+F** asks in the status line what to find (any case; Enter goes to
+  the next match, round past the end; Esc stops) and **Ctrl+G** finds it
+  again. The
   status line at the top shows the name, the place of the cursor and what
   just happened. Long lines scroll sideways. Text files up to 1 MiB; a file
   is written back with a line end after every line. Closing the window
