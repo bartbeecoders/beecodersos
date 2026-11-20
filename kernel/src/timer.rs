@@ -2,8 +2,9 @@
 //! the next 07:30 on the local clock): each one waits in a thread of its own;
 //! when its time is up a window opens on the desktop with its message and
 //! the speaker plays a short tune (when the machine has sound). `timers`
-//! lists them, `timer off N` cancels one. They live in memory: a restart
-//! forgets them.
+//! lists them, `timer off N` cancels one. They are kept in `/system/timers`
+//! (when the clock is set) and come back after a restart; one that came due
+//! while the machine was off rings at once, if it is at most an hour late.
 
 use crate::ring::Global;
 use crate::{thread, time};
@@ -91,6 +92,87 @@ pub fn left_text(ms: u64) -> String {
     }
 }
 
+/// Where the timers are kept: one line each, "<due, Unix seconds> <message>".
+pub const FILE: &str = "/system/timers";
+/// A timer that came due while the machine was off rings if it is late by at most this.
+pub const LATE_MS: u64 = 3600 * 1000;
+const MAX_MESSAGE: usize = 200;
+
+/// The file's text for these timers: (due in Unix seconds, message).
+pub fn encode(timers: &[(u64, String)]) -> String {
+    let mut text = String::new();
+    for (due, message) in timers {
+        let message: String = message.chars().filter(|c| !c.is_control()).take(MAX_MESSAGE).collect();
+        text += &alloc::format!("{due} {message}\n");
+    }
+    text
+}
+
+/// The timers in the file's text; lines that make no sense are skipped.
+pub fn decode(text: &str) -> Vec<(u64, String)> {
+    text.lines()
+        .filter_map(|line| {
+            let (due, message) = line.split_once(' ').unwrap_or((line, ""));
+            Some((due.parse::<u64>().ok()?, message.chars().take(MAX_MESSAGE).collect()))
+        })
+        .take(MAX_TIMERS)
+        .collect()
+}
+
+/// What to do with a saved timer at boot (`now`, `due` in Unix seconds):
+/// wait so many milliseconds, ring now (late), or forget it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Restore {
+    Wait(u64),
+    Late,
+    Forget,
+}
+
+pub fn restore_action(due: u64, now: u64) -> Restore {
+    if due > now {
+        Restore::Wait(((due - now) * 1000).min(MAX_MS))
+    } else if (now - due) * 1000 <= LATE_MS {
+        Restore::Late
+    } else {
+        Restore::Forget
+    }
+}
+
+/// Write the running timers to the file (nothing without a clock).
+fn save() {
+    let Some(unix) = time::now_unix() else { return };
+    let now = time::uptime_ms();
+    let list: Vec<(u64, String)> = TIMERS.get().iter().map(|t| (unix + t.due_ms.saturating_sub(now).div_ceil(1000), t.message.clone())).collect();
+    if let Some(mut storage) = crate::storage::handle() {
+        let _ = if list.is_empty() { storage.fs().remove(FILE) } else { storage.fs().write_file(FILE, encode(&list).as_bytes()) };
+    }
+}
+
+/// At boot: the saved timers again. Returns a line for the boot log.
+pub fn restore() -> Option<String> {
+    let unix = time::now_unix()?;
+    let text = crate::storage::handle()?.fs().read_file(FILE).ok()?;
+    let (mut waiting, mut late) = (0, 0);
+    for (due, message) in decode(&String::from_utf8_lossy(&text)) {
+        match restore_action(due, unix) {
+            Restore::Wait(ms) => {
+                if start(ms, &message).is_ok() {
+                    waiting += 1;
+                }
+            }
+            Restore::Late => {
+                let note = if message.is_empty() { String::from("(missed while the machine was off)") } else { alloc::format!("{message} (missed while the machine was off)") };
+                if start(1000, &note).is_ok() {
+                    late += 1;
+                }
+            }
+            Restore::Forget => {}
+        }
+    }
+    save();
+    (waiting + late > 0).then(|| alloc::format!("{waiting} timer(s) waiting, {late} missed while off ('timers' lists them)"))
+}
+
 /// Start a timer; returns its number.
 pub fn start(ms: u64, message: &str) -> Result<u32, &'static str> {
     if TIMERS.get().len() >= MAX_TIMERS {
@@ -99,17 +181,20 @@ pub fn start(ms: u64, message: &str) -> Result<u32, &'static str> {
     let id = *NEXT_ID.get();
     *NEXT_ID.get() += 1;
     let due_ms = time::uptime_ms() + ms;
-    TIMERS.get().push(Timer { id, due_ms, message: String::from(message) });
+    let message: String = message.chars().filter(|c| !c.is_control()).take(MAX_MESSAGE).collect();
+    TIMERS.get().push(Timer { id, due_ms, message: message.clone() });
     let spawned = thread::spawn("timer", None, move || {
         thread::wait_until(|| time::uptime_ms() >= due_ms || !TIMERS.get().iter().any(|t| t.id == id));
         let Some(at) = TIMERS.get().iter().position(|t| t.id == id) else { return };
         let timer = TIMERS.get().remove(at);
+        save();
         ring(id, &timer.message);
     });
     if spawned.is_none() {
         TIMERS.get().retain(|t| t.id != id);
         return Err("could not start a thread");
     }
+    save();
     Ok(id)
 }
 
@@ -118,7 +203,11 @@ pub fn cancel(id: u32) -> bool {
     let timers = TIMERS.get();
     let before = timers.len();
     timers.retain(|t| t.id != id);
-    timers.len() != before
+    let gone = timers.len() != before;
+    if gone {
+        save();
+    }
+    gone
 }
 
 /// The running timers: (number, milliseconds left, message), soonest first.

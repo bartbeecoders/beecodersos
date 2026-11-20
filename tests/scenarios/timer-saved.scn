@@ -1,0 +1,18 @@
+# Timers are kept on the disk (/system/timers) and come back after a restart.
+@disk
+$ timer 1h bake bread
+timer 1: 1h 00m (a window and a tune when it is up)
+$ timer 2h
+timer 2: 2h 00m (a window and a tune when it is up)
+$ timer off 2
+timer 2 cancelled
+$ cat /system/timers
+~ ^\d{10} bake bread$
+@reboot
+~ ^\[timer\] 1 timer\(s\) waiting, 0 missed while off
+$ timers
+~ ^  1 +(1h 00m|59m \d\ds) left  bake bread$
+$ timer off 1
+timer 1 cancelled
+$ cat /system/timers
+~ no such file

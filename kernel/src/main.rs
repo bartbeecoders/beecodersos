@@ -175,6 +175,9 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info: u32) -> ! {
         aibridge::hello(); // beehive answers if it runs; see the `ai` command
         println!("[ai]   AI bridge on COM2 ('ai' for status)");
     }
+    if let Some(line) = timer::restore() {
+        println!("[timer] {line}");
+    }
     if let Some(port) = httpd::load() {
         println!("[httpd] status page on port {port} ('httpd' for details)");
     }
