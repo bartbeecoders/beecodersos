@@ -1148,6 +1148,12 @@ impl Shell {
             ("cd", [dir]) => self.cd(dir),
             ("ls" | "dir", []) => self.ls(&self.cwd.clone()),
             ("ls" | "dir", [dir]) => self.ls(&self.abs(dir)),
+            ("find", [what]) => self.find(&self.cwd.clone(), what),
+            ("find", [dir, what]) => self.find(&self.abs(dir), what),
+            ("find", _) => error("usage: find [FOLDER] TEXT   (paths below FOLDER whose name contains TEXT, any case)"),
+            ("du", []) => self.du(&self.cwd.clone()),
+            ("du", [dir]) => self.du(&self.abs(dir)),
+            ("du", _) => error("usage: du [FOLDER]   (how much each entry takes, folders with all inside)"),
             ("tree", []) => self.tree(&self.cwd.clone()),
             ("tree", [dir]) => self.tree(&self.abs(dir)),
             ("cat" | "type", [file]) => self.cat(file),
@@ -2954,6 +2960,78 @@ impl Shell {
         }
     }
 
+    /// `find`: every path below `dir` whose name contains `what` (any case).
+    fn find(&mut self, dir: &str, what: &str) {
+        const MOST: usize = 500;
+        let needle = what.to_lowercase();
+        let mut found = 0usize;
+        let mut stack = alloc::vec![String::from(dir)];
+        while let Some(folder) = stack.pop() {
+            let entries = match self.storage.fs().read_dir(&folder) {
+                Ok(e) => e,
+                Err(e) => {
+                    error(&format!("find {folder}: {e}"));
+                    return;
+                }
+            };
+            for e in entries {
+                let path = format!("{}/{}", folder.trim_end_matches('/'), e.name);
+                if e.name.to_lowercase().contains(&needle) {
+                    found += 1;
+                    if found > MOST {
+                        println!("(more than {MOST}: the rest left out)");
+                        return;
+                    }
+                    let slash = if e.kind == FileKind::Directory { "/" } else { "" };
+                    println!("{path}{slash}");
+                }
+                if e.kind == FileKind::Directory {
+                    stack.push(path);
+                }
+            }
+            crate::thread::still_working();
+        }
+        if found == 0 {
+            println!("nothing below {dir} is called like \"{what}\"");
+        }
+    }
+
+    /// How many bytes a path takes: a file its size, a folder all inside.
+    fn du_size(&mut self, path: &str) -> u64 {
+        let Ok(entries) = self.storage.fs().read_dir(path) else { return 0 };
+        let mut total = 0;
+        for e in entries {
+            total += match e.kind {
+                FileKind::File => e.size,
+                FileKind::Directory => self.du_size(&format!("{}/{}", path.trim_end_matches('/'), e.name)),
+            };
+        }
+        total
+    }
+
+    /// `du`: each entry of a folder with what it takes, largest first, and the total.
+    fn du(&mut self, dir: &str) {
+        let entries = match self.storage.fs().read_dir(dir) {
+            Ok(e) => e,
+            Err(e) => return error(&format!("du {dir}: {e}")),
+        };
+        let mut sizes: Vec<(u64, String)> = Vec::new();
+        for e in entries {
+            let size = match e.kind {
+                FileKind::File => e.size,
+                FileKind::Directory => self.du_size(&format!("{}/{}", dir.trim_end_matches('/'), e.name)),
+            };
+            let slash = if e.kind == FileKind::Directory { "/" } else { "" };
+            sizes.push((size, format!("{}{slash}", e.name)));
+        }
+        sizes.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        let total: u64 = sizes.iter().map(|s| s.0).sum();
+        for (size, name) in sizes {
+            println!("{:>10}  {name}", human_size(size));
+        }
+        println!("{:>10}  in all, in {dir}", human_size(total));
+    }
+
     fn tree(&mut self, path: &str) {
         println!("{path}");
         if let Err(e) = self.tree_walk(path, 1) {
@@ -3160,6 +3238,8 @@ const COMMANDS: &[(&str, &str)] = &[
     ("cp FROM TO", "copy a file"),
     ("tree [DIR]", "show a directory tree"),
     ("df", "filesystem usage"),
+    ("du [FOLDER]", "how much each entry takes (folders with all inside), largest first"),
+    ("find [FOLDER] TEXT", "every path below FOLDER whose name contains TEXT (any case)"),
     ("layout [us|be]", "show / change the keyboard layout"),
     ("history", "previous commands (Up/Down to recall)"),
     ("mem, about", "memory usage, system info"),
@@ -3500,4 +3580,19 @@ fn parse_size(text: &str) -> Option<(u16, u16)> {
     let (w, h) = text.split_once(['x', 'X'])?;
     let (w, h) = (w.parse::<u16>().ok()?, h.parse::<u16>().ok()?);
     (w > 0 && h > 0).then_some((w, h))
+}
+
+/// 1536 -> "1.5 KiB": sizes for people (bytes below 1 KiB).
+pub fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let mut value = bytes as f64 / 1024.0;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{value:.1} {}", UNITS[unit])
 }

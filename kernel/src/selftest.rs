@@ -51,6 +51,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("windows: resized with the grip, in whole characters", wm_resize),
     ("timers: durations and what is left", timer_durations),
     ("launcher: finding programs by name", launcher_search),
+    ("sizes for people (du)", human_sizes),
     ("crash: restart or halt afterwards", crash_then),
     ("gfx: the fast drawing paths give the same picture", gfx_fast_paths),
     ("screen in memory: changed parts are copied, in batches", screen_in_memory),
@@ -1487,6 +1488,17 @@ fn display_g3() -> TestResult {
     check_eq!(paging::entry_with_wc(0xFD00_109B), 0xFD00_008B); // other caching bits go
     check_eq!(paging::entry_with_wc(0xFD00_0082), 0xFD00_0082); // not present: untouched
     check_eq!(paging::entry_with_wc(0x0010_0003), 0x0010_0003); // points to a page table: untouched
+    Ok(())
+}
+
+fn human_sizes() -> TestResult {
+    use crate::shell::human_size;
+    check_eq!(human_size(0), "0 B");
+    check_eq!(human_size(1023), "1023 B");
+    check_eq!(human_size(1536), "1.5 KiB");
+    check_eq!(human_size(3 * 1024 * 1024 + 300 * 1024), "3.3 MiB");
+    check_eq!(human_size(5 << 40), "5.0 TiB");
+    check_eq!(human_size(u64::MAX), "16777216.0 TiB");
     Ok(())
 }
 

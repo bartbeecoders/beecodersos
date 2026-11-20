@@ -1,0 +1,19 @@
+# find: paths whose name contains a text (any case); du: what entries take.
+$ mkdir /hive
+$ mkdir /hive/frames
+$ echo honey > /hive/Honey.txt
+$ echo wax > /hive/frames/honeycomb.txt
+$ echo bee > /bee.txt
+$ find honey
+/hive/Honey.txt
+/hive/frames/honeycomb.txt
+$ find /hive FRAME
+/hive/frames/
+$ find nothing-like-this
+nothing below / is called like "nothing-like-this"
+$ du /hive
+       6 B  Honey.txt
+       4 B  frames/
+      10 B  in all, in /hive
+$ find
+usage: find [FOLDER] TEXT   (paths below FOLDER whose name contains TEXT, any case)
