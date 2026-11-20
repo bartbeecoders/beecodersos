@@ -1,5 +1,6 @@
 //! The clock at the top right of the desktop: a thread ("clock") that
-//! shows the local time (`time::zone`) and changes it when the minute does.
+//! shows the local time (`time::zone`) and changes it when the minute does,
+//! with the soonest timer and what is left of it.
 
 use crate::{console, thread, time};
 use alloc::format;
@@ -21,7 +22,17 @@ pub fn text(zone: time::Zone, unix: u64) -> String {
     format!("{} {d} {} {:02}:{:02}", DAYS[days.rem_euclid(7) as usize], MONTHS[(m - 1) as usize % 12], s / 3600, s / 60 % 60)
 }
 
-/// Show the clock again now (after `timezone`).
+/// What the clock adds for the soonest timer: " · tea 4m" (whole minutes,
+/// rounded up; the message cut to 12 characters, "timer" without one).
+pub fn timer_note(left_ms: u64, message: &str) -> String {
+    let minutes = left_ms.div_ceil(60_000);
+    let cut: String = message.trim().chars().take(12).collect();
+    let name = if cut.trim().is_empty() { String::from("timer") } else { String::from(cut.trim_end()) };
+    let left = if minutes >= 60 { format!("{}h{:02}", minutes / 60, minutes % 60) } else { format!("{minutes}m") };
+    format!(" · {name} {left}")
+}
+
+/// Show the clock again now (after `timezone`, or a timer that changed).
 pub fn refresh() {
     AGAIN.store(true, Ordering::SeqCst);
 }
@@ -33,7 +44,11 @@ pub fn start() {
     }
     thread::spawn("clock", None, || loop {
         let Some(now) = time::now_unix() else { return };
-        console::set_clock(&text(time::zone(), now));
+        let mut shown = text(time::zone(), now);
+        if let Some((left, message)) = crate::timer::list().into_iter().next().map(|(_, left, m)| (left, m)) {
+            shown += &timer_note(left, &message);
+        }
+        console::set_clock(&shown);
         let minute = now / 60;
         thread::pause(|| AGAIN.swap(false, Ordering::SeqCst) || time::now_unix().is_some_and(|t| t / 60 != minute));
     });
