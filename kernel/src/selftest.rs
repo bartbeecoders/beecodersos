@@ -1216,7 +1216,7 @@ fn gfx_canvas() -> TestResult {
 fn wm_layout() -> TestResult {
     use crate::gfx::Rect;
     use crate::wm::{terminal_frame, Window};
-    let content = |frame: Rect| Window { title: String::new(), frame, resizable: true, collapsed: None, scroll: None, saved: None }.content();
+    let content = |frame: Rect| Window { title: String::new(), frame, resizable: true, collapsed: None, scroll: None, saved: None, workspace: 1 }.content();
     // Full HD: a window in the middle with desktop all around.
     let frame = terminal_frame(1920, 1080, 1).ok_or("no window on a full HD screen")?;
     let inside = content(frame);
@@ -1468,7 +1468,7 @@ fn display_g3() -> TestResult {
     check_eq!(FbCon::in_area(canvas, canvas.bounds(), &mut cells, 0).scale(), 1);
     // The terminal window with the double font holds whole double characters.
     let frame = wm::terminal_frame(2560, 1440, 2).ok_or("no window at 2560x1440")?;
-    let inside = wm::Window { title: String::new(), frame, resizable: true, collapsed: None, scroll: None, saved: None }.content();
+    let inside = wm::Window { title: String::new(), frame, resizable: true, collapsed: None, scroll: None, saved: None, workspace: 1 }.content();
     check_eq!((inside.width % 16, inside.height % 32), (0, 0));
     check!(inside.width / 16 >= 100 && frame.x + frame.width < 2560);
     check!(wm::terminal_frame(400, 300, 2).is_some() && wm::terminal_frame(320, 200, 2).is_none());
@@ -1866,6 +1866,23 @@ fn wm_resize() -> TestResult {
     check!(full.width > before.width && full.height > before.height);
     check_eq!(tiled.top(), Some(b));
     check_eq!(tiled.toggle_full(b, area), Some(before));
+    // Workspaces: a window sent to workspace 2 is out of sight (no focus,
+    // not tiled); showing 2 brings it, and only it, back.
+    check_eq!(tiled.workspace(), 1);
+    check!(tiled.send_to(b, 2));
+    check!(tiled.top() != Some(b));
+    tiled.tile(area); // a and c share the screen now: side by side, as high
+    check_eq!(tiled.window(a).ok_or("a")?.frame.height, tiled.window(c).ok_or("c")?.frame.height);
+    check!(tiled.switch_to(2));
+    check_eq!(tiled.top(), Some(b));
+    check!(tiled.neighbour(b, Dir::Left).is_none()); // alone here
+    tiled.tile(area);
+    check_eq!(tiled.window(b).ok_or("b")?.frame, tile_frames(1, area, (8, 16))[0]);
+    check!(!tiled.switch_to(2));
+    check!(tiled.switch_to(3));
+    check_eq!(tiled.top(), None); // an empty workspace: nothing has the focus
+    tiled.switch_to(1);
+    check!(tiled.top() == Some(a) || tiled.top() == Some(c));
     // Never smaller than 20 x 4 characters, never past the screen's edge.
     let start = desk.window(id).ok_or("gone")?.frame;
     check_eq!(desk.resized_frame(start, -5000, -5000, screen), Rect::new(50, 60, frame_size(20 * 8, 4 * 16).0, frame_size(20 * 8, 4 * 16).1));
@@ -1924,7 +1941,8 @@ fn wm_mouse() -> TestResult {
     canvas.fill_rect(screen, 0x123456);
     desk.draw(&canvas.clipped(Rect::new(0, 0, 10, 10)));
     term.redraw_in(Rect::new(0, 0, 10, 10));
-    check_eq!((t.rgb(9, 9), t.rgb(10, 9), t.rgb(9, 10), t.rgb(inside.x, inside.y)), (wm::BACKGROUND, 0x123456, 0x123456, 0x123456));
+    // (7,5): background just before the first workspace box (at 8,6).
+    check_eq!((t.rgb(7, 5), t.rgb(10, 9), t.rgb(9, 10), t.rgb(inside.x, inside.y)), (wm::BACKGROUND, 0x123456, 0x123456, 0x123456));
     canvas.glyph(100, 100, b'A', 0xFFFFFF, 0, 1);
     canvas.fill_rect(Rect::new(100, 100, 8, 16), 0x123456);
     canvas.clipped(Rect::new(104, 100, 100, 100)).glyph(100, 100, b'M', 0xFFFFFF, 0, 1); // only its right half
@@ -2480,7 +2498,7 @@ fn wm_windows() -> TestResult {
     check_eq!(desk.open("D", Rect::new(0, 0, 50, 50)), 3); // numbers are not used again
     check!(desk.close(3));
     // A window too narrow for a close box has none.
-    check!(wm::Window { title: String::new(), frame: Rect::new(0, 0, 20, 60), resizable: true, collapsed: None, scroll: None, saved: None }.close_box().is_none());
+    check!(wm::Window { title: String::new(), frame: Rect::new(0, 0, 20, 60), resizable: true, collapsed: None, scroll: None, saved: None, workspace: 1 }.close_box().is_none());
     check_eq!(wm::frame_size(640, 400), (640 + 12, 400 + 12 + 24));
 
     // Contents: each window's picture is put in after its frame, back to

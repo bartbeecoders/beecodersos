@@ -1594,7 +1594,12 @@ desktop.
   Super+arrows move the focus to the window that way, Super+Shift+arrows
   swap the window with that one, Super+F fills the screen with it (again:
   back), Super+T tiles or floats (`desktop-super.scn`; from the host:
-  `beectl keys MACHINE "{super+left}"`). `desktop tile off` lets them float
+  `beectl keys MACHINE "{super+left}"`). **Workspaces:** Super+1-9 shows
+  another workspace, Super+Shift+1-9 sends the focused window there; only
+  the current one's windows show (and are tiled), and the boxes left of the
+  desktop buttons show workspaces 1-5 (blue: shown, lighter: has windows;
+  a click shows it). On an empty workspace nothing has the focus and typed
+  keys go nowhere (`desktop-workspaces.scn`). `desktop tile off` lets them float
   where they are (`desktop-tile.scn`, `desktop-resize-terminal.scn`).
   **Buttons** at the top of the desktop start programs with a click:
   Terminal, Files (the file manager on the home folder), Notes (the
