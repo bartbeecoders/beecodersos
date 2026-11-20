@@ -1577,6 +1577,11 @@ desktop.
   (`console::pane_scroll`), and its window gets a bar along the right edge
   whose thumb shows which part and how much; a click above or below the
   thumb is Page Up or Page Down for the program (`desktop-scroll.scn`).
+  **Scrollback:** terminals (the console's window and the others) keep the
+  last 1000 lines that scrolled off the top (`fbcon::HISTORY`);
+  Shift+Page Up / Page Down look back a page and forward again, the scroll
+  bar shows where, and a click on a terminal's bar pages through its
+  history. New text brings the live view back (`scrollback.scn`).
   **Tiling** (`desktop tile on`, saved in `/system/desktop-tile`), as on
   Omarchy (Hyprland's "dwindle"): the windows lie side by side below the
   button row with gaps of 8 pixels, oldest first; the first takes the left

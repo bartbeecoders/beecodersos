@@ -1064,6 +1064,20 @@ fn fbcon_screen() -> TestResult {
     check!(t.shows(0, 0, 'y', gray, black) && t.shows(0, 4, 'x', gray, black));
     check!(t.shows(0, 1, ' ', gray, black)); // the 2 of the old first line is gone
     check!(t.shows(1, 0, 'c', gray, black) && t.shows(2, 0, 'd', gray, black));
+    // The line that scrolled off is kept: looking one line back shows it on
+    // top, the live text moves down; new text brings the live view back.
+    check_eq!(screen.history_view(), (1, 3, 4));
+    screen.scroll_back(1);
+    check_eq!(screen.history_view(), (0, 3, 4));
+    check!(t.shows(0, 0, '1', gray, black) && t.shows(0, 7, '8', gray, black) && t.shows(1, 0, 'y', gray, black));
+    screen.scroll_back(50); // not further than what is kept
+    check_eq!(screen.history_view(), (0, 3, 4));
+    screen.scroll_back(-1);
+    check!(t.shows(0, 4, 'x', gray, black) && t.shows(2, 0, 'd', gray, black));
+    screen.scroll_back(1);
+    screen.put_cell(2, 1, 0x0720); // what the window shows changes: live again
+    check_eq!(screen.history_view(), (1, 3, 4));
+    check!(t.shows(2, 0, 'd', gray, black) && t.shows(0, 4, 'x', gray, black));
     // The cursor is an underline in the cell; moving it restores the cell.
     screen.sync_cursor();
     check!(!t.shows(2, 1, ' ', gray, black));

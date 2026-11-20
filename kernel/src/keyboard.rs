@@ -261,6 +261,9 @@ impl Decoder {
             0x53 => Some(Key::Delete),
             _ => None,
         };
+        if e0 && self.shift() && matches!(code, 0x49 | 0x51) {
+            return Some(Key::ScrollBack(code == 0x49));
+        }
         if e0 {
             return match code {
                 0x1C => Some(Key::Enter),       // keypad Enter
