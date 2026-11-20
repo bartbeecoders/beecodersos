@@ -2590,6 +2590,25 @@ fn text_editor() -> TestResult {
     check_eq!((f.position(), f.modified()), ((1, 10), false));
     keys(&mut f, &[Key::Resized]); // a new window size is no key
     check_eq!(f.modified(), false);
+    // Ctrl+Z: a word typed goes back in one step, Enter and Backspace in one
+    // each; back at the start the text counts as not changed again.
+    let mut u = Editor::new("hi\n");
+    keys(&mut u, &[Key::End]);
+    typed(&mut u, " there");
+    keys(&mut u, &[Key::Enter, Key::Backspace, Key::Backspace]);
+    check_eq!(u.text(), "hi ther\n");
+    keys(&mut u, &[Key::Ctrl('z')]);
+    check_eq!(u.text(), "hi there\n");
+    keys(&mut u, &[Key::Ctrl('z')]);
+    check_eq!(u.text(), "hi there\n\n");
+    keys(&mut u, &[Key::Ctrl('z')]);
+    check_eq!(u.text(), "hi there\n");
+    keys(&mut u, &[Key::Ctrl('z')]);
+    check_eq!((u.text().as_str(), u.modified(), u.position()), ("hi\n", false, (1, 3)));
+    keys(&mut u, &[Key::Ctrl('z')]); // nothing more: it says so
+    check_eq!(u.text(), "hi\n");
+    let (lines, _) = u.render("x", 60, 4);
+    check!(row_text(&lines[0]).contains("nothing to undo"));
 
     // Typing, Enter in the middle of a line, Backspace and Delete across lines.
     keys(&mut e, &[Key::End]);
