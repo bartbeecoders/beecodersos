@@ -259,6 +259,7 @@ pub fn run(window: usize, path: String, text: String, mut storage: Storage) {
         let Some((cols, rows)) = console::pane_size(window) else { return };
         let (lines, cursor) = editor.render(name, cols, rows);
         console::pane_show(window, &lines, cursor);
+        console::pane_scroll(window, editor.top, rows.max(2) - 1, editor.lines.len());
         let key = input::read_key();
         if key == Key::Ctrl('d') && session::current().is_none_or(session::is_closed) {
             return; // the window was closed

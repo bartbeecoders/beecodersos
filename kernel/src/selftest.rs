@@ -1195,7 +1195,7 @@ fn gfx_canvas() -> TestResult {
 fn wm_layout() -> TestResult {
     use crate::gfx::Rect;
     use crate::wm::{terminal_frame, Window};
-    let content = |frame: Rect| Window { title: String::new(), frame, resizable: true, collapsed: None }.content();
+    let content = |frame: Rect| Window { title: String::new(), frame, resizable: true, collapsed: None, scroll: None }.content();
     // Full HD: a window in the middle with desktop all around.
     let frame = terminal_frame(1920, 1080, 1).ok_or("no window on a full HD screen")?;
     let inside = content(frame);
@@ -1447,7 +1447,7 @@ fn display_g3() -> TestResult {
     check_eq!(FbCon::in_area(canvas, canvas.bounds(), &mut cells, 0).scale(), 1);
     // The terminal window with the double font holds whole double characters.
     let frame = wm::terminal_frame(2560, 1440, 2).ok_or("no window at 2560x1440")?;
-    let inside = wm::Window { title: String::new(), frame, resizable: true, collapsed: None }.content();
+    let inside = wm::Window { title: String::new(), frame, resizable: true, collapsed: None, scroll: None }.content();
     check_eq!((inside.width % 16, inside.height % 32), (0, 0));
     check!(inside.width / 16 >= 100 && frame.x + frame.width < 2560);
     check!(wm::terminal_frame(400, 300, 2).is_some() && wm::terminal_frame(320, 200, 2).is_none());
@@ -1789,6 +1789,22 @@ fn wm_resize() -> TestResult {
     check_eq!(desk.mouse(1, 0, 0, screen), MouseEffect::WindowMoved);
     check_eq!(desk.window(id).ok_or("gone")?.frame.height, height);
     desk.mouse(0, 0, 0, screen);
+    // A scroll bar when the program shows only part: the thumb's size and
+    // place follow what is shown; a click above or below it pages.
+    check!(!desk.set_scroll(id, Some((0, 10, 10)))); // all fits: no bar
+    check!(desk.window(id).and_then(|w| w.scroll_bar()).is_none());
+    check!(desk.set_scroll(id, Some((0, 10, 40))));
+    let bar = desk.window(id).and_then(|w| w.scroll_bar()).ok_or("no scroll bar")?;
+    let thumb = desk.window(id).and_then(|w| w.scroll_thumb()).ok_or("no thumb")?;
+    check_eq!((thumb.y, thumb.height), (bar.y, bar.height / 4));
+    desk.set_scroll(id, Some((30, 10, 40)));
+    let thumb = desk.window(id).and_then(|w| w.scroll_thumb()).ok_or("no thumb")?;
+    check_eq!(thumb.y + thumb.height, bar.y + bar.height); // the last page: at the end
+    let at = desk.pointer().ok_or("no pointer")?;
+    desk.mouse(0, (bar.x + 4) as i32 - at.x as i32, (bar.y + 2) as i32 - at.y as i32, screen);
+    check_eq!(desk.mouse(1, 0, 0, screen), MouseEffect::Scroll { id, up: true });
+    desk.mouse(0, 0, 0, screen);
+    check!(desk.set_scroll(id, None));
     // Tiling ("dwindle"): one window takes it all, two lie side by side,
     // a third splits the right one; gaps of 8, whole characters, no overlap.
     use crate::wm::{tile_frames, GAP};
@@ -2420,7 +2436,7 @@ fn wm_windows() -> TestResult {
     check_eq!(desk.open("D", Rect::new(0, 0, 50, 50)), 3); // numbers are not used again
     check!(desk.close(3));
     // A window too narrow for a close box has none.
-    check!(wm::Window { title: String::new(), frame: Rect::new(0, 0, 20, 60), resizable: true, collapsed: None }.close_box().is_none());
+    check!(wm::Window { title: String::new(), frame: Rect::new(0, 0, 20, 60), resizable: true, collapsed: None, scroll: None }.close_box().is_none());
     check_eq!(wm::frame_size(640, 400), (640 + 12, 400 + 12 + 24));
 
     // Contents: each window's picture is put in after its frame, back to

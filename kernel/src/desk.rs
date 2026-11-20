@@ -258,6 +258,11 @@ fn step() {
             session::push_key(terminal.session, Key::Click(col, row));
         }
     }
+    for (window, up) in console::take_scrolls() {
+        if let Some(terminal) = TERMINALS.get().iter().find(|t| t.window == window) {
+            session::push_key(terminal.session, if up { Key::PageUp } else { Key::PageDown });
+        }
+    }
     for window in console::take_resized() {
         if let Some(terminal) = TERMINALS.get().iter().find(|t| t.window == window) {
             session::push_key(terminal.session, Key::Resized);

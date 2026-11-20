@@ -1572,6 +1572,11 @@ desktop.
   **Folding up:** the yellow box left of the close box folds a window up to
   its title bar (what lies behind shows again) and a second click unfolds
   it at the height it had.
+  **Scroll bars:** a program that shows only part of a longer list or text
+  (the file manager, the editor, the web viewer) says so
+  (`console::pane_scroll`), and its window gets a bar along the right edge
+  whose thumb shows which part and how much; a click above or below the
+  thumb is Page Up or Page Down for the program (`desktop-scroll.scn`).
   **Tiling** (`desktop tile on`, saved in `/system/desktop-tile`), as on
   Omarchy (Hyprland's "dwindle"): the windows lie side by side below the
   button row with gaps of 8 pixels, oldest first; the first takes the left

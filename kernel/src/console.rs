@@ -301,6 +301,8 @@ static PANES: Global<Vec<Pane>> = Global::new(Vec::new());
 static CLOSING: Global<Vec<usize>> = Global::new(Vec::new());
 
 static CLICKS: Global<Vec<(usize, u16, u16)>> = Global::new(Vec::new());
+/// Clicks on scroll bars since the last look: (window, up), for their programs.
+static SCROLLS: Global<Vec<(usize, bool)>> = Global::new(Vec::new());
 /// Windows resized since the last look, for their programs (desk.rs).
 static RESIZED: Global<Vec<usize>> = Global::new(Vec::new());
 static LAUNCHES: Global<Vec<usize>> = Global::new(Vec::new());
@@ -881,6 +883,11 @@ pub fn mouse_event(buttons: u8, dx: i32, dy: i32) {
             compose(bounds);
             show(true);
         }
+        MouseEffect::Scroll { id, up } => {
+            if SCROLLS.get().len() < 16 {
+                SCROLLS.get().push((id, up));
+            }
+        }
         MouseEffect::Launch(button) => {
             if LAUNCHES.get().len() < 4 {
                 LAUNCHES.get().push(button);
@@ -1002,6 +1009,25 @@ fn resize_pane(id: usize) {
     }
 }
 
+/// Clicks on scroll bars since the last call: (window, up).
+pub fn take_scrolls() -> Vec<(usize, bool)> {
+    core::mem::take(SCROLLS.get())
+}
+
+/// What a window's program shows of a longer text: the first line shown,
+/// how many are shown, how many there are. A scroll bar appears when not
+/// all fit; a click above or below its thumb is a Page Up or Page Down.
+pub fn pane_scroll(window: usize, first: usize, shown: usize, total: usize) {
+    let _rebuilding = Rebuilding::start();
+    let Some(desk) = DESKTOP.get().as_mut() else { return };
+    if desk.set_scroll(window, Some((first, shown, total))) {
+        if let Some(frame) = desk.window(window).map(|w| w.frame) {
+            compose(frame);
+            show(true);
+        }
+    }
+}
+
 /// Windows resized since the last call, for their programs.
 pub fn take_resized() -> Vec<usize> {
     core::mem::take(RESIZED.get())
@@ -1037,7 +1063,7 @@ pub fn take_launches() -> Vec<usize> {
 
 /// Is there something the mouse asked for that desk.rs has not done yet?
 pub fn mouse_work() -> bool {
-    !CLICKS.get().is_empty() || !LAUNCHES.get().is_empty() || !CLOSING.get().is_empty() || !RESIZED.get().is_empty()
+    !CLICKS.get().is_empty() || !LAUNCHES.get().is_empty() || !CLOSING.get().is_empty() || !RESIZED.get().is_empty() || !SCROLLS.get().is_empty()
 }
 
 /// Where the pointer is on the desktop: for `desktop` and the tests.
