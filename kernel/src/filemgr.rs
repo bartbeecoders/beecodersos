@@ -181,6 +181,9 @@ impl Browser {
 
     /// Handle one key. `page`: the number of entries the window shows.
     pub fn key(&mut self, key: Key, page: usize) -> Action {
+        if key == Key::Resized {
+            return Action::None; // drawn again for the new size; a question stays asked
+        }
         self.message.clear();
         self.warning = false;
         let last = self.entries.len().saturating_sub(1);

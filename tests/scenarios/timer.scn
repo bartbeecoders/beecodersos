@@ -32,3 +32,14 @@ $ timers
 ~ ^  3 +\S.* left  milk the bees$
 $ timer off 3
 timer 3 cancelled
+# With tiled windows the timer's window stays too (laying the windows out
+# again is no key pressed).
+$ desktop tile on
+~ windows are tiled
+$ timer 2s tiled tea
+~ ^timer \d+: 2s
+$ sleep 3
+@ctl text {machine}
+~ Time is up: tiled tea
+$ desktop tile off
+~ windows float again
