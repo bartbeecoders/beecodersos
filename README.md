@@ -326,7 +326,8 @@ The choice is saved in `/system/keyboard` and restored at boot.
 
 Serial input bypasses the layout: the host terminal has already translated keys.
 
-**Line editing:** ←/→, Home/End, Backspace/Delete, ↑/↓ history, Esc clears the
+**Line editing:** ←/→, Home/End, Backspace/Delete, ↑/↓ history (with something
+typed, only the commands that start with it: `history-prefix.scn`), Esc clears the
 line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
 **Tab** completes the word under the cursor: the first word as a command
 name, the others as a file or folder (also after a path, `/data/ho`); one

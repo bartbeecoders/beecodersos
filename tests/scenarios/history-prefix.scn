@@ -1,0 +1,7 @@
+# Up with something typed recalls the last command that starts with it.
+$ echo first
+first
+$ pwd
+/
+$ ec[A
+first
