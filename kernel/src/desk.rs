@@ -117,6 +117,22 @@ pub fn open_timer_alert(id: u32, text: &str) -> Result<usize, &'static str> {
     })
 }
 
+/// The launcher (Super+Space): the programs to start, by name.
+pub fn open_launcher() -> Result<usize, &'static str> {
+    open("Start", "launcher", false, crate::launcher::run)
+}
+
+/// The pictures in the home folder: the first in the picture viewer (the
+/// arrow keys show the others); without any, the file manager there.
+pub fn open_pictures() -> Result<usize, &'static str> {
+    let mut storage = storage::handle().ok_or("no file system is mounted")?;
+    let names: Vec<String> = storage.fs().read_dir(home()).map(|es| es.into_iter().map(|e| e.name).collect()).unwrap_or_default();
+    match crate::view::first_in(&names) {
+        Some(first) => open_picture(&filemgr::join(home(), &first)).map(|(window, ..)| window).map_err(|_| "the picture could not be shown"),
+        None => open_files(home()),
+    }
+}
+
 /// Open the system monitor in a window.
 pub fn open_monitor() -> Result<usize, &'static str> {
     open("Monitor", "monitor", false, crate::monitor::run)
@@ -216,7 +232,8 @@ pub fn route(key: Key) -> Option<Key> {
 /// Keys with Super, as on Omarchy: Super+Enter a terminal, Super+W closes
 /// the focused window, Super+arrows move the focus, Super+Shift+arrows move
 /// the window, Super+F fills the screen with it, Super+T tiles or floats,
-/// Super+1-9 shows a workspace, Super+Shift+1-9 sends the window there.
+/// Super+1-9 shows a workspace, Super+Shift+1-9 sends the window there,
+/// Super+Space opens the launcher.
 pub fn super_key(key: SuperKey, shift: bool) {
     use crate::wm::Dir;
     let dir = match key {
@@ -234,6 +251,9 @@ pub fn super_key(key: SuperKey, shift: bool) {
         }
         (SuperKey::Char(d @ '1'..='9'), _) if shift => console::send_to_workspace(d as usize - '0' as usize),
         (SuperKey::Char(d @ '1'..='9'), _) => console::switch_workspace(d as usize - '0' as usize),
+        (SuperKey::Char(' '), _) => {
+            let _ = open_launcher();
+        }
         (SuperKey::Char('w'), _) => console::close_focused(),
         (SuperKey::Char('f'), _) => console::toggle_fullscreen(),
         (SuperKey::Char('t'), _) => {

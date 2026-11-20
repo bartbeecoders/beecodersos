@@ -101,6 +101,7 @@ pub fn parse_keys(text: &str) -> Option<alloc::vec::Vec<Key>> {
                         "right" => SuperKey::Right,
                         "up" => SuperKey::Up,
                         "down" => SuperKey::Down,
+                        "space" => SuperKey::Char(' '),
                         one if one.len() == 1 && one.as_bytes()[0].is_ascii_alphanumeric() => SuperKey::Char(one.as_bytes()[0].to_ascii_lowercase() as char),
                         _ => return None,
                     };

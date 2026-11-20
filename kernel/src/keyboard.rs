@@ -243,6 +243,7 @@ impl Decoder {
                 // The top row by place (on AZERTY its unshifted keys are not digits).
                 (false, 0x02..=0x0A) => SuperKey::Char((b'1' + code - 0x02) as char),
                 (false, 0x0B) => SuperKey::Char('0'),
+                (false, 0x39) => SuperKey::Char(' '),
                 (false, _) => match self.layout.map(code, false, false)? {
                     Mapped::Char(c) if c.is_ascii_alphanumeric() => SuperKey::Char(c.to_ascii_lowercase()),
                     _ => return None,
