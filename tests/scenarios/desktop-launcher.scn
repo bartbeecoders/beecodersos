@@ -1,11 +1,16 @@
 # The launcher (Super+Space, as on Omarchy): typing narrows the list,
-# Enter starts the chosen program and the launcher closes.
+# Enter starts the chosen program and the launcher closes. It floats in the
+# middle: tiled windows keep their places (the console's the whole screen).
 @ai
 $ ai control on
+$ desktop tile on
+~ windows are tiled
 @ctl keys {machine} "{super+space}"
 $ sleep 1
 $ threads
 ~ launcher +(waiting|ready|running)
+$ desktop
+~ the terminal window has 236x62 characters
 @ctl text {machine}
 ~ --- window \d+: Start ---
 ~ Terminal +a shell in a window

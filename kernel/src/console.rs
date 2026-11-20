@@ -320,6 +320,12 @@ pub const PANE_SIZE: (usize, usize) = (80, 25);
 /// Open one more terminal window on the desktop, on top; returns its
 /// number. Each new one lies a little further right and down.
 pub fn open_pane(title: &str) -> Result<usize, &'static str> {
+    open_pane_sized(title, PANE_SIZE, false)
+}
+
+/// A window of `cols` x `rows` characters. `floating`: in the middle of the
+/// screen, over the others, and never tiled (the launcher).
+pub fn open_pane_sized(title: &str, (cols, rows): (usize, usize), floating: bool) -> Result<usize, &'static str> {
     let (Some(shadow), Screen::Graphics(screen)) = (SHADOW.get().as_ref(), SCREEN.get()) else {
         return Err("windows need the desktop (see desktop)");
     };
@@ -330,13 +336,16 @@ pub fn open_pane(title: &str) -> Result<usize, &'static str> {
         return Err("too many terminal windows");
     }
     let (scale, bounds) = (screen.scale(), shadow.back.bounds());
-    let (cols, rows) = PANE_SIZE;
     let (width, height) = wm::frame_size(cols * GLYPH_WIDTH * scale, rows * GLYPH_HEIGHT * scale);
     if width > bounds.width || height > bounds.height {
         return Err("the screen is too small for another window");
     }
     let step = 32 * (PANES.get().len() + 1);
-    let frame = Rect::new(step.min(bounds.width - width), step.min(bounds.height - height), width, height);
+    let frame = if floating {
+        Rect::new((bounds.width - width) / 2, (bounds.height - height) / 3, width, height)
+    } else {
+        Rect::new(step.min(bounds.width - width), step.min(bounds.height - height), width, height)
+    };
     let surface = Surface::new(cols * GLYPH_WIDTH * scale, rows * GLYPH_HEIGHT * scale, shadow.back.format())
         .ok_or("not enough memory for another window")?;
     let mut cells = alloc::vec![0u16; cols * rows];
@@ -347,6 +356,9 @@ pub fn open_pane(title: &str) -> Result<usize, &'static str> {
     let _rebuilding = Rebuilding::start();
     let Some(desk) = DESKTOP.get().as_mut() else { return Err("windows need the desktop (see desktop)") };
     let window = desk.open(title, frame);
+    if floating {
+        desk.set_floating(window);
+    }
     PANES.get().push(Pane { window, _cells: cells, con, surface, picture: false });
     retile();
     compose(bounds);
