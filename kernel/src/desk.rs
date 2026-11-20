@@ -109,8 +109,8 @@ pub fn open_timer_alert(id: u32, text: &str) -> Result<usize, &'static str> {
         console::pane_write(window, &format!("\n  {text}\n\n  Any key closes this window.\n"));
         while console::pane_exists(window) {
             thread::wait_until(|| crate::input::pending() || !console::pane_exists(window));
-            if crate::input::pending() {
-                let _ = crate::input::read_key();
+            // A new size (tiling lays the windows out again) is no key pressed.
+            if crate::input::pending() && !matches!(crate::input::read_key(), Key::Resized) {
                 break;
             }
         }

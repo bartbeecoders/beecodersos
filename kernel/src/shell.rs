@@ -2475,7 +2475,14 @@ impl Shell {
         }
         print!("Run {}? y: yes, any other key: no ", if commands.len() == 1 { "it" } else { "them" });
         console::flush();
-        let yes = matches!(crate::input::read_key(), crate::input::Key::Char('y' | 'Y'));
+        // A new window size (tiling) is no answer.
+        let key = loop {
+            match crate::input::read_key() {
+                crate::input::Key::Resized => continue,
+                key => break key,
+            }
+        };
+        let yes = matches!(key, crate::input::Key::Char('y' | 'Y'));
         println!();
         if !yes {
             return println!("nothing was run");
