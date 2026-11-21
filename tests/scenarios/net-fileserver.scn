@@ -1,0 +1,127 @@
+# The file server: one folder, read and written over the network with a key
+# (the REST interface). Off unless switched on; the test uses port 80, the
+# port the test can reach.
+@net
+@disk
+@forward
+$ net dhcp
+~ ^address 10\.0\.2\.15/24 \(DHCP\)
+# A key the test knows (the OS makes one up otherwise).
+$ echo key TestKeyTestKeyTestKeyTestKeyTestKey12345 > /system/fileserver
+$ fileserver
+file server: off ('fileserver on [PORT]' starts it; it would share /share)
+@request GET /api/files/
+(no answer)
+$ fileserver folder /
+~ fileserver: not the whole disk
+$ fileserver folder /system/log
+~ fileserver: not /system
+$ fileserver folder /nowhere
+fileserver: /nowhere: no such folder
+$ fileserver on 80
+file server on, port 80 (saved): it shares /share
+key: TestKeyTestKeyTestKeyTestKeyTestKey12345
+~ the link is not encrypted
+$ threads
+~ fileserver +waiting
+# Without the key, or with a wrong one: nothing.
+@request GET /api/files/
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer
+{"error":"send the key: Authorization: Bearer KEY"}
+@request raw GET /api/files/ HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345x\r\n\r\n
+HTTP/1.1 401 Unauthorized
+@request raw PUT /api/files/x.txt HTTP/1.1\r\nContent-Length: 2\r\n\r\nhi
+HTTP/1.1 401 Unauthorized
+$ ls /share
+!~ x\.txt
+# With it: an empty folder, then files and folders in it.
+@request raw GET /api/files/ HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
+HTTP/1.1 200 OK
+Content-Type: application/json
+{"path":"/","entries":[]}
+@request raw PUT /api/files/hello.txt HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\nContent-Length: 12\r\n\r\nhello, bees\n
+HTTP/1.1 201 Created
+{"path":"/hello.txt","type":"file","size":12}
+$ cat /share/hello.txt
+hello, bees
+@request raw PUT /api/files/hive/comb/cell%201.txt HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\nContent-Length: 5\r\n\r\nhoney
+HTTP/1.1 201 Created
+{"path":"/hive/comb/cell 1.txt","type":"file","size":5}
+@request raw PUT /api/files/hive/empty/ HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
+HTTP/1.1 201 Created
+{"path":"/hive/empty","type":"folder"}
+@request raw PUT /api/files/hello.txt HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\nContent-Length: 3\r\n\r\nhi\n
+HTTP/1.1 200 OK
+@request raw GET /api/files/hello.txt HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
+HTTP/1.1 200 OK
+Content-Type: text/plain; charset=utf-8
+Content-Length: 3
+hi
+@request raw HEAD /api/files/hive/comb/cell%201.txt HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
+HTTP/1.1 200 OK
+Content-Length: 5
+!~ honey
+@request raw GET /api/files/hive HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
+HTTP/1.1 200 OK
+{"path":"/hive","entries":[{"name":"comb","type":"folder","size":0},{"name":"empty","type":"folder","size":0}]}
+@request raw GET /api/files/ HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
+{"path":"/","entries":[{"name":"hello.txt","type":"file","size":3},{"name":"hive","type":"folder","size":0}]}
+# Never outside the shared folder.
+$ echo private > /secret.txt
+@request raw GET /api/files/../secret.txt HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
+HTTP/1.1 400 Bad Request
+!~ private
+@request raw GET /api/files/%2e%2e/system/fileserver HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
+HTTP/1.1 400 Bad Request
+!~ key
+@request raw GET /secret.txt HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
+HTTP/1.1 404 Not Found
+!~ private
+@request raw PUT /api/files/../planted.txt HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\nContent-Length: 1\r\n\r\nx
+HTTP/1.1 400 Bad Request
+$ ls /
+!~ planted
+# What cannot be done says why.
+@request raw GET /api/files/none.txt HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
+HTTP/1.1 404 Not Found
+{"error":"no such file or folder"}
+@request raw DELETE /api/files/hive HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
+HTTP/1.1 409 Conflict
+@request raw DELETE /api/files/ HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
+HTTP/1.1 403 Forbidden
+@request raw PUT /api/files/hive HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\nContent-Length: 1\r\n\r\nx
+HTTP/1.1 409 Conflict
+@request raw PUT /api/files/big.bin HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\nContent-Length: 99999999\r\n\r\n
+HTTP/1.1 413 Content Too Large
+@request raw PUT /api/files/nolength.txt HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
+HTTP/1.1 411 Length Required
+@request raw POST /api/files/hello.txt HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
+HTTP/1.1 405 Method Not Allowed
+Allow: GET, HEAD, PUT, DELETE
+@request raw PUT /api/files/a-name-that-is-much-too-long-for-beefs.txt HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\nContent-Length: 1\r\n\r\nx
+HTTP/1.1 400 Bad Request
+@request raw nonsense\r\n\r\n
+HTTP/1.1 400 Bad Request
+# Delete, and see it gone.
+@request raw DELETE /api/files/hello.txt HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
+HTTP/1.1 204 No Content
+$ ls /share
+!~ hello
+$ fileserver
+~ file server: on, http://10\.0\.2\.15:80/api/files/ shares /share
+~ \d+ requests answered, 3 of them without the right key
+# A new key: the old one stops working at once.
+$ fileserver key new
+~ new key: \w{40}
+@request raw GET /api/files/ HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
+HTTP/1.1 401 Unauthorized
+# It is still on after a restart, and off stays off.
+@reboot
+~ \[fileserver\] files on port 80, with a key, not encrypted
+@request GET /api/files/
+HTTP/1.1 401 Unauthorized
+$ fileserver off
+file server off (saved)
+@request GET /api/files/
+(no answer)

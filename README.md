@@ -211,6 +211,7 @@ kernel/
   src/thread.rs        cooperative kernel threads: stacks, switching, waiting
   src/ahci.rs          SATA disks on AHCI controllers (real hardware; QEMU `-device ahci`)
   src/httpd.rs         status page for the local network (off by default)
+  src/fileserver.rs    file server: one folder over the network, with a key (off by default)
   src/remote.rs        remote shell with a password, Telnet style (off by default)
   src/session.rs       console sessions: a shell that is not on the real screen and keyboard
   src/rand.rs          random numbers (RDRAND, or a seeded generator)
@@ -360,7 +361,7 @@ they agree (`tab-complete.scn`).
 **Commands:** `help`, `whoami`, `users`, `useradd`, `userdel`, `passwd`, `login`, `logout`, `clear`, `echo`, `ls`, `cd`, `pwd`,
 `cat`, `head`, `tail`, `wc`, `grep`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `timezone`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `do`, `ai`,
-`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `run`, `cpu`, `monitor`, `view`, `screenshot`, `record`, `sound`, `beep`, `play`, `tune`, `timer`, `alarm`, `timers`, `cal`, `lsusb`, `camera`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `vnc`, `arp`, `lspci [-v]`, `threads`, `find`, `du`, `sort`, `selftest`, `crash panic|exception|hang`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `run`, `cpu`, `monitor`, `view`, `screenshot`, `record`, `sound`, `beep`, `play`, `tune`, `timer`, `alarm`, `timers`, `cal`, `lsusb`, `camera`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `fileserver`, `remote`, `vnc`, `arp`, `lspci [-v]`, `threads`, `find`, `du`, `sort`, `selftest`, `crash panic|exception|hang`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Text tools** (`kernel/src/textops.rs`, self-tested; `text-tools.scn`):
 `head` / `tail [-n N | -N] FILE` show the first or last lines (10 unless N
@@ -1015,6 +1016,64 @@ password and no address. Not yet tried with a real `telnet` program.
 Still open in N6: downloading a new kernel into the spare slot (phase H4 of
 `Docs/beehive-network-plan.html`, not built). Signals to beehive over the
 network: see the next section.
+
+## File server: `fileserver` (REST) ✅ in QEMU
+
+```
+bee:/$ fileserver on
+file server on, port 9000 (saved): it shares /share
+key: qBfnHi6dXvegB9EvDjDC8ihn4rpb5Am9GQ3abwEW
+with the key, a program can read, write and delete the files there; the link is not encrypted
+```
+
+The OS as a file server: one folder that programs on the network read and
+write. From another computer:
+
+```sh
+KEY=qBfnHi6dXvegB9EvDjDC8ihn4rpb5Am9GQ3abwEW; HP=http://192.168.0.40:9000
+curl -H "Authorization: Bearer $KEY" $HP/api/files/                       # the folder, as JSON
+curl -H "Authorization: Bearer $KEY" -T photo.jpg $HP/api/files/pictures/photo.jpg   # send a file
+curl -H "Authorization: Bearer $KEY" -O $HP/api/files/pictures/photo.jpg  # fetch it
+curl -H "Authorization: Bearer $KEY" -X DELETE $HP/api/files/pictures/photo.jpg
+```
+
+| Request | What it does |
+|---|---|
+| `GET /api/files/PATH` | a file's bytes; for a folder its listing: `{"path":"/pictures","entries":[{"name":"photo.jpg","type":"file","size":48213}]}` |
+| `HEAD /api/files/PATH` | the same, without the bytes |
+| `PUT /api/files/PATH` | write the file (201 new, 200 replaced); the folders above it are made. A PATH ending in `/` makes a folder |
+| `DELETE /api/files/PATH` | remove the file or the empty folder (204) |
+
+Errors are JSON too (`{"error":"no such file or folder"}`) with the usual
+status: 400 a bad path, 401 no or a wrong key, 404, 405, 409 (a folder that
+is not empty, a file where a folder is), 411, 413, 507 the disk is full.
+
+- **Off by default.** `fileserver on [PORT]` starts it (port 9000 unless
+  given), `fileserver off` stops it; saved in `/system/fileserver`, so it is
+  back after a restart. Changing anything is for admins; `fileserver` alone
+  shows the state and how many requests came without the right key.
+- **A key, always.** The OS makes up 40 characters the first time
+  (`fileserver key` shows them, `fileserver key new` replaces them at once).
+  Every request needs `Authorization: Bearer KEY`; without it the answer is
+  401 and nothing else, whatever was asked. Keys are compared in full,
+  whatever byte differs first.
+- **One folder, nothing else.** `/share` unless `fileserver folder DIR`
+  names another; never `/` or anything in `/system` (settings, passwords).
+  A request's path is taken apart into names: `..`, `.`, empty names and
+  `\` are refused, encoded or not, so no request leaves the folder
+  (`beenet::fileserver::safe_path`).
+- **Limits:** a file of about 8 MiB at most (the largest BeeFS holds), names
+  of 26 characters (BeeFS), 16 folders deep, an 8 KiB request head with 64
+  headers, 5 s to send the head and 10 s without progress for a body. One
+  request at a time, one per connection.
+- **Not encrypted:** the key and the files cross the network as they are.
+  For the local network only. Client addresses and file names are never
+  logged.
+- The protocol side (`beenet/src/fileserver.rs`) is tested on the host,
+  with every truncated head; the service is `kernel/src/fileserver.rs`
+  (thread `fileserver`); `net-fileserver.scn` tests it from the host.
+- **Next:** the S3 protocol on the same port, for backup tools and S3
+  clients.
 
 ## Beehive over the network (phases H1–H3) ✅ (the HP is driven this way every day)
 

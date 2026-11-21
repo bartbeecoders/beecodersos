@@ -8,7 +8,7 @@ use crate::vga::Color;
 use crate::aibridge::{self, Outcome};
 use crate::json::Obj;
 use crate::ring::Global;
-use crate::{allocator, bootslots, display, hivectl, httpd, install, update, remote, session, console, crash, eventlog, keyboard, net, pci, power, selftest, textops, doplan, thread, time, users};
+use crate::{allocator, bootslots, display, fileserver, hivectl, httpd, install, update, remote, session, console, crash, eventlog, keyboard, net, pci, power, selftest, textops, doplan, thread, time, users};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -1423,6 +1423,26 @@ impl Shell {
             },
             ("httpd", ["off"]) => self.httpd(None),
             ("httpd", _) => error("usage: httpd [on [PORT] | off]"),
+            ("fileserver", []) => self.fileserver_status(),
+            ("fileserver", ["on"]) => self.fileserver(Some(fileserver::setting().port.unwrap_or(fileserver::DEFAULT_PORT))),
+            ("fileserver", ["on", port]) => match port.parse::<u16>() {
+                Ok(p) if p != 0 => self.fileserver(Some(p)),
+                _ => error("usage: fileserver on [PORT]   (port 1-65535)"),
+            },
+            ("fileserver", ["off"]) => self.fileserver(None),
+            ("fileserver", ["key"]) => match fileserver::setting().key.as_str() {
+                "" => println!("no key yet: 'fileserver on' makes one"),
+                key => println!("key: {key}   ('fileserver key new' makes another)"),
+            },
+            ("fileserver", ["key", "new"]) => match fileserver::change_key() {
+                Ok(key) => println!("new key: {key}   (the old one no longer works)"),
+                Err(e) => error(&format!("fileserver: {e}")),
+            },
+            ("fileserver", ["folder", dir]) => match fileserver::set_folder(&self.abs(dir)) {
+                Ok(()) => println!("the file server shares {}", fileserver::setting().folder),
+                Err(e) => error(&format!("fileserver: {e}")),
+            },
+            ("fileserver", _) => error("usage: fileserver [on [PORT] | off | key [new] | folder DIR]"),
             ("remote", []) => self.remote_status(),
             ("remote", ["on"]) => self.remote_command(Some(Some(remote::DEFAULT_PORT))),
             ("remote", ["on", port]) => match port.parse::<u16>() {
@@ -2171,6 +2191,37 @@ impl Shell {
                 }
             }
             net::idle(10); // one timer tick: data and keys are handled promptly
+        }
+    }
+
+    /// `fileserver on [PORT]` / `fileserver off`: one folder for programs on the network.
+    fn fileserver(&mut self, port: Option<u16>) {
+        if let Err(e) = fileserver::set(port) {
+            return error(&format!("fileserver: {e}"));
+        }
+        let saved = if self.storage.persistent { " (saved)" } else { " (not saved: RAM disk)" };
+        match port {
+            Some(port) => {
+                let s = fileserver::setting();
+                println!("file server on, port {port}{saved}: it shares {}", s.folder);
+                println!("key: {}", s.key);
+                println!("with the key, a program can read, write and delete the files there; the link is not encrypted");
+            }
+            None => println!("file server off{saved}"),
+        }
+    }
+
+    fn fileserver_status(&self) {
+        let s = fileserver::setting();
+        match (fileserver::port(), net::address()) {
+            (Some(port), ip) => {
+                let host = ip.map_or(String::from("THIS-MACHINE"), |ip| format!("{ip}"));
+                let (answered, refused) = fileserver::counters();
+                println!("file server: on, http://{host}:{port}/api/files/ shares {}", s.folder);
+                println!("  {answered} requests answered, {refused} of them without the right key");
+                println!("  try: curl -H \"Authorization: Bearer KEY\" http://{host}:{port}/api/files/   ('fileserver key' shows the key)");
+            }
+            (None, _) => println!("file server: off ('fileserver on [PORT]' starts it; it would share {})", s.folder),
         }
     }
 
@@ -3424,6 +3475,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("nslookup NAME", "look up the address of a host name"),
     ("nc HOST PORT [TEXT]", "open a TCP connection: type lines, see the answers"),
     ("httpd [on [PORT]|off]", "status page for the local network (off by default)"),
+    ("fileserver [on [PORT]|off]", "one folder for programs on the network, with a key (off by default); fileserver key [new], fileserver folder DIR"),
     ("vnc [on|off|password]", "remote desktop: see and use this screen from a VNC viewer (off by default; not encrypted)"),
     ("remote [on|off]", "remote shell with a password, not encrypted (off by default)"),
     ("wget URL [FILE]", "fetch a web address (http://): show it or save it"),
