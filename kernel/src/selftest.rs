@@ -92,6 +92,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("keyboard: navigation and Ctrl", keyboard_nav),
     ("layouts: compose accents", layouts_compose),
     ("shell: tokenize", shell_tokenize),
+    ("fileserver: settings and folders", fileserver_settings),
     ("shell: pipes are cut outside quotes", shell_split_pipes),
     ("shell: a script's lines and words", shell_script_lines),
     ("beefs: files and directories in RAM", beefs_ramdisk),
@@ -396,6 +397,34 @@ fn shell_script_lines() -> TestResult {
     check_eq!(lines[1], (4, String::from("echo Maja  > /hive/queen.txt")));
     check_eq!(lines[2], (5, String::from("echo all: /hive Maja costs $0 or $")));
     check!(script_lines("# nothing\n\n", &[]).is_empty());
+    Ok(())
+}
+
+fn fileserver_settings() -> TestResult {
+    use crate::fileserver::{folder_problem, Setting, DEFAULT_FOLDER, DEFAULT_PORT};
+    let key = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopq";
+    let s = Setting::parse(&format!("on 9100\nfolder /data/share\nkey {key}\n"));
+    check_eq!(s.port, Some(9100));
+    check_eq!(s.folder.as_str(), "/data/share");
+    check_eq!(s.key.as_str(), key);
+    check_eq!(Setting::parse(&s.text()), s);
+    // Off unless the file says on; a broken line keeps the safe default.
+    check_eq!(Setting::parse("").port, None);
+    check_eq!(Setting::parse("on").port, Some(DEFAULT_PORT));
+    check_eq!(Setting::parse("on 0").port, None);
+    check_eq!(Setting::parse("on lots").port, None);
+    check_eq!(Setting::parse("on 9000\noff").port, None);
+    check_eq!(Setting::parse("folder /system").folder.as_str(), DEFAULT_FOLDER);
+    check_eq!(Setting::parse("folder /").folder.as_str(), DEFAULT_FOLDER);
+    check_eq!(Setting::parse("key short").key.as_str(), "");
+    check_eq!(Setting::parse("key has/slash/and/more/chars").key.as_str(), "");
+    // Never the whole disk or the settings.
+    for bad in ["/", "//", "/system", "/system/", "/system/log", "share", "/a/../system", "/a/./b", ""] {
+        check!(folder_problem(bad).is_some());
+    }
+    for good in ["/share", "/data/share/", "/systems", "/home/maja"] {
+        check!(folder_problem(good).is_none());
+    }
     Ok(())
 }
 

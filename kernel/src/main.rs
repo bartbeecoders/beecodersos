@@ -54,6 +54,7 @@ mod fbcon;
 mod font;
 mod gfx;
 mod httpd;
+mod fileserver;
 mod remote;
 mod input;
 mod install;
@@ -181,6 +182,9 @@ pub extern "C" fn kernel_main(multiboot_magic: u32, multiboot_info: u32) -> ! {
     }
     if let Some(port) = httpd::load() {
         println!("[httpd] status page on port {port} ('httpd' for details)");
+    }
+    if let Some(port) = fileserver::load() {
+        println!("[fileserver] files on port {port}, with a key, not encrypted ('fileserver' for details)");
     }
     if let Some(port) = vnc::load() {
         println!("[vnc]  remote desktop on port {port}, not encrypted ('vnc' for details)");

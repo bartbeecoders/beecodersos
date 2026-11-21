@@ -145,7 +145,7 @@ pub fn needs_admin(cmd: &str, args: &[&str]) -> bool {
         // Always: they change the installed system, the accounts or the power.
         "install" | "update" | "crash" | "useradd" | "userdel" | "reboot" | "shutdown" => true,
         // Showing is for everyone, changing for admins.
-        "slots" | "layout" | "timezone" | "vnc" | "remote" | "httpd" | "net" | "ai" | "desktop" => !args.is_empty(),
+        "slots" | "layout" | "timezone" | "vnc" | "remote" | "httpd" | "fileserver" | "net" | "ai" | "desktop" => !args.is_empty(),
         "cpu" | "display" => !matches!(args, [] | ["test" | "speed"]),
         // Someone else's password.
         "passwd" => !args.is_empty(),
