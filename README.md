@@ -1056,7 +1056,21 @@ curl -H "Authorization: Bearer $KEY" -X DELETE $HP/api/files/pictures/photo.jpg
 | `PUT /api/files/PATH` | write the file (201 new, 200 replaced); the folders above it are made. A PATH ending in `/` makes a folder |
 | `DELETE /api/files/PATH` | remove the file or the empty folder (204) |
 
+| `GET /api/link/PATH` | a link that fetches that file without the key for an hour (`?hours=N`: longer), which tells the browser to save it: `{"link":"http://…"}` |
+
 (Every other path is the S3 protocol: see below.)
+
+**In a browser:** `http://ADDRESS:9000/api/ui` (a browser that asks for `/`
+is sent there) is a page that asks for the key and then shows the shared
+folder: open folders, click a file to save it, upload files with a
+progress bar, make folders, delete. It is one file in the kernel
+(`kernel/src/fileserver_ui.html`: no pictures, nothing from elsewhere; a
+Content-Security-Policy allows its own script and requests to this server
+only) and uses the requests above with the key, which stays in the tab
+until it is closed or "Forget the key" is pressed. The page itself is the
+one thing served without the key: there is nothing secret in it. Tried
+with headless Chromium against the HP: browsing, an upload, a new folder,
+a download, deleting, a wrong key.
 
 Errors are JSON too (`{"error":"no such file or folder"}`) with the usual
 status: 400 a bad path, 401 no or a wrong key (403 on the S3 side), 404, 405, 409 (a folder that

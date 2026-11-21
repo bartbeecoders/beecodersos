@@ -90,6 +90,41 @@ HTTP/1.1 200 OK
 {"path":"/hive","entries":[{"name":"comb","type":"folder","size":0},{"name":"empty","type":"folder","size":0}]}
 @request raw GET /api/files/ HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
 {"path":"/","entries":[{"name":"hello.txt","type":"file","size":3},{"name":"hive","type":"folder","size":0}]}
+# For browsers: a page that asks for the key (nothing secret in it), and a
+# link for a file, made for the address the browser used, that needs no key.
+@request GET /api/ui
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+~ ^Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; .*connect-src 'self'
+~ <title>Files — BeeCodersOs</title>
+!~ TestKeyTestKeyTestKeyTestKeyTestKey12345
+@request raw GET / HTTP/1.1\r\nHost: files.test\r\nAccept: text/html,application/xhtml+xml\r\n\r\n
+HTTP/1.1 302 Found
+Location: /api/ui
+@request raw GET /api/link/hive/comb/cell%201.txt HTTP/1.1\r\nHost: files.test\r\n\r\n
+HTTP/1.1 401 Unauthorized
+@request raw GET /api/link/hive/comb/cell%201.txt HTTP/1.1\r\nHost: files.test\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
+HTTP/1.1 200 OK
+~ ^\{"link":"http://files\.test/hive/comb/cell%201\.txt\?X-Amz-Algorithm=AWS4-HMAC-SHA256&.*X-Amz-Expires=3600&X-Amz-SignedHeaders=host&response-content-disposition=attachment&X-Amz-Signature=[0-9a-f]{64}"\}$
+@capture link "link":"http://files\.test(/[^"]+)"
+@request raw GET {link} HTTP/1.1\r\nHost: files.test\r\n\r\n
+HTTP/1.1 200 OK
+Content-Length: 5
+Content-Disposition: attachment
+honey
+# The link is for that address: at another one it fetches nothing.
+@request raw GET {link} HTTP/1.1\r\nHost: other.test\r\n\r\n
+HTTP/1.1 403 Forbidden
+!~ honey
+@request raw GET /api/link/hello.txt HTTP/1.1\r\nHost: files.test\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
+HTTP/1.1 400 Bad Request
+{"error":"only files in a folder of the shared folder have links"}
+@request raw GET /api/link/hive/comb/none.txt HTTP/1.1\r\nHost: files.test\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
+HTTP/1.1 404 Not Found
+@request raw GET /api/link/hive/comb/cell%201.txt?hours=999 HTTP/1.1\r\nHost: files.test\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
+HTTP/1.1 400 Bad Request
+@request raw GET /api/link/hive/../../secret.txt HTTP/1.1\r\nHost: files.test\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
+HTTP/1.1 400 Bad Request
 # Never outside the shared folder.
 $ echo private > /secret.txt
 @request raw GET /api/files/../secret.txt HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
@@ -135,7 +170,7 @@ $ ls /share
 !~ hello
 $ fileserver
 ~ file server: on, http://10\.0\.2\.15:80/api/files/ shares /share
-~ \d+ requests answered, 4 of them without the right key
+~ \d+ requests answered, 6 of them without the right key
 # A new key: the old one stops working at once.
 $ fileserver key new
 ~ new key: \w{40}

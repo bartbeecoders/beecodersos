@@ -9,7 +9,10 @@
 //!   PUT    /api/files/PATH    write the file (folders above it are made);
 //!                             PATH ending in `/`: make that folder
 //!   DELETE /api/files/PATH    remove the file, or the empty folder
-//! Without the right key every request gets 401 and nothing else.
+//!   GET    /api/link/PATH     a link that fetches that file without the key, for an hour
+//! Without the right key every request gets 401 and nothing else. The one
+//! exception has nothing to protect: GET /api/ui is a page for browsers
+//! that asks for the key and then uses the requests above.
 //!
 //! The same folder speaks the S3 protocol on every other path (path style:
 //! /BUCKET/KEY): its folders are the buckets, the files below them the
@@ -349,7 +352,18 @@ fn answer(stream: &net::TcpStream) -> bool {
         return true;
     };
     let setting = setting();
-    let (reply, authorized) = if head.path == "/api" || head.path.starts_with("/api/") {
+    let reading = matches!(head.method.as_str(), "GET" | "HEAD");
+    let (reply, authorized) = if reading && matches!(head.path.as_str(), "/api/ui" | "/api/ui/") {
+        // The page for browsers: nothing secret in it, the key is typed there.
+        let mut a = Answer::new(200, "OK", "text/html; charset=utf-8", Vec::from(UI_PAGE.as_bytes()));
+        a.more = String::from(UI_POLICY);
+        (a, true)
+    } else if reading && head.path == "/" && !s3::is_signed(&head) && head.header("accept").is_some_and(|accept| accept.contains("text/html")) {
+        // A browser at the server's address: to the page.
+        let mut a = Answer::new(302, "Found", "text/plain; charset=utf-8", Vec::from(&b"the page for browsers is at /api/ui\n"[..]));
+        a.more = String::from("Location: /api/ui\r\n");
+        (a, true)
+    } else if head.path == "/api" || head.path.starts_with("/api/") {
         if !proto::bearer(&head).is_some_and(|key| proto::same_secret(key, &setting.key)) {
             let mut a = Answer::error(401, "Unauthorized", "send the key: Authorization: Bearer KEY");
             a.more = String::from("WWW-Authenticate: Bearer\r\n");
@@ -361,6 +375,7 @@ fn answer(stream: &net::TcpStream) -> bool {
                 body(stream, &head, early).map(Body::Bytes)
             };
             match taken {
+                Ok(_) if head.path.starts_with("/api/link/") => (rest_link(&setting, &head), true),
                 Ok(body) => (acted(body, |body| rest(&setting.folder, &head, body)), true),
                 Err(e) => {
                     let (status, reason, _, message) = e.parts();
@@ -820,6 +835,9 @@ fn s3_act(folder: &str, head: &Head, body: Body) -> Answer {
                 a.length = Some(size);
                 a.file = (!folder_key).then(|| path.clone());
                 a.more = format!("ETag: \"{tag}\"\r\nLast-Modified: {}\r\n", s3::http_time(now));
+                if let Some(disposition) = s3::wanted_disposition(head) {
+                    a.more += &format!("Content-Disposition: {disposition}\r\n"); // a link that says "save it"
+                }
                 match ranged(a, head) {
                     Some(a) => a,
                     None => {
@@ -1090,6 +1108,41 @@ fn send(stream: &net::TcpStream, answer: &Answer, head_only: bool) {
         }
     }
     stream.finish();
+}
+
+/// The page a browser gets at /api/ui: it asks for the key and uses the
+/// REST interface with it (kernel/src/fileserver_ui.html).
+const UI_PAGE: &str = include_str!("fileserver_ui.html");
+/// What that page may do: its own script and styles, requests to this
+/// server, and nothing from anywhere else.
+const UI_POLICY: &str = "Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'\r\nReferrer-Policy: no-referrer\r\n";
+
+/// `GET /api/link/PATH[?hours=N]`: a link that fetches that one file
+/// without the key for a while (an hour unless told otherwise), for a
+/// browser to follow: `{"link":"http://..."}`. The link is for the address
+/// the request itself came to.
+fn rest_link(setting: &Setting, head: &Head) -> Answer {
+    if head.method != "GET" {
+        return Answer::error(405, "Method Not Allowed", "GET");
+    }
+    let hours = head.query_value("hours").map_or(Some(1), |h| h.parse::<u64>().ok()).filter(|h| (1..=s3::MAX_LINK_SECONDS / 3600).contains(h));
+    let names = proto::safe_path(head.path.strip_prefix("/api/link").unwrap_or(""), MAX_NAME_LEN);
+    let (Some(hours), Some(names)) = (hours, names) else {
+        return Answer::error(400, "Bad Request", "a link is for a file, for 1 to 168 hours");
+    };
+    if names.len() < 2 || !s3::bucket_name_ok(names[0], MAX_NAME_LEN) {
+        return Answer::error(400, "Bad Request", "only files in a folder of the shared folder have links");
+    }
+    let path = format!("{}/{}", setting.folder, names.join("/"));
+    let is_file = storage::handle().map(|mut st| st.fs().metadata(&path).is_ok_and(|m| m.kind == FileKind::File)).unwrap_or(false);
+    if !is_file {
+        return Answer::error(404, "Not Found", "no such file");
+    }
+    let (Some(host), Some(now)) = (head.header("host").filter(|h| !h.is_empty() && h.len() <= 80 && !h.contains(['/', '"', '\\', ' '])), time::now_unix()) else {
+        return Answer::error(503, "Service Unavailable", "no link without a Host header and a set clock");
+    };
+    let link = s3::link_for(&format!("/{}", names.join("/")), host, &setting.key, now, hours * 3600, true);
+    Answer::json(200, "OK", format!("{{\"link\":\"http://{}{}\"}}\n", proto::json_escape(host), proto::json_escape(&link)))
 }
 
 /// The REST interface: /api/files/PATH below the shared folder.

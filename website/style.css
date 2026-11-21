@@ -485,6 +485,7 @@ main > section { padding-top: 110px; padding-bottom: 20px; }
   border: 1px solid var(--line); background: #0b0906;
   font: 400 0.86rem/1.6 "JetBrains Mono", monospace; color: #e8e2d0;
 }
+.guide .shot { display: block; width: 100%; max-width: 760px; height: auto; margin: 18px 0; border: 1px solid var(--line); border-radius: 12px; }
 .code .p { color: var(--honey); }
 .code .m { color: #b9d7ff; }
 .code .d { color: #8d8264; }
