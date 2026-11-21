@@ -1,7 +1,7 @@
 //! ATA (IDE) disk driver, PIO mode, LBA28, polling (no interrupts).
 //! In QEMU: `-drive file=disk.img,format=raw,if=ide,index=0,media=disk`.
 
-use crate::port::{inb, insw, inw, outb, outsw};
+use crate::port::{inb, insw, inw, outb, outsl};
 use beefs::{Block, BlockDevice, FsError};
 
 const REG_DATA: u16 = 0;
@@ -173,7 +173,7 @@ impl BlockDevice for AtaDisk {
         self.wait_drq()?;
         // The whole sector with one instruction: under a hypervisor every
         // single port access is slow, and an install writes thousands of sectors.
-        unsafe { outsw(self.io + REG_DATA, buf) };
+        unsafe { outsl(self.io + REG_DATA, buf) }; // 32 bits at a time: half the steps of 16
         self.wait_not_busy()?;
         Ok(())
     }
@@ -196,7 +196,7 @@ impl BlockDevice for AtaDisk {
             self.start_n(first + n as u64 * 256, part.len(), CMD_WRITE)?;
             for buf in part {
                 self.wait_drq()?;
-                unsafe { outsw(self.io + REG_DATA, buf) };
+                unsafe { outsl(self.io + REG_DATA, buf) }; // 32 bits at a time: half the steps of 16
             }
             self.wait_not_busy()?;
         }

@@ -22,9 +22,11 @@ pub unsafe fn inw(port: u16) -> u16 {
     val
 }
 
-/// Send a block of 16-bit words to a port in one go (`data.len()` must be even).
-pub unsafe fn outsw(port: u16, data: &[u8]) {
-    asm!("rep outsw", in("dx") port, inout("rsi") data.as_ptr() => _, inout("rcx") data.len() / 2 => _,
+/// Write a block of 32-bit units to a port in one go (`data.len()` must be a
+/// multiple of 4). For a disk's data port: half as many steps as with words,
+/// which is what counts under a hypervisor (it handles every unit by itself).
+pub unsafe fn outsl(port: u16, data: &[u8]) {
+    asm!("rep outsd", in("dx") port, inout("rsi") data.as_ptr() => _, inout("rcx") data.len() / 4 => _,
          options(nostack, preserves_flags, readonly));
 }
 
