@@ -801,6 +801,24 @@ pub fn deleted_xml(deleted: &[String], failed: &[(String, &str)], quiet: bool) -
     out + "</DeleteResult>"
 }
 
+// --- copies -----------------------------------------------------------------------------
+
+/// The object an `x-amz-copy-source` header names, as "bucket/key": the
+/// header may start with `/`, is percent-encoded, and may end in a version
+/// (`?versionId=`), which is left out. `None`: not usable.
+pub fn copy_source(header: &str) -> Option<String> {
+    let path = header.split('?').next().unwrap_or("");
+    let path = percent_decode(path.strip_prefix('/').unwrap_or(path))?;
+    (path.contains('/') && !path.chars().any(|c| c.is_control())).then_some(path)
+}
+
+/// The answer to "copy this object": the copy's tag and time. It follows
+/// the XML declaration, which went out when the copying began.
+pub fn copied_xml(etag: &str, time: &str, part: bool) -> String {
+    let name = if part { "CopyPartResult" } else { "CopyObjectResult" };
+    format!("<{name} xmlns=\"{NS}\"><LastModified>{time}</LastModified><ETag>&quot;{}&quot;</ETag></{name}>", xml_escape(etag))
+}
+
 // --- uploads in parts (multipart) -------------------------------------------------------
 
 /// An upload has this many parts at most (S3's own limit).
@@ -1284,6 +1302,20 @@ mod tests {
         let out = deleted_xml(&[String::from("a<")], &[(String::from("b"), "no")], false);
         assert!(out.contains("<Deleted><Key>a&lt;</Key></Deleted><Error><Key>b</Key><Code>AccessDenied</Code><Message>no</Message></Error>"));
         assert!(!deleted_xml(&[String::from("a")], &[], true).contains("Deleted>"));
+    }
+
+    #[test]
+    fn copy_sources() {
+        assert_eq!(copy_source("/photos/2026/my%20cat.jpg").as_deref(), Some("photos/2026/my cat.jpg"));
+        assert_eq!(copy_source("photos/cat.jpg?versionId=abc").as_deref(), Some("photos/cat.jpg"));
+        assert_eq!(copy_source("photos%2Fcat.jpg").as_deref(), Some("photos/cat.jpg"));
+        for bad in ["", "/", "photos", "/photos", "photos/%zz", "photos/a%00b", "photos/%ff"] {
+            assert_eq!(copy_source(bad), None, "{bad}");
+        }
+        // Climbing out is for the path check that follows (`fileserver::safe_path`).
+        assert_eq!(copy_source("/photos/../../system/users").as_deref(), Some("photos/../../system/users"));
+        assert!(copied_xml("bee1-1", "t", true).starts_with("<CopyPartResult ") && copied_xml("bee1-1", "t", true).ends_with("</CopyPartResult>"));
+        assert!(copied_xml("bee1-1", "2026-11-21T16:00:00.000Z", false).contains("<LastModified>2026-11-21T16:00:00.000Z</LastModified><ETag>&quot;bee1-1&quot;</ETag>"));
     }
 
     #[test]

@@ -1179,6 +1179,11 @@ print([o["Key"] for o in s3.list_objects_v2(Bucket="photos", Prefix="2026/")["Co
   have: 416). Download tools fetch large files in several ranges at once;
   before this the whole file went out each time and they put together a
   wrong one.
+- **Copies:** "copy that object" (`x-amz-copy-source`) is done by the
+  server itself, piece by piece, also as a part of an upload in parts with
+  a range of the source, which is how clients copy large objects and how
+  they move (copy, then delete). 40 MB on the HP: 1.3 s in one request,
+  2.5 s in parts.
 - **Not there** (answered with `501 NotImplemented`): versions, access lists, tags, the list of an upload's parts.
 - **Different from S3:** names between the `/` have 26 characters at most
   and a key 16 levels (BeeFS); a bucket named `api` cannot exist; BeeFS

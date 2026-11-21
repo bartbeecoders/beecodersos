@@ -72,7 +72,8 @@ Scenario files (tests/scenarios/*.scn):
                                query); BODY may use \r \n. FLAGS: `wrong-secret` (signed
                                with another secret), `late` (signed an hour ago), `chunked`
                                (the body in signed aws-chunked pieces), `changed` (the body
-                               is changed after signing)
+                               is changed after signing), `copy-from=/BUCKET/KEY` (sent as
+                               the signed header x-amz-copy-source: "copy that object")
     @capture NAME REGEX        remember group 1 of REGEX in the last command's output (or the
                                last `@request` / `@s3` answer): {NAME} in later commands and
                                `@remote`, `@request` and `@s3` lines becomes that text
@@ -910,8 +911,13 @@ def s3_signed(port: int, spec: str) -> bytes:
     import urllib.parse
     words = spec.split(" ")
     flags = set()
-    while words and words[0] in ("wrong-secret", "late", "chunked", "changed"):
-        flags.add(words.pop(0))
+    copy_from = None
+    while words and (words[0] in ("wrong-secret", "late", "chunked", "changed") or words[0].startswith("copy-from=")):
+        word = words.pop(0)
+        if word.startswith("copy-from="):
+            copy_from = word[len("copy-from="):]
+        else:
+            flags.add(word)
     method, target = words[0], words[1]
     body = " ".join(words[2:]).encode().decode("unicode_escape").encode("latin-1")
     path, _, query = target.partition("?")
@@ -925,6 +931,8 @@ def s3_signed(port: int, spec: str) -> bytes:
 
     key = sign(sign(sign(sign(("AWS4" + secret).encode(), date), "us-east-1"), "s3"), "aws4_request")
     headers = {"host": f"127.0.0.1:{port}", "x-amz-date": amz_date}
+    if copy_from:
+        headers["x-amz-copy-source"] = copy_from
     if "chunked" in flags:
         headers["x-amz-content-sha256"] = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD"
         headers["x-amz-decoded-content-length"] = str(len(body))
