@@ -81,7 +81,7 @@ curl -H "Authorization: Bearer $KEY" -X DELETE $BEE/api/files/pictures/photo.jpg
       <div class="cmd"><dt><code>endpoint</code></dt><dd><code>http://ADDRESS:9000</code>, path style, any region</dd></div>
       <div class="cmd"><dt><code>access key id</code></dt><dd><code>beecoders</code></dd></div>
       <div class="cmd"><dt><code>secret access key</code></dt><dd>the key (<code>fileserver key</code>)</dd></div>
-      <div class="cmd"><dt><code>what works</code></dt><dd>buckets; put, get, head, delete, delete many; listings with prefix, delimiter and pages; uploads in parts; ranges; presigned links</dd></div>
+      <div class="cmd"><dt><code>what works</code></dt><dd>buckets; put, get, head, delete, delete many, copy; listings with prefix, delimiter and pages; uploads in parts; ranges; presigned links</dd></div>
     </dl>
     <pre class="code">import boto3
 from botocore.config import Config
@@ -113,7 +113,7 @@ anyone on the network with this link can fetch the file for 24 hours; 'fileserve
       <div class="cmd"><dt>Names</dt><dd>26 characters between the <code>/</code>, 16 folders deep (the file system's limits)</dd></div>
       <div class="cmd"><dt>Not encrypted</dt><dd>the key and the files cross the network as they are: for your own network, not the internet</dd></div>
       <div class="cmd"><dt>One folder</dt><dd>no request can leave the shared folder, whatever its path says</dd></div>
-      <div class="cmd"><dt>Not there</dt><dd>copies between objects, versions, access lists and tags; times of change (the file system keeps none)</dd></div>
+      <div class="cmd"><dt>Not there</dt><dd>versions, access lists and tags; times of change (the file system keeps none)</dd></div>
     </dl>
     <p class="sub">The details, and how it is tested, are in the
       <a href="https://github.com/bartbeecoders/beecodersos#file-server-fileserver-rest-and-s3--works-on-the-hp">README</a>.</p>

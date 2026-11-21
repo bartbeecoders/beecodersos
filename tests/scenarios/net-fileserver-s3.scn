@@ -69,6 +69,33 @@ hello, bees
 HTTP/1.1 200 OK
 Content-Length: 5
 !~ honey
+# A copy, made by the server itself (what clients use to copy and to move).
+@s3 copy-from=/photos/hello.txt PUT /notes/copies/hello.txt
+HTTP/1.1 200 OK
+~ <CopyObjectResult.*<LastModified>20\d\d-[^<]+Z</LastModified><ETag>&quot;bee
+$ cat /share/notes/copies/hello.txt
+hello, bees
+@s3 copy-from=photos/2026/summer/hive%201.txt PUT /notes/hive.txt
+HTTP/1.1 200 OK
+$ cat /share/notes/hive.txt
+honey
+@s3 copy-from=/photos/none.txt PUT /notes/x.txt
+HTTP/1.1 404 Not Found
+~ <Code>NoSuchKey</Code>
+@s3 copy-from=/nothing/a.txt PUT /notes/x.txt
+HTTP/1.1 404 Not Found
+~ <Code>NoSuchBucket</Code>
+@s3 copy-from=/photos/hello.txt PUT /photos/hello.txt
+HTTP/1.1 400 Bad Request
+~ that is the same object
+@s3 copy-from=/photos/../../system/fileserver PUT /notes/key.txt
+HTTP/1.1 400 Bad Request
+@s3 copy-from=/photos/hello.txt PUT /notes/../../planted.txt
+HTTP/1.1 400 Bad Request
+@s3 wrong-secret copy-from=/photos/hello.txt PUT /notes/stolen.txt
+HTTP/1.1 403 Forbidden
+$ ls /share/notes
+!~ x\.txt|key\.txt|stolen
 # A body that is not what was signed is not written.
 @s3 changed PUT /photos/changed.txt here be bees
 HTTP/1.1 400 Bad Request
@@ -148,5 +175,5 @@ HTTP/1.1 204 No Content
 @s3 GET /
 ~ <Buckets><Bucket><Name>notes</Name>[^N]*</Bucket></Buckets>
 $ fileserver
-~ \d+ requests answered, 5 of them without the right key
+~ \d+ requests answered, 6 of them without the right key
 ~ S3:   endpoint http://10\.0\.2\.15:80, access key beecoders, secret key KEY, path style

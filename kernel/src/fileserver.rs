@@ -20,9 +20,9 @@
 //! key id `beecoders` and the same key as the secret; an unsigned or wrongly
 //! signed request gets 403 and nothing else. Buckets: list, make, remove.
 //! Objects: put, get, head, delete, delete many, list (both versions, with
-//! prefix, delimiter and pages), uploads in parts (multipart). A link (`fileserver link FILE`, or a
+//! prefix, delimiter and pages), copies, uploads in parts (multipart). A link (`fileserver link FILE`, or a
 //! client's presigned URL) fetches one file without a key until it expires.
-//! Not there: copies, versions, access lists.
+//! Not there: versions, access lists.
 //!
 //! The key is made up by the OS and kept in the setting file. The link is
 //! not encrypted: this is for the local network. The shared folder may not be
@@ -454,7 +454,10 @@ fn s3_request(stream: &net::TcpStream, folder: &str, head: &Head, early: Vec<u8>
     let chunked = matches!(auth.payload, s3::Payload::Chunked { .. });
     let decoded = head.header("x-amz-decoded-content-length").and_then(|v| v.parse::<u64>().ok());
     let object = proto::safe_path(&head.path, MAX_NAME_LEN).is_some_and(|names| names.len() >= 2);
-    let taken = if head.method == "PUT" && object && !head.path.ends_with('/') && head.header("x-amz-copy-source").is_none() {
+    if let (true, "PUT", Some(source)) = (object, head.method.as_str(), head.header("x-amz-copy-source")) {
+        return copy_object(stream, folder, head, source);
+    }
+    let taken = if head.method == "PUT" && object && !head.path.ends_with('/') {
         // An object: to the disk as it arrives, checked piece by piece.
         receive_upload(stream, head, early, s3::BodyReader::new(auth, decoded), folder, if chunked { length_room(head) } else { 0 })
     } else {
@@ -468,6 +471,104 @@ fn s3_request(stream: &net::TcpStream, folder: &str, head: &Head, early: Vec<u8>
             s3_error(status, reason, code, &message, &head.path)
         }
     }
+}
+
+/// "Copy this object": the object the `x-amz-copy-source` header names
+/// becomes this one too. A large file takes a while, so, like putting parts
+/// together, the answer starts at once and spaces keep the connection alive.
+fn copy_object(stream: &net::TcpStream, folder: &str, head: &Head, source: &str) -> Answer {
+    let fail = |status: u16, reason: &'static str, code: &str, message: &str| s3_error(status, reason, code, message, &head.path);
+    let usable = |path: &str| match proto::safe_path(path, MAX_NAME_LEN) {
+        Some(names) if names.len() >= 2 && s3::bucket_name_ok(names[0], MAX_NAME_LEN) && !path.ends_with('/') => Some(names.join("/")),
+        _ => None,
+    };
+    let (Some(to), Some(from)) = (usable(&head.path), s3::copy_source(source).and_then(|path| usable(&path))) else {
+        return fail(400, "Bad Request", "InvalidArgument", "copies go from one object to another: BUCKET/KEY, in names this server can hold");
+    };
+    // As a part of an upload in parts ("copy that object, or these bytes of it, as part N").
+    let part = match (head.query_value("uploadId"), head.query_value("partNumber")) {
+        (None, None) => None,
+        (Some(id), Some(number)) => match number.parse::<u32>().ok().filter(|n| (1..=s3::MAX_PARTS).contains(n)) {
+            Some(number) => Some((id, number)),
+            None => return fail(400, "Bad Request", "InvalidArgument", "a part needs a number from 1 to 10000"),
+        },
+        _ => return fail(400, "Bad Request", "InvalidArgument", "a part needs its upload and its number"),
+    };
+    if from == to && part.is_none() {
+        return fail(400, "Bad Request", "InvalidRequest", "that is the same object");
+    }
+    let (from_path, mut to_path) = (format!("{folder}/{from}"), format!("{folder}/{to}"));
+    let Some(mut storage) = storage::handle() else { return fail(503, "Service Unavailable", "ServiceUnavailable", "no file system") };
+    // Everything that can be refused is, before the answer starts.
+    let size = {
+        let mut fs = storage.fs();
+        let bucket = |path: &str| format!("{folder}/{}", path.split('/').next().unwrap_or(""));
+        if !fs.is_dir(&bucket(&to)) || !fs.is_dir(&bucket(&from)) {
+            return fail(404, "Not Found", "NoSuchBucket", "no such bucket");
+        }
+        if fs.is_dir(&to_path) {
+            return fail(409, "Conflict", "InvalidRequest", "a folder has that name");
+        }
+        if let Some((id, number)) = &part {
+            match parts_dir(&mut fs, folder, id, &to) {
+                Some(dir) => to_path = format!("{dir}/{number}"),
+                None => return fail(404, "Not Found", "NoSuchUpload", "no such upload in parts (finished, given up, or never started)"),
+            }
+        }
+        match fs.metadata(&from_path) {
+            Ok(m) if m.kind == FileKind::File => m.size,
+            _ => return fail(404, "Not Found", "NoSuchKey", "no such object to copy"),
+        }
+    };
+    // All of it, or the bytes a part asks for.
+    let (first, size) = match head.header("x-amz-copy-source-range").filter(|_| part.is_some()).map(|range| proto::byte_range(range, size)) {
+        None | Some(Ok(None)) => (0, size),
+        Some(Ok(Some((first, last)))) => (first, last - first + 1),
+        Some(Err(())) => return fail(416, "Range Not Satisfiable", "InvalidRange", "the object has no such bytes"),
+    };
+    if size > room(folder) {
+        return fail(507, "Insufficient Storage", "EntityTooLarge", "the disk has no room for the copy");
+    }
+    let _ = stream.send_some(b"HTTP/1.1 200 OK\r\nContent-Type: application/xml\r\nConnection: close\r\n\r\n<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    let temp = format!("{folder}/{UPLOAD_PREFIX}{:08x}", rand::next_u32());
+    let result = (|| -> Result<(u32, u64), FsError> {
+        storage.fs().write_file(&temp, &[])?;
+        let mut piece = alloc::vec![0u8; WRITE_PIECE];
+        let (mut offset, end, mut last_sign) = (first, first + size, time::uptime_ms());
+        while offset < end {
+            let want = ((end - offset) as usize).min(piece.len());
+            let mut fs = storage.fs();
+            let n = fs.read_at(&from_path, offset, &mut piece[..want])?;
+            if n > 0 {
+                fs.append(&temp, &piece[..n])?;
+            }
+            drop(fs);
+            if n == 0 {
+                break;
+            }
+            offset += n as u64;
+            if time::uptime_ms() - last_sign > 2_000 {
+                let _ = stream.send_some(b" "); // still at it
+                last_sign = time::uptime_ms();
+            }
+            thread::yield_now();
+        }
+        let mut fs = storage.fs();
+        place_upload(&mut fs, &temp, &to_path)?;
+        let m = fs.metadata(&to_path)?;
+        Ok((m.inode, m.size))
+    })();
+    let text = match result {
+        Ok((inode, size)) => s3::copied_xml(&etag(inode, size), &s3::iso_time(time::now_unix().unwrap_or(0)), part.is_some()),
+        Err(e) => {
+            let _ = storage.fs().remove(&temp);
+            // The answer has begun: the error goes where the result would (S3 does the same).
+            format!("<Error><Code>InternalError</Code><Message>{e}</Message></Error>")
+        }
+    };
+    let mut a = Answer::new(200, "OK", "application/xml", text.into_bytes());
+    a.headless = true;
+    a
 }
 
 /// Where the parts of upload `id` wait, if that is an upload for this key.
@@ -799,7 +900,6 @@ fn s3_act(folder: &str, head: &Head, body: Body) -> Answer {
             }
         }
         "POST" if has("uploadId") => not_done("this request"),
-        "PUT" if head.header("x-amz-copy-source").is_some() => not_done("copies"),
         "PUT" if has("acl") || has("tagging") || has("retention") || has("legal-hold") => not_done("object settings"),
         "PUT" if !bucket_there => no_bucket(),
         "PUT" if is_folder_key => match fs.mkdir_all(&path) {
