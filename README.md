@@ -330,6 +330,17 @@ Serial input bypasses the layout: the host terminal has already translated keys.
 to FILE, `>> FILE` adds it at the end (`ls /data > files.txt`,
 `grep honey notes.txt >> found.txt`); error messages still come to the
 screen (`console::capture_start`; `redirect.scn`).
+
+**Pipes:** `A | B` gives what A prints to B, and so on down the line:
+`ls /data | grep txt | sort -r | head -n 3`, `log 50 | grep error | wc`.
+`cat`, `head`, `tail`, `sort`, `wc` and `grep` read what is piped to them
+when no file is named (`grep` then prints the lines as they are, without
+numbers); any command may stand first, and the last one may end in
+`> FILE`. A `|` inside "double quotes" is text, and so is one in a line for
+the AI (`ask`, `do`, `wish`, `feedback`). An error ends the line, and a
+command that reads no input says so (`shell::split_pipes`,
+`Shell::pipeline`; `pipes.scn`).
+
 **Line editing:** ←/→, Home/End, Backspace/Delete, ↑/↓ history (with something
 typed, only the commands that start with it: `history-prefix.scn`), Esc clears the
 line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.

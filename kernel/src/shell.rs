@@ -91,6 +91,8 @@ pub struct Shell {
     user: Option<users::User>,
     /// The AI host's control shell: admin rights (`ai control on` at the console allowed it).
     host: bool,
+    /// What the command before a `|` printed, for the one after it to read.
+    stdin: Option<String>,
 }
 
 impl Shell {
@@ -107,6 +109,7 @@ impl Shell {
             leave: false,
             user: None,
             host: false,
+            stdin: None,
         }
     }
 
@@ -1075,6 +1078,11 @@ impl Shell {
     }
 
     fn execute(&mut self, line: &str) {
+        // Pipes: `a | b | c` gives what a prints to b, and what b prints to c.
+        let stages = split_pipes(line);
+        if stages.len() > 1 {
+            return self.pipeline(&stages);
+        }
         let mut args = match tokenize(line) {
             Ok(a) => a,
             Err(e) => return error(e),
@@ -1174,6 +1182,15 @@ impl Shell {
             ("tree", []) => self.tree(&self.cwd.clone()),
             ("tree", [dir]) => self.tree(&self.abs(dir)),
             ("cat" | "type", [file]) => self.cat(file),
+            ("cat", []) if self.stdin.is_some() => self.cat("-"),
+            ("head" | "tail", args) if self.stdin.is_some() && args.iter().all(|a| a.starts_with('-') || a.parse::<usize>().is_ok()) => {
+                let mut with_input = args.to_vec();
+                with_input.push("-");
+                match textops::parse_count(&with_input) {
+                    Some((n, file)) => self.head_tail(file, n, cmd == "tail"),
+                    None => error(&format!("usage: ... | {cmd} [-n N]")),
+                }
+            }
             ("head" | "tail", args) => match textops::parse_count(args) {
                 Some((n, file)) => self.head_tail(file, n, cmd == "tail"),
                 None => error(&format!("usage: {cmd} [-n N] FILE   (the {} 10 lines unless N is given)", if cmd == "tail" { "last" } else { "first" })),
@@ -1181,7 +1198,9 @@ impl Shell {
             ("sort", args) if !args.is_empty() => {
                 let (flags, file): (Vec<&str>, Vec<&str>) = args.iter().partition(|a| a.starts_with('-'));
                 let known = flags.iter().all(|f| matches!(*f, "-r" | "-u" | "-ru" | "-ur"));
-                match (known, file.as_slice()) {
+                let piped: &[&str] = &["-"];
+                let file = if file.is_empty() && self.stdin.is_some() { piped } else { file.as_slice() };
+                match (known, file) {
                     (true, [file]) => {
                         let Some(text) = self.read_text(file) else { return };
                         let reverse = flags.iter().any(|f| f.contains('r'));
@@ -1191,13 +1210,24 @@ impl Shell {
                     _ => error("usage: sort [-r] [-u] FILE   (-r: last first, -u: each line once)"),
                 }
             }
+            ("sort", []) if self.stdin.is_some() => {
+                let text = self.stdin.take().unwrap_or_default();
+                print!("{}", textops::sort_lines(&text, false, false));
+            }
             ("sort", _) => error("usage: sort [-r] [-u] FILE   (-r: last first, -u: each line once)"),
             ("wc", [file]) => {
                 let Some(text) = self.read_text(file) else { return };
                 let (lines, words, bytes) = textops::count(&text);
                 println!("{lines} lines, {words} words, {bytes} bytes  {file}");
             }
+            ("wc", []) if self.stdin.is_some() => {
+                let text = self.stdin.take().unwrap_or_default();
+                let (lines, words, bytes) = textops::count(&text);
+                println!("{lines} lines, {words} words, {bytes} bytes");
+            }
             ("wc", _) => error("usage: wc FILE"),
+            ("grep", [pattern]) if self.stdin.is_some() => self.grep_piped(pattern, false),
+            ("grep", ["-i", pattern]) if self.stdin.is_some() => self.grep_piped(pattern, true),
             ("grep", [pattern, path]) => self.grep(pattern, path, false),
             ("grep", ["-i", pattern, path]) => self.grep(pattern, path, true),
             ("grep", _) => error("usage: grep [-i] TEXT FILE|FOLDER   (-i: upper and lower case alike)"),
@@ -3099,6 +3129,14 @@ impl Shell {
     }
 
     fn cat(&mut self, file: &str) {
+        if file == "-" && self.stdin.is_some() {
+            let text = self.stdin.take().unwrap_or_default();
+            print!("{text}");
+            if !text.is_empty() && !text.ends_with('\n') {
+                println!();
+            }
+            return;
+        }
         let path = self.abs(file);
         let data = self.storage.fs().read_file(&path);
         match data {
@@ -3115,6 +3153,9 @@ impl Shell {
 
     /// A file's content as text; prints why not and gives `None` otherwise.
     fn read_text(&mut self, file: &str) -> Option<String> {
+        if file == "-" && self.stdin.is_some() {
+            return self.stdin.take();
+        }
         let path = self.abs(file);
         let data = self.storage.fs().read_file(&path);
         match data {
@@ -3133,6 +3174,44 @@ impl Shell {
         print!("{part}");
         if !part.is_empty() && !part.ends_with('\n') {
             println!();
+        }
+    }
+
+    /// `a | b | c`: every command but the last prints into the next one
+    /// (`self.stdin`); the last prints to the screen, or to a file with `>`.
+    /// An error anywhere ends the line.
+    fn pipeline(&mut self, stages: &[&str]) {
+        if stages.iter().any(|s| s.trim().is_empty()) {
+            return error("usage: COMMAND | COMMAND   (for example: ls | grep txt | sort)");
+        }
+        let mut input: Option<String> = None;
+        for (i, stage) in stages.iter().enumerate() {
+            let last = i + 1 == stages.len();
+            let first = i == 0;
+            self.stdin = input.take();
+            if !last {
+                console::capture_start();
+            }
+            self.execute(stage);
+            if !last {
+                input = Some(console::capture_end());
+            }
+            let unread = self.stdin.take().is_some();
+            if last_error().is_some() || self.status != Status::Ok {
+                return;
+            }
+            if unread && !first {
+                let name = stage.split_whitespace().next().unwrap_or("");
+                return error(&format!("{name}: does not read what is piped to it (cat, head, tail, sort, wc and grep do)"));
+            }
+        }
+    }
+
+    /// `... | grep [-i] TEXT`: the piped lines that contain TEXT, as they are.
+    fn grep_piped(&mut self, pattern: &str, ignore_case: bool) {
+        let text = self.stdin.take().unwrap_or_default();
+        for (_, line) in textops::grep(&text, pattern, ignore_case) {
+            println!("{line}");
         }
     }
 
@@ -3272,6 +3351,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("ls [-s] [DIR]", "list a directory (-s: files by size, largest first, and their total)"),
     ("cd [DIR], pwd", "change / show the current directory"),
     ("cat FILE", "show a file"),
+    ("A | B", "what A prints goes to B (cat, head, tail, sort, wc, grep): ls | grep txt | sort"),
     ("head|tail [-n N] FILE", "the first / last N lines of a file (10 unless N is given)"),
     ("wc FILE", "count the lines, words and bytes of a file"),
     ("sort [-r] [-u] FILE", "the lines of a file in order (-r: last first, -u: each line once)"),
@@ -3484,6 +3564,31 @@ fn error(msg: &str) {
     println!("{msg}");
     console::set_color(Color::LightGray, Color::Black);
     console::capture_pause(false);
+}
+
+/// A command line cut at every `|` outside "double quotes": the commands
+/// of a pipe. One piece means no pipe; lines whose text is free (a question
+/// for the AI, a wish) are never cut.
+pub(crate) fn split_pipes(line: &str) -> Vec<&str> {
+    let first = line.split_whitespace().next().unwrap_or("");
+    if matches!(first, "ask" | "do" | "wish" | "feedback") {
+        return alloc::vec![line];
+    }
+    let mut out = Vec::new();
+    let mut quoted = false;
+    let mut start = 0;
+    for (i, c) in line.char_indices() {
+        match c {
+            '"' => quoted = !quoted,
+            '|' if !quoted => {
+                out.push(&line[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&line[start..]);
+    out
 }
 
 /// Split a command line into words; "double quotes" group words.
