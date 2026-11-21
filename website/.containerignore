@@ -3,6 +3,7 @@
 !deploy/nginx.conf
 !index.html
 !commands.html
+!fileserver.html
 !style.css
 !site.js
 !img/

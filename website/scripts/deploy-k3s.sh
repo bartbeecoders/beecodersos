@@ -96,6 +96,10 @@ check_site() {
     [[ -s "$HOME_DIR/$f" ]] || { echo "missing: $f"; missing=1; }
   done
   local page
+  # What the image is built from must be let through by .containerignore.
+  for f in index.html commands.html fileserver.html style.css site.js; do
+    grep -qxF "!$f" "$HOME_DIR/.containerignore" || { echo ".containerignore keeps $f out of the image"; missing=1; }
+  done
   for page in index.html commands.html fileserver.html; do
     # Every local src/href in the page must exist (external links and #anchors are skipped).
     while read -r f; do
