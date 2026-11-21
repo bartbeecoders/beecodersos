@@ -92,11 +92,11 @@ check_remote_deps() { command -v ssh >/dev/null 2>&1 || { echo "ssh not found"; 
 check_site() {
   echo "==> Checking the site"
   local f missing=0
-  for f in index.html commands.html style.css site.js Dockerfile deploy/nginx.conf; do
+  for f in index.html commands.html fileserver.html style.css site.js Dockerfile deploy/nginx.conf; do
     [[ -s "$HOME_DIR/$f" ]] || { echo "missing: $f"; missing=1; }
   done
   local page
-  for page in index.html commands.html; do
+  for page in index.html commands.html fileserver.html; do
     # Every local src/href in the page must exist (external links and #anchors are skipped).
     while read -r f; do
       [[ -e "$HOME_DIR/$f" ]] || { echo "$page refers to a missing file: $f"; missing=1; }

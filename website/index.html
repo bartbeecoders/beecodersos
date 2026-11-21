@@ -16,7 +16,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=347">
+<link rel="stylesheet" href="style.css?v=348">
 <script src="site.js" defer></script>
 </head>
 <body>
@@ -262,7 +262,8 @@ clover
         boto3 works against it as it is, uploads in parts and downloads in ranges included. Every request needs the key the OS made up; S3 requests are signed as
         Amazon's clients sign them, and the OS checks each signature, down to every piece of a chunked upload, before
         it touches the disk. Files go to the disk as they arrive, so they can be as large as the disk has room: 100 MB reaches the HP in 10 to 16 seconds. No request can leave the shared folder. Off until you switch it on. And <code>fileserver link photo.jpg</code>
-        gives an address that opens that one file in any browser, without a key, until it expires.</p>
+        gives an address that opens that one file in any browser, without a key, until it expires.
+        <a href="fileserver.html">How to use it</a>.</p>
     </article>
 
     <article class="card">
