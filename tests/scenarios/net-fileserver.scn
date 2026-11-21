@@ -76,7 +76,7 @@ HTTP/1.1 400 Bad Request
 HTTP/1.1 400 Bad Request
 !~ key
 @request raw GET /secret.txt HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
-HTTP/1.1 404 Not Found
+HTTP/1.1 403 Forbidden
 !~ private
 @request raw PUT /api/files/../planted.txt HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\nContent-Length: 1\r\n\r\nx
 HTTP/1.1 400 Bad Request
@@ -110,7 +110,7 @@ $ ls /share
 !~ hello
 $ fileserver
 ~ file server: on, http://10\.0\.2\.15:80/api/files/ shares /share
-~ \d+ requests answered, 3 of them without the right key
+~ \d+ requests answered, 4 of them without the right key
 # A new key: the old one stops working at once.
 $ fileserver key new
 ~ new key: \w{40}

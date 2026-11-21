@@ -39,6 +39,7 @@ pub mod uvc;
 pub mod motion;
 pub mod http;
 pub mod fileserver;
+pub mod s3;
 pub mod sha256;
 pub mod sntp;
 mod stack;

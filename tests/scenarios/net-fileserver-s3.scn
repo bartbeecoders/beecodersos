@@ -1,0 +1,149 @@
+# The file server's S3 side: the folders of the shared folder are buckets,
+# the files in them objects. Requests are signed as S3 clients sign them
+# (@s3: AWS Signature Version 4, by the test itself).
+@net
+@disk
+@forward
+$ net dhcp
+~ ^address 10\.0\.2\.15/24 \(DHCP\)
+$ echo key TestKeyTestKeyTestKeyTestKeyTestKey12345 > /system/fileserver
+$ fileserver on 80
+~ S3: access key 'beecoders', secret key: the key
+# Not signed, signed with another secret, signed an hour ago: nothing.
+@request GET /
+HTTP/1.1 403 Forbidden
+~ <Code>AccessDenied</Code>
+@s3 wrong-secret GET /
+HTTP/1.1 403 Forbidden
+~ <Code>SignatureDoesNotMatch</Code>
+@s3 wrong-secret PUT /planted
+HTTP/1.1 403 Forbidden
+@s3 late GET /
+HTTP/1.1 403 Forbidden
+~ <Code>RequestTimeTooSkewed</Code>
+$ ls /share
+!~ planted
+# Buckets.
+@s3 GET /
+HTTP/1.1 200 OK
+Content-Type: application/xml
+~ <Buckets></Buckets>
+@s3 PUT /photos
+HTTP/1.1 200 OK
+Location: /photos
+@s3 PUT /notes
+HTTP/1.1 200 OK
+@s3 GET /
+~ <Buckets><Bucket><Name>notes</Name><CreationDate>20\d\d-[^<]+Z</CreationDate></Bucket><Bucket><Name>photos</Name>
+@s3 HEAD /photos
+HTTP/1.1 200 OK
+@s3 HEAD /nothing
+HTTP/1.1 404 Not Found
+@s3 GET /photos?location
+~ <LocationConstraint
+$ ls /share
+~ notes/
+~ photos/
+# Objects: plain, in folders, with a name that needs encoding, in chunks.
+@s3 PUT /photos/hello.txt hello, bees\n
+HTTP/1.1 200 OK
+~ ETag: "bee[0-9a-f]{20}-1"
+$ cat /share/photos/hello.txt
+hello, bees
+@s3 PUT /photos/2026/summer/hive%201.txt honey
+HTTP/1.1 200 OK
+@s3 chunked PUT /photos/2026/chunks.txt sent in pieces of five bytes
+HTTP/1.1 200 OK
+$ cat "/share/photos/2026/summer/hive 1.txt"
+honey
+$ cat /share/photos/2026/chunks.txt
+sent in pieces of five bytes
+@s3 GET /photos/hello.txt
+HTTP/1.1 200 OK
+Content-Type: text/plain; charset=utf-8
+Content-Length: 12
+~ ETag: "bee
+~ Last-Modified: \w{3}, \d\d \w{3} 20\d\d
+hello, bees
+@s3 HEAD /photos/2026/summer/hive%201.txt
+HTTP/1.1 200 OK
+Content-Length: 5
+!~ honey
+# A body that is not what was signed is not written.
+@s3 changed PUT /photos/changed.txt here be bees
+HTTP/1.1 400 Bad Request
+~ <Code>XAmzContentSHA256Mismatch</Code>
+@s3 chunked changed PUT /photos/changed.txt here be bees
+HTTP/1.1 400 Bad Request
+$ ls /share/photos
+!~ changed
+# Listings: all keys, as folders, by prefix, in pages.
+@s3 GET /photos?list-type=2
+HTTP/1.1 200 OK
+~ <Name>photos</Name><Prefix></Prefix><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated><KeyCount>3</KeyCount>.*<Key>2026/chunks.txt</Key>.*<Size>28</Size>.*<Key>2026/summer/hive 1.txt</Key>.*<Key>hello.txt</Key>
+@s3 GET /photos?list-type=2&delimiter=%2F
+~ <KeyCount>2</KeyCount><Contents><Key>hello.txt</Key>.*<CommonPrefixes><Prefix>2026/</Prefix></CommonPrefixes>
+@s3 GET /photos?list-type=2&delimiter=%2F&prefix=2026%2F&encoding-type=url
+~ <EncodingType>url</EncodingType><KeyCount>2</KeyCount><Contents><Key>2026/chunks.txt</Key>.*<CommonPrefixes><Prefix>2026/summer/</Prefix>
+@s3 GET /photos?list-type=2&max-keys=2
+~ <IsTruncated>true</IsTruncated><KeyCount>2</KeyCount><NextContinuationToken>2026/summer/hive 1.txt</NextContinuationToken>
+@s3 GET /photos?list-type=2&max-keys=2&continuation-token=2026%2Fsummer%2Fhive%201.txt
+~ <IsTruncated>false</IsTruncated><KeyCount>1</KeyCount>.*<Key>hello.txt</Key>
+@s3 GET /photos?prefix=he
+~ <Marker></Marker><Contents><Key>hello.txt</Key>
+@s3 GET /nothing?list-type=2
+HTTP/1.1 404 Not Found
+~ <Code>NoSuchBucket</Code>
+# The REST side sees the same files.
+@request raw GET /api/files/photos/2026 HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
+{"path":"/photos/2026","entries":[{"name":"chunks.txt","type":"file","size":28},{"name":"summer","type":"folder","size":0}]}
+# Never outside the shared folder; "api" is no bucket.
+$ echo private > /secret.txt
+@s3 GET /../secret.txt
+HTTP/1.1 400 Bad Request
+!~ private
+# (dots sent encoded are not what a client signs: refused before anything is looked at)
+@s3 GET /photos/%2e%2e/%2e%2e/secret.txt
+HTTP/1.1 403 Forbidden
+!~ private
+@s3 PUT /photos/../../planted.txt x
+HTTP/1.1 400 Bad Request
+$ ls /
+!~ planted
+# What it does not do, and what is not there, says so.
+@s3 GET /photos/none.txt
+HTTP/1.1 404 Not Found
+~ <Code>NoSuchKey</Code>
+@s3 PUT /nothing/a.txt x
+HTTP/1.1 404 Not Found
+~ <Code>NoSuchBucket</Code>
+@s3 POST /photos/big.bin?uploads
+HTTP/1.1 501 Not Implemented
+~ <Code>NotImplemented</Code>
+@s3 PUT /photos/a-name-that-is-much-too-long-for-beefs.txt x
+HTTP/1.1 400 Bad Request
+~ <Code>KeyTooLongError</Code>
+@s3 DELETE /photos
+HTTP/1.1 409 Conflict
+~ <Code>BucketNotEmpty</Code>
+# Deleting: one, several at once; folders that become empty go too.
+@s3 DELETE /photos/hello.txt
+HTTP/1.1 204 No Content
+@s3 DELETE /photos/hello.txt
+HTTP/1.1 204 No Content
+@s3 POST /photos?delete <Delete><Object><Key>2026/chunks.txt</Key></Object><Object><Key>2026/summer/hive 1.txt</Key></Object><Object><Key>../../secret.txt</Key></Object></Delete>
+HTTP/1.1 200 OK
+~ <Deleted><Key>2026/chunks.txt</Key></Deleted><Deleted><Key>2026/summer/hive 1.txt</Key></Deleted><Error><Key>../../secret.txt</Key>
+$ cat /secret.txt
+private
+$ ls /share/photos
+!~ 2026
+@s3 GET /photos?list-type=2
+~ <KeyCount>0</KeyCount>
+@s3 DELETE /photos
+HTTP/1.1 204 No Content
+@s3 GET /
+~ <Buckets><Bucket><Name>notes</Name>[^N]*</Bucket></Buckets>
+$ fileserver
+~ \d+ requests answered, 5 of them without the right key
+~ S3:   endpoint http://10\.0\.2\.15:80, access key beecoders, secret key KEY, path style

@@ -2206,6 +2206,7 @@ impl Shell {
                 println!("file server on, port {port}{saved}: it shares {}", s.folder);
                 println!("key: {}", s.key);
                 println!("with the key, a program can read, write and delete the files there; the link is not encrypted");
+                println!("REST: /api/files/ with 'Authorization: Bearer KEY'. S3: access key '{}', secret key: the key ('fileserver' shows more)", beenet::s3::ACCESS_KEY);
             }
             None => println!("file server off{saved}"),
         }
@@ -2219,7 +2220,8 @@ impl Shell {
                 let (answered, refused) = fileserver::counters();
                 println!("file server: on, http://{host}:{port}/api/files/ shares {}", s.folder);
                 println!("  {answered} requests answered, {refused} of them without the right key");
-                println!("  try: curl -H \"Authorization: Bearer KEY\" http://{host}:{port}/api/files/   ('fileserver key' shows the key)");
+                println!("  REST: curl -H \"Authorization: Bearer KEY\" http://{host}:{port}/api/files/   ('fileserver key' shows the key)");
+                println!("  S3:   endpoint http://{host}:{port}, access key {}, secret key KEY, path style; the folders in {} are the buckets", beenet::s3::ACCESS_KEY, s.folder);
             }
             (None, _) => println!("file server: off ('fileserver on [PORT]' starts it; it would share {})", s.folder),
         }

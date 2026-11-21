@@ -11,6 +11,15 @@
 //!   DELETE /api/files/PATH    remove the file, or the empty folder
 //! Without the right key every request gets 401 and nothing else.
 //!
+//! The same folder speaks the S3 protocol on every other path (path style:
+//! /BUCKET/KEY): its folders are the buckets, the files below them the
+//! objects. Requests are signed (AWS Signature Version 4) with the access
+//! key id `beecoders` and the same key as the secret; an unsigned or wrongly
+//! signed request gets 403 and nothing else. Buckets: list, make, remove.
+//! Objects: put, get, head, delete, delete many, list (both versions, with
+//! prefix, delimiter and pages). Not there: multipart uploads, copies,
+//! versions, access lists, presigned links.
+//!
 //! The key is made up by the OS and kept in the setting file. The link is
 //! not encrypted: this is for the local network. The shared folder may not be
 //! `/` or lie in /system, so settings and passwords stay out of reach.
@@ -22,6 +31,7 @@
 
 use crate::ring::Global;
 use crate::{net, rand, storage, thread, time};
+use beenet::s3;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -285,33 +295,331 @@ fn answer(stream: &net::TcpStream) -> bool {
         return true;
     };
     let setting = setting();
-    let authorized = proto::bearer(&head).is_some_and(|key| proto::same_secret(key, &setting.key));
-    let reply = if !authorized {
-        let mut a = Answer::error(401, "Unauthorized", "send the key: Authorization: Bearer KEY");
-        a.more = String::from("WWW-Authenticate: Bearer\r\n");
-        a
+    let (reply, authorized) = if head.path == "/api" || head.path.starts_with("/api/") {
+        if !proto::bearer(&head).is_some_and(|key| proto::same_secret(key, &setting.key)) {
+            let mut a = Answer::error(401, "Unauthorized", "send the key: Authorization: Bearer KEY");
+            a.more = String::from("WWW-Authenticate: Bearer\r\n");
+            (a, false)
+        } else {
+            match body(stream, &head, early, 0) {
+                Ok(body) => (rest(&setting.folder, &head, body), true),
+                Err(e) => {
+                    let (status, reason, _, message) = e.parts();
+                    (Answer::error(status, reason, &message), true)
+                }
+            }
+        }
     } else {
-        match body(stream, &head, early) {
-            Ok(body) => rest(&setting.folder, &head, body),
-            Err(a) => a,
+        // Everything else is S3: nothing happens before the signature is right.
+        match s3::verify(&head, &setting.key, time::now_unix()) {
+            Err(e) => (s3_error(403, "Forbidden", e.code(), e.message(), &head.path), false),
+            Ok(auth) => (s3_request(stream, &setting.folder, &head, early, &auth), true),
         }
     };
     send(stream, &reply, head.method == "HEAD");
     authorized
 }
 
-/// The request's body, for the methods that have one.
-fn body(stream: &net::TcpStream, head: &Head, early: Vec<u8>) -> Result<Vec<u8>, Answer> {
-    let length = match head.content_length() {
-        Err(()) => return Err(Answer::error(400, "Bad Request", "Content-Length is not a number")),
-        Ok(Some(n)) => n,
-        Ok(None) if head.method == "PUT" && !head.path.ends_with('/') => {
-            return Err(Answer::error(411, "Length Required", "PUT needs a Content-Length"));
+/// More than a file's size that a chunked upload may take on the wire.
+const CHUNK_ROOM: u64 = 256 * 1024;
+
+fn s3_error(status: u16, reason: &'static str, code: &str, message: &str, resource: &str) -> Answer {
+    Answer::new(status, reason, "application/xml", s3::error_xml(code, message, resource).into_bytes())
+}
+
+fn s3_xml(text: String) -> Answer {
+    Answer::new(200, "OK", "application/xml", text.into_bytes())
+}
+
+/// A signed S3 request: take its body as the client meant it, then act.
+fn s3_request(stream: &net::TcpStream, folder: &str, head: &Head, early: Vec<u8>, auth: &s3::Auth) -> Answer {
+    let chunked = matches!(auth.payload, s3::Payload::Chunked { .. });
+    let received = match body(stream, head, early, if chunked { CHUNK_ROOM } else { 0 }) {
+        Ok(data) => data,
+        Err(e) => {
+            let (status, reason, code, message) = e.parts();
+            return s3_error(status, reason, code, &message, &head.path);
         }
+    };
+    let decoded = head.header("x-amz-decoded-content-length").and_then(|v| v.parse::<u64>().ok());
+    match s3::body(auth, received, decoded) {
+        Ok(data) if data.len() as u64 > MAX_BODY => {
+            let (status, reason, code, message) = BodyError::TooLarge.parts();
+            s3_error(status, reason, code, &message, &head.path)
+        }
+        Ok(data) => s3_act(folder, head, data),
+        Err(e) => s3_error(400, "Bad Request", e.code(), e.message(), &head.path),
+    }
+}
+
+/// The most objects a listing looks at.
+const MAX_WALK: usize = 10_000;
+
+/// An object's tag: which file it is and how large. (BeeFS keeps no times
+/// and the content is not hashed; the "-1" tells clients it is no MD5.)
+fn etag(inode: u32, size: u64) -> String {
+    format!("bee{inode:08x}{size:012x}-1")
+}
+
+/// Every file below `dir` as an object whose key starts with `key_start`, sorted by key.
+fn walk(fs: &mut storage::FsGuard, dir: &str, key_start: &str) -> Result<Vec<s3::Object>, ()> {
+    let mut objects = Vec::new();
+    let mut todo = alloc::vec![(String::from(dir), String::from(key_start))];
+    while let Some((dir, start)) = todo.pop() {
+        let Ok(entries) = fs.read_dir(&dir) else { continue };
+        if entries.is_empty() && start != key_start {
+            // An empty folder shows as a key that ends in "/".
+            objects.push(s3::Object { key: start.clone(), size: 0, etag: etag(0, 0) });
+        }
+        for e in entries {
+            if objects.len() + todo.len() >= MAX_WALK {
+                return Err(());
+            }
+            match e.kind {
+                FileKind::Directory => todo.push((format!("{dir}/{}", e.name), format!("{start}{}/", e.name))),
+                FileKind::File => objects.push(s3::Object { key: format!("{start}{}", e.name), size: e.size, etag: etag(e.inode, e.size) }),
+            }
+        }
+    }
+    objects.sort_by(|a, b| a.key.cmp(&b.key));
+    Ok(objects)
+}
+
+/// Remove the folders above `path` that became empty, up to the bucket.
+fn prune(fs: &mut storage::FsGuard, bucket_dir: &str, path: &str) {
+    let mut at = path;
+    while let Some(cut) = at.rfind('/') {
+        at = &at[..cut];
+        if at.len() <= bucket_dir.len() || fs.remove(at).is_err() {
+            return;
+        }
+    }
+}
+
+/// The S3 interface: /BUCKET/KEY below the shared folder.
+fn s3_act(folder: &str, head: &Head, body: Vec<u8>) -> Answer {
+    let resource = head.path.as_str();
+    let fail = |status: u16, reason: &'static str, code: &str, message: &str| s3_error(status, reason, code, message, resource);
+    let not_done = |what: &str| fail(501, "Not Implemented", "NotImplemented", &format!("{what}: this file server does not do that"));
+    let fs_failed = |e: FsError| {
+        let text = format!("{e}");
+        match e {
+            FsError::NoSpace | FsError::NoInodes | FsError::FileTooLarge => fail(507, "Insufficient Storage", "EntityTooLarge", &text),
+            FsError::NameTooLong | FsError::InvalidPath => fail(400, "Bad Request", "KeyTooLongError", &text),
+            FsError::IsADirectory | FsError::NotADirectory | FsError::AlreadyExists => fail(409, "Conflict", "InvalidRequest", &text),
+            _ => fail(500, "Internal Server Error", "InternalError", &text),
+        }
+    };
+    let Some(names) = proto::safe_path(&head.path, MAX_NAME_LEN) else {
+        return fail(400, "Bad Request", "KeyTooLongError", &format!("not a usable key (names between the / have {MAX_NAME_LEN} characters at most)"));
+    };
+    let has = |name: &str| head.query_value(name).is_some();
+    let now = time::now_unix().unwrap_or(0);
+    let Some(mut storage) = storage::handle() else { return fail(503, "Service Unavailable", "ServiceUnavailable", "no file system") };
+    let mut fs = storage.fs();
+    let method = head.method.as_str();
+
+    // The service itself: its buckets are the folders of the shared folder.
+    let Some(bucket) = names.first().copied() else {
+        return match method {
+            "GET" | "HEAD" => {
+                let mut buckets: Vec<String> = fs
+                    .read_dir(folder)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|e| e.kind == FileKind::Directory && s3::bucket_name_ok(&e.name, MAX_NAME_LEN))
+                    .map(|e| e.name)
+                    .collect();
+                buckets.sort();
+                s3_xml(s3::buckets_xml(&buckets, &s3::iso_time(now)))
+            }
+            _ => fail(405, "Method Not Allowed", "MethodNotAllowed", "only GET here"),
+        };
+    };
+    if !s3::bucket_name_ok(bucket, MAX_NAME_LEN) {
+        return fail(400, "Bad Request", "InvalidBucketName", "a bucket's name: letters, digits, . - _ (26 at most), and not 'api'");
+    }
+    let bucket_dir = format!("{folder}/{bucket}");
+    let bucket_there = fs.is_dir(&bucket_dir);
+    let no_bucket = || fail(404, "Not Found", "NoSuchBucket", "no such bucket");
+
+    if names.len() == 1 {
+        return match method {
+            "PUT" if has("acl") || has("versioning") || has("policy") || has("lifecycle") || has("cors") || has("tagging") => not_done("bucket settings"),
+            "PUT" => match fs.mkdir_all(&bucket_dir) {
+                Ok(()) => {
+                    let mut a = Answer::new(200, "OK", "application/xml", Vec::new());
+                    a.more = format!("Location: /{bucket}\r\n");
+                    a
+                }
+                Err(e) => fs_failed(e),
+            },
+            _ if !bucket_there => no_bucket(),
+            "HEAD" => Answer::new(200, "OK", "application/xml", Vec::new()),
+            "DELETE" => match fs.remove(&bucket_dir) {
+                Ok(()) => Answer::new(204, "No Content", "application/xml", Vec::new()),
+                Err(FsError::DirectoryNotEmpty) => fail(409, "Conflict", "BucketNotEmpty", "the bucket is not empty"),
+                Err(e) => fs_failed(e),
+            },
+            "GET" if has("location") => s3_xml(s3::location_xml()),
+            "GET" if has("versioning") => {
+                s3_xml(String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<VersioningConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"/>"))
+            }
+            "GET" if ["uploads", "versions", "acl", "policy", "lifecycle", "cors", "tagging", "object-lock", "encryption"].iter().any(|n| has(n)) => {
+                not_done("this bucket question")
+            }
+            "GET" => {
+                let query = s3::ListQuery::from(head);
+                // Only the folder the prefix points into needs to be read.
+                let (start_dir, key_start) = match query.prefix.rfind('/') {
+                    Some(cut) => match proto::safe_path(&query.prefix[..cut], MAX_NAME_LEN) {
+                        Some(dirs) if !dirs.is_empty() => (format!("{bucket_dir}/{}", dirs.join("/")), format!("{}/", dirs.join("/"))),
+                        _ => return s3_xml(s3::list_xml(bucket, &query, &s3::Page::default(), &s3::iso_time(now))),
+                    },
+                    None => (bucket_dir.clone(), String::new()),
+                };
+                match walk(&mut fs, &start_dir, &key_start) {
+                    Ok(all) => s3_xml(s3::list_xml(bucket, &query, &s3::select(&all, &query), &s3::iso_time(now))),
+                    Err(()) => fail(500, "Internal Server Error", "InternalError", "too many objects to list: ask with a prefix"),
+                }
+            }
+            "POST" if has("delete") => {
+                let Some((keys, quiet)) = s3::delete_keys(&body) else {
+                    return fail(400, "Bad Request", "MalformedXML", "not a list of at most 1000 keys");
+                };
+                let (mut deleted, mut failed) = (Vec::new(), Vec::new());
+                for key in keys {
+                    let path = match proto::safe_path(&key, MAX_NAME_LEN) {
+                        Some(names) if !names.is_empty() => format!("{bucket_dir}/{}", names.join("/")),
+                        _ => {
+                            failed.push((key, "not a usable key"));
+                            continue;
+                        }
+                    };
+                    match fs.remove(&path) {
+                        Ok(()) => {
+                            prune(&mut fs, &bucket_dir, &path);
+                            deleted.push(key);
+                        }
+                        Err(FsError::NotFound | FsError::NotADirectory) => deleted.push(key),
+                        Err(_) => failed.push((key, "could not be removed")),
+                    }
+                }
+                s3_xml(s3::deleted_xml(&deleted, &failed, quiet))
+            }
+            "POST" => not_done("this request"),
+            _ => fail(405, "Method Not Allowed", "MethodNotAllowed", "GET, HEAD, PUT, DELETE or POST ?delete"),
+        };
+    }
+
+    // An object: a file below the bucket's folder. A key ending in "/" is a folder.
+    let path = format!("{bucket_dir}/{}", names[1..].join("/"));
+    let is_folder_key = head.path.ends_with('/');
+    let no_key = || fail(404, "Not Found", "NoSuchKey", "no such key");
+    match method {
+        "PUT" | "POST" if has("uploads") || has("uploadId") || has("partNumber") => not_done("multipart uploads (send the file in one piece: 8 MiB at most)"),
+        "PUT" if head.header("x-amz-copy-source").is_some() => not_done("copies"),
+        "PUT" if has("acl") || has("tagging") || has("retention") || has("legal-hold") => not_done("object settings"),
+        "PUT" if !bucket_there => no_bucket(),
+        "PUT" if is_folder_key => match fs.mkdir_all(&path) {
+            Ok(()) => {
+                let mut a = Answer::new(200, "OK", "application/xml", Vec::new());
+                a.more = format!("ETag: \"{}\"\r\n", etag(0, 0));
+                a
+            }
+            Err(e) => fs_failed(e),
+        },
+        "PUT" => {
+            let existed = fs.exists(&path);
+            let parent = &path[..path.rfind('/').unwrap_or(0)];
+            let written = fs.mkdir_all(parent).and_then(|()| fs.write_file(&path, &body));
+            match written.and_then(|()| fs.metadata(&path)) {
+                Ok(m) => {
+                    let mut a = Answer::new(200, "OK", "application/xml", Vec::new());
+                    a.more = format!("ETag: \"{}\"\r\n", etag(m.inode, m.size));
+                    a
+                }
+                Err(e) => {
+                    // Nothing half-written stays behind under a new name.
+                    if !existed {
+                        let _ = fs.remove(&path);
+                        prune(&mut fs, &bucket_dir, &path);
+                    }
+                    fs_failed(e)
+                }
+            }
+        }
+        "GET" | "HEAD" if has("acl") || has("tagging") || has("uploadId") || has("retention") || has("legal-hold") || has("attributes") => not_done("this object question"),
+        "GET" | "HEAD" => match fs.metadata(&path) {
+            _ if !bucket_there => no_bucket(),
+            Ok(m) if (m.kind == FileKind::Directory) != is_folder_key => no_key(),
+            Ok(m) if m.size > MAX_BODY => fail(413, "Content Too Large", "EntityTooLarge", "the file is too large to send"),
+            Ok(m) => {
+                let folder_key = m.kind == FileKind::Directory;
+                let (size, tag) = if folder_key { (0, etag(0, 0)) } else { (m.size, etag(m.inode, m.size)) };
+                let data = if method == "HEAD" || folder_key {
+                    Vec::new()
+                } else {
+                    match fs.read_file(&path) {
+                        Ok(data) => data,
+                        Err(e) => return fs_failed(e),
+                    }
+                };
+                let mut a = Answer::new(200, "OK", content_type(&path), data);
+                a.length = Some(size);
+                a.more = format!("ETag: \"{tag}\"\r\nLast-Modified: {}\r\n", s3::http_time(now));
+                a
+            }
+            Err(FsError::NotFound | FsError::NotADirectory) => no_key(),
+            Err(e) => fs_failed(e),
+        },
+        "DELETE" if has("uploadId") => Answer::new(204, "No Content", "application/xml", Vec::new()),
+        "DELETE" => {
+            // Gone is gone: a key that is not there is no error in S3.
+            match fs.remove(&path) {
+                Ok(()) => prune(&mut fs, &bucket_dir, &path),
+                Err(FsError::NotFound | FsError::NotADirectory | FsError::DirectoryNotEmpty) => {}
+                Err(e) => return fs_failed(e),
+            }
+            Answer::new(204, "No Content", "application/xml", Vec::new())
+        }
+        "POST" => not_done("this request"),
+        _ => fail(405, "Method Not Allowed", "MethodNotAllowed", "GET, HEAD, PUT or DELETE"),
+    }
+}
+
+/// Why a request's body could not be taken.
+#[derive(Clone, Copy)]
+enum BodyError {
+    BadLength,
+    NoLength,
+    TooLarge,
+    EndedEarly,
+}
+
+impl BodyError {
+    /// Status, reason, S3's name for it, and a sentence.
+    fn parts(self) -> (u16, &'static str, &'static str, String) {
+        match self {
+            BodyError::BadLength => (400, "Bad Request", "InvalidArgument", String::from("Content-Length is not a number")),
+            BodyError::NoLength => (411, "Length Required", "MissingContentLength", String::from("PUT needs a Content-Length")),
+            BodyError::TooLarge => (413, "Content Too Large", "EntityTooLarge", format!("a file may have {} KiB at most", MAX_BODY >> 10)),
+            BodyError::EndedEarly => (400, "Bad Request", "IncompleteBody", String::from("the body ended early")),
+        }
+    }
+}
+
+/// The request's body, for the methods that have one. `room`: how much
+/// larger than a file it may be (the wrapping of a chunked upload).
+fn body(stream: &net::TcpStream, head: &Head, early: Vec<u8>, room: u64) -> Result<Vec<u8>, BodyError> {
+    let length = match head.content_length() {
+        Err(()) => return Err(BodyError::BadLength),
+        Ok(Some(n)) => n,
+        Ok(None) if head.method == "PUT" && !head.path.ends_with('/') => return Err(BodyError::NoLength),
         Ok(None) => 0,
     };
-    if length > MAX_BODY {
-        return Err(Answer::error(413, "Content Too Large", &format!("a file may have {} KiB at most", MAX_BODY >> 10)));
+    if length > MAX_BODY + room {
+        return Err(BodyError::TooLarge);
     }
     let length = length as usize;
     let mut data = early;
@@ -331,7 +639,7 @@ fn body(stream: &net::TcpStream, head: &Head, early: Vec<u8>) -> Result<Vec<u8>,
             net::Received::Nothing if time::uptime_ms() - last_progress < STALL_MS => {
                 thread::pause(|| false);
             }
-            _ => return Err(Answer::error(400, "Bad Request", "the body ended early")),
+            _ => return Err(BodyError::EndedEarly),
         }
     }
     Ok(data)
