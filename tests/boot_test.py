@@ -619,7 +619,11 @@ class FakeTcp:
             conn.sendall(b"echo: " + line + b"\n")
 
     @staticmethod
-    def lines(conn, _):
+    def lines(conn, lines):
+        # Read what the client sent first: closing with unread data makes the
+        # host answer with a reset instead of a normal end, which now and then
+        # cut the transfer short (the OS then rightly said "connection reset").
+        lines.readline()
         conn.sendall(b"".join(b"line %03d of 300 %s\n" % (i, b"=" * 30) for i in range(1, 301)))
 
     @staticmethod
