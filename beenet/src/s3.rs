@@ -497,6 +497,15 @@ fn link_signature(head: &Head, secret: &str) -> Option<String> {
     Some(hex(&hmac(&key, to_sign.as_bytes())))
 }
 
+/// What a signed request wants the answer's `Content-Disposition` to be
+/// (`response-content-disposition`), if that is "save it": `attachment`,
+/// with or without a file name. Anything else is not passed on.
+pub fn wanted_disposition(head: &Head) -> Option<String> {
+    let value = head.query_value("response-content-disposition")?;
+    let plain = value.len() <= 200 && value.bytes().all(|b| (0x20..0x7F).contains(&b));
+    (plain && (value == "attachment" || value.starts_with("attachment;"))).then_some(value)
+}
+
 /// Check a link: made with `secret`, for our access key, and not expired.
 /// `now`: our clock (seconds since 1970); without a clock no link is valid,
 /// as nothing could tell whether it has expired.
@@ -533,11 +542,19 @@ pub fn verify_link(head: &Head, secret: &str, now: Option<u64>) -> Result<(), Au
 /// `host` ("address:port"): the path and query to put after "http://host".
 /// Valid for `seconds` from `now`.
 pub fn link(path: &str, host: &str, secret: &str, now: u64, seconds: u64) -> String {
+    link_for(path, host, secret, now, seconds, false)
+}
+
+/// The same; with `save`, the link tells the browser to save the file
+/// instead of showing it (`response-content-disposition=attachment`, which
+/// the signature covers like the rest).
+pub fn link_for(path: &str, host: &str, secret: &str, now: u64, seconds: u64, save: bool) -> String {
     let amz = amz_date(now);
     let scope = format!("{}/{REGION}/s3/aws4_request", &amz[..8]);
     let query = format!(
-        "X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential={}&X-Amz-Date={amz}&X-Amz-Expires={seconds}&X-Amz-SignedHeaders=host",
-        uri_encode(&format!("{ACCESS_KEY}/{scope}"), false)
+        "X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential={}&X-Amz-Date={amz}&X-Amz-Expires={seconds}&X-Amz-SignedHeaders=host{}",
+        uri_encode(&format!("{ACCESS_KEY}/{scope}"), false),
+        if save { "&response-content-disposition=attachment" } else { "" }
     );
     let encoded = uri_encode(path, true);
     let head = Head {
@@ -1129,6 +1146,19 @@ mod tests {
             assert!(verify_link(&head, SECRET, Some(NOW)).is_err(), "cut at {cut}");
         }
         assert!(!is_link(&request("GET", "/photos/a.jpg?list-type=2", "h")));
+        // A link that says "save it": signed with that, and not valid without it.
+        let save = link_for("/photos/2026/my cat.jpg", "192.168.0.40:9000", SECRET, NOW, 3600, true);
+        assert!(save.contains("&X-Amz-SignedHeaders=host&response-content-disposition=attachment&X-Amz-Signature="), "{save}");
+        let head = request("GET", &save, "192.168.0.40:9000");
+        assert_eq!(verify_link(&head, SECRET, Some(NOW)), Ok(()));
+        assert_eq!(wanted_disposition(&head).as_deref(), Some("attachment"));
+        let stripped = request("GET", &save.replace("&response-content-disposition=attachment", ""), "192.168.0.40:9000");
+        assert_eq!(verify_link(&stripped, SECRET, Some(NOW)), Err(AuthError::BadSignature));
+        assert_eq!(wanted_disposition(&request("GET", &made, "h")), None);
+        for (asked, passed) in [("attachment%3B%20filename%3D%22a.txt%22", true), ("inline", false), ("attachment%0D%0ASet-Cookie%3A%20x", false), ("attachmentx", false)] {
+            let head = request("GET", &format!("/b/k?response-content-disposition={asked}"), "h");
+            assert_eq!(wanted_disposition(&head).is_some(), passed, "{asked}");
+        }
         assert_eq!(amz_date(NOW), "20130524T000000Z");
         assert_eq!(parse_amz_date(&amz_date(1_709_251_199)), Some(1_709_251_199));
     }

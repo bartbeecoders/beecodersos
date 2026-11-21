@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=348">
+<link rel="stylesheet" href="style.css?v=349">
 </head>
 <body>
 
@@ -47,6 +47,12 @@ with the key, a program can read, write and delete the files there; the link is 
       <div class="cmd"><dt><code>fileserver key new</code></dt><dd>another key: the old one, and every link, stops working at once</dd></div>
       <div class="cmd"><dt><code>fileserver folder DIR</code></dt><dd>share another folder (never <code>/</code> or anything in <code>/system</code>)</dd></div>
     </dl>
+
+    <h3 id="browser">In a browser</h3>
+    <p class="sub">Open <code>http://ADDRESS:9000</code> in any browser on the network, type the key, and the shared folder
+      is there: open folders, click a file to save it, upload with a progress bar, make folders, delete. The page is
+      part of the OS itself, one file with nothing loaded from elsewhere; the key stays in that tab until you close it.</p>
+    <img class="shot" src="img/fileserver-ui.webp" width="900" height="433" loading="lazy" alt="The file server's page in a browser: the folder 'demo' of the shared folder with two files, their sizes, a Delete button for each, and buttons to upload files, make a folder and forget the key.">
 
     <h3 id="rest">From a script: plain HTTP</h3>
     <p class="sub">Every request carries the key. Folders answer with a listing in JSON; errors are JSON too.</p>

@@ -2239,6 +2239,7 @@ impl Shell {
                 let (answered, refused) = fileserver::counters();
                 println!("file server: on, http://{host}:{port}/api/files/ shares {}", s.folder);
                 println!("  {answered} requests answered, {refused} of them without the right key");
+                println!("  in a browser: http://{host}:{port}/api/ui   (it asks for the key)");
                 println!("  REST: curl -H \"Authorization: Bearer KEY\" http://{host}:{port}/api/files/   ('fileserver key' shows the key)");
                 println!("  S3:   endpoint http://{host}:{port}, access key {}, secret key KEY, path style; the folders in {} are the buckets", beenet::s3::ACCESS_KEY, s.folder);
             }

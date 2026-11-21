@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Files — BeeCodersOs</title>
+<style>
+  :root { --bg: #fdf9ee; --card: #fff; --line: #e6dcc0; --ink: #1d1a12; --muted: #6f6650; --honey: #b87900; --bad: #b3261e; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0d0b07; --card: #17130c; --line: #3a301c; --ink: #f1ead8; --muted: #a59a7c; --honey: #f5b301; --bad: #ff8a80; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 system-ui, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 28px 18px 60px; }
+  h1 { margin: 0 0 4px; font-size: 1.5rem; }
+  h1 b { color: var(--honey); }
+  .muted { color: var(--muted); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-top: 18px; }
+  input[type=password], input[type=text] { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); font: inherit; }
+  button { padding: 8px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; cursor: pointer; }
+  button.main { background: var(--honey); border-color: var(--honey); color: #1d1a12; font-weight: 600; }
+  button.bad { color: var(--bad); }
+  button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid var(--honey); outline-offset: 2px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .grow { flex: 1; min-width: 180px; }
+  nav { margin-top: 18px; overflow-wrap: anywhere; }
+  a { color: var(--honey); }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th { text-align: left; font-weight: 600; color: var(--muted); font-size: .85rem; padding: 6px 8px; }
+  td { padding: 8px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+  td.size, th.size { text-align: right; white-space: nowrap; }
+  td.act { text-align: right; white-space: nowrap; width: 1%; }
+  .name { background: none; border: 0; padding: 0; color: var(--ink); text-align: left; }
+  .name.folder { font-weight: 600; }
+  .name:hover { color: var(--honey); }
+  #note { min-height: 1.5em; margin-top: 12px; }
+  #note.bad { color: var(--bad); }
+  progress { width: 100%; margin-top: 10px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>BeeCoders<b>Os</b> files</h1>
+  <p class="muted" id="where">The folder this machine shares with the network.</p>
+
+  <form class="card" id="login">
+    <label for="key">The file server's key (<code>fileserver key</code> on the machine shows it)</label>
+    <div class="row" style="margin-top:8px">
+      <input class="grow" id="key" type="password" autocomplete="off" required>
+      <button class="main">Open</button>
+    </div>
+    <p class="muted">The key stays in this tab and is sent with every request. The link is not encrypted: for your own network.</p>
+  </form>
+
+  <section id="files" hidden>
+    <nav id="path" aria-label="Folder"></nav>
+    <div class="card">
+      <div class="row">
+        <button class="main" id="upload">Upload files</button>
+        <button id="mkdir">New folder</button>
+        <span class="grow"></span>
+        <button id="leave">Forget the key</button>
+      </div>
+      <input id="pick" type="file" multiple hidden>
+      <progress id="bar" max="1" value="0" hidden></progress>
+      <p id="note" role="status"></p>
+      <table>
+        <thead><tr><th>Name</th><th class="size">Size</th><th></th></tr></thead>
+        <tbody id="list"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let key = "", here = [];
+
+// A key given after # in the address is taken and removed from the address.
+if (location.hash.startsWith("#key=")) {
+  sessionStorage.setItem("key", decodeURIComponent(location.hash.slice(5)));
+  history.replaceState(null, "", location.pathname);
+}
+
+const url = (names) => "/api/files/" + names.map(encodeURIComponent).join("/");
+const call = (method, target, body) => fetch(target, { method, body, headers: { Authorization: "Bearer " + key } });
+const note = (text, bad) => { $("note").textContent = text; $("note").className = bad ? "bad" : ""; };
+const why = async (answer) => { try { return (await answer.json()).error; } catch { return answer.status + " " + answer.statusText; } };
+const size = (n) => n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KiB" : n < 1073741824 ? (n / 1048576).toFixed(1) + " MiB" : (n / 1073741824).toFixed(2) + " GiB";
+
+function forget(message) {
+  key = ""; sessionStorage.removeItem("key");
+  $("files").hidden = true; $("login").hidden = false; $("key").value = "";
+  if (message) { $("where").textContent = message; }
+}
+
+async function show(names) {
+  const answer = await call("GET", url(names) + (names.length ? "/" : ""));
+  if (answer.status === 401) { return forget("That is not the key."); }
+  if (!answer.ok) { return note(await why(answer), true); }
+  const folder = await answer.json();
+  here = names;
+  $("login").hidden = true; $("files").hidden = false;
+  $("where").textContent = "The folder this machine shares with the network.";
+  const path = $("path"); path.textContent = "";
+  [["shared folder", []], ...names.map((n, i) => [n, names.slice(0, i + 1)])].forEach(([label, to], i) => {
+    if (i) { path.append(" / "); }
+    const a = document.createElement("a"); a.href = "#"; a.textContent = label;
+    a.onclick = (e) => { e.preventDefault(); show(to); };
+    path.append(a);
+  });
+  const list = $("list"); list.textContent = "";
+  if (!folder.entries.length) {
+    const row = list.insertRow(); const cell = row.insertCell(); cell.colSpan = 3; cell.className = "muted"; cell.textContent = "Nothing here yet.";
+  }
+  for (const entry of folder.entries) {
+    const row = list.insertRow(), isFolder = entry.type === "folder", to = [...names, entry.name];
+    const open = document.createElement("button");
+    open.className = "name" + (isFolder ? " folder" : ""); open.textContent = entry.name + (isFolder ? "/" : "");
+    open.onclick = () => isFolder ? show(to) : download(to);
+    row.insertCell().append(open);
+    const s = row.insertCell(); s.className = "size"; s.textContent = isFolder ? "" : size(entry.size);
+    const del = document.createElement("button"); del.className = "bad"; del.textContent = "Delete";
+    del.setAttribute("aria-label", "Delete " + entry.name);
+    del.onclick = () => remove(to, isFolder);
+    const act = row.insertCell(); act.className = "act"; act.append(del);
+  }
+}
+
+// A file is fetched through a link the machine makes for it (so that the
+// browser saves it piece by piece); a file in the shared folder itself, for
+// which there are no links, is fetched whole.
+async function download(names) {
+  const answer = await call("GET", "/api/link/" + names.map(encodeURIComponent).join("/"));
+  if (answer.ok) { location.href = (await answer.json()).link; return; }
+  const file = await call("GET", url(names));
+  if (!file.ok) { return note(await why(file), true); }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(await file.blob()); a.download = names[names.length - 1];
+  a.click(); URL.revokeObjectURL(a.href);
+}
+
+async function remove(names, isFolder) {
+  const name = names[names.length - 1];
+  if (!confirm("Delete " + name + (isFolder ? " (it must be empty)" : "") + "?")) { return; }
+  const answer = await call("DELETE", url(names));
+  note(answer.ok ? name + " is deleted." : name + ": " + await why(answer), !answer.ok);
+  show(here);
+}
+
+function send(file, names) {
+  return new Promise((done) => {
+    const request = new XMLHttpRequest();
+    request.open("PUT", url(names));
+    request.setRequestHeader("Authorization", "Bearer " + key);
+    request.upload.onprogress = (e) => { $("bar").value = e.loaded / Math.max(1, e.total); };
+    request.onload = () => done(request.status < 300 ? "" : (JSON.parse(request.responseText || "{}").error || request.statusText));
+    request.onerror = () => done("the connection broke");
+    request.send(file);
+  });
+}
+
+$("upload").onclick = () => $("pick").click();
+$("pick").onchange = async () => {
+  const files = [...$("pick").files], failed = [];
+  $("bar").hidden = false;
+  for (const [i, file] of files.entries()) {
+    note("Sending " + file.name + " (" + (i + 1) + " of " + files.length + ", " + size(file.size) + ")...");
+    $("bar").value = 0;
+    const error = await send(file, [...here, file.name]);
+    if (error) { failed.push(file.name + ": " + error); }
+  }
+  $("bar").hidden = true; $("pick").value = "";
+  note(failed.length ? failed.join("; ") : files.length + (files.length === 1 ? " file is" : " files are") + " here now.", failed.length > 0);
+  show(here);
+};
+$("mkdir").onclick = async () => {
+  const name = prompt("The new folder's name (26 characters at most):");
+  if (!name) { return; }
+  const answer = await call("PUT", url([...here, name]) + "/");
+  note(answer.ok ? "" : name + ": " + await why(answer), !answer.ok);
+  show(here);
+};
+$("leave").onclick = () => forget("The key is forgotten.");
+$("login").onsubmit = (e) => { e.preventDefault(); key = $("key").value.trim(); sessionStorage.setItem("key", key); show([]); };
+
+key = sessionStorage.getItem("key") || "";
+if (key) { show([]); }
+</script>
+</body>
+</html>
