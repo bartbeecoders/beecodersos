@@ -94,6 +94,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("shell: tokenize", shell_tokenize),
     ("fileserver: settings and folders", fileserver_settings),
     ("shell: pipes are cut outside quotes", shell_split_pipes),
+    ("console: collected output stops at its limit, on a whole character", capture_limit),
     ("shell: a script's lines and words", shell_script_lines),
     ("beefs: files and directories in RAM", beefs_ramdisk),
     ("json: build and escape", json_build),
@@ -425,6 +426,19 @@ fn fileserver_settings() -> TestResult {
     for good in ["/share", "/data/share/", "/systems", "/home/maja"] {
         check!(folder_problem(good).is_none());
     }
+    Ok(())
+}
+
+fn capture_limit() -> TestResult {
+    use crate::console::capture_fit;
+    check_eq!(capture_fit(0, "honey", 10), "honey");
+    check_eq!(capture_fit(7, "honey", 10), "hon");
+    check_eq!(capture_fit(10, "honey", 10), "");
+    check_eq!(capture_fit(12, "honey", 10), "");
+    // Never half a character: "é" takes two bytes.
+    check_eq!(capture_fit(0, "bée", 2), "b");
+    check_eq!(capture_fit(0, "bée", 3), "bé");
+    check_eq!(capture_fit(0, "", 3), "");
     Ok(())
 }
 

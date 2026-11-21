@@ -332,7 +332,10 @@ Serial input bypasses the layout: the host terminal has already translated keys.
 **Output to a file:** `COMMAND ... > FILE` writes what any command prints
 to FILE, `>> FILE` adds it at the end (`ls /data > files.txt`,
 `grep honey notes.txt >> found.txt`); error messages still come to the
-screen (`console::capture_start`; `redirect.scn`).
+screen (`console::capture_start`; `redirect.scn`). The output is collected
+in memory first, 4 MiB at most: with more, the first 4 MiB are written and
+the command says so (`cp` copies a file of any size); a pipe with more than
+that stops with an error.
 
 **Pipes:** `A | B` gives what A prints to B, and so on down the line:
 `ls /data | grep txt | sort -r | head -n 3`, `log 50 | grep error | wc`.
