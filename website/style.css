@@ -472,3 +472,20 @@ main > section { padding-top: 110px; padding-bottom: 20px; }
 .cmd dt code { font-size: 0.92rem; white-space: normal; overflow-wrap: anywhere; }
 .cmd dd { margin: 0; color: var(--muted); font-size: 0.95rem; }
 @media (max-width: 860px) { .cmds { grid-template-columns: 1fr; } }
+
+/* ------------------------------------------------------------ guide pages */
+
+.guide h3 { margin: 56px 0 14px; font-size: 1.45rem; scroll-margin-top: 90px; }
+.guide .sub { max-width: 78ch; }
+.guide h3 + .sub { margin-top: 0; }
+.guide .cmds { margin: 18px 0; }
+.guide .cmd dt { font-weight: 600; }
+.code {
+  margin: 18px 0; padding: 18px 20px; border-radius: 12px; overflow-x: auto;
+  border: 1px solid var(--line); background: #0b0906;
+  font: 400 0.86rem/1.6 "JetBrains Mono", monospace; color: #e8e2d0;
+}
+.code .p { color: var(--honey); }
+.code .m { color: #b9d7ff; }
+.code .d { color: #8d8264; }
+@media (max-width: 640px) { .code { font-size: 0.74rem; padding: 14px; } }

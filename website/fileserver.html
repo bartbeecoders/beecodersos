@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>File server — BeeCodersOs</title>
+<meta name="description" content="How to use BeeCodersOs as a file server: one folder shared with the local network over a REST interface and the S3 protocol, with a key, links that expire, and files up to a gigabyte.">
+<meta name="theme-color" content="#0d0b07">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cpolygon points='50,4 92,27 92,73 50,96 8,73 8,27' fill='%23f5b301'/%3E%3Cpolygon points='50,30 70,41 70,63 50,74 30,63 30,41' fill='%230d0b07'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css?v=348">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="top">
+  <a class="brand" href="index.html"><span class="logo" aria-hidden="true"></span>BeeCoders<b>Os</b></a>
+  <nav aria-label="Main">
+    <a href="index.html#features">Features</a>
+    <a href="index.html#progress">Progress</a>
+    <a href="commands.html">Commands</a>
+    <a class="gh" href="https://github.com/bartbeecoders/beecodersos">GitHub</a>
+  </nav>
+</header>
+
+<main id="main">
+  <section class="wrap commands guide">
+    <p class="kicker">Guide</p>
+    <h2>Use it as a <em>file server</em>.</h2>
+    <p class="sub">One folder of the machine, read and written by programs on your network: over plain HTTP for scripts,
+      and over the S3 protocol for everything that already speaks it. Off until you switch it on, and nothing happens
+      without the key. Everything on this page was tried on the HP that runs BeeCodersOs.</p>
+
+    <h3 id="on">Switch it on</h3>
+    <pre class="code"><span class="p">bee:/$ </span>fileserver on
+file server on, port 9000 (saved): it shares /share
+key: <span class="m">qBfnHi6dXvegB9EvDjDC8ihn4rpb5Am9GQ3abwEW</span>
+with the key, a program can read, write and delete the files there; the link is not encrypted</pre>
+    <dl class="cmds">
+      <div class="cmd"><dt><code>fileserver on [PORT]</code></dt><dd>start it (port 9000 unless given); it is back after a restart</dd></div>
+      <div class="cmd"><dt><code>fileserver off</code></dt><dd>stop it: the machine listens on that port no more</dd></div>
+      <div class="cmd"><dt><code>fileserver</code></dt><dd>is it on, where, and how many requests came without the right key</dd></div>
+      <div class="cmd"><dt><code>fileserver key</code></dt><dd>show the key the OS made up (40 characters)</dd></div>
+      <div class="cmd"><dt><code>fileserver key new</code></dt><dd>another key: the old one, and every link, stops working at once</dd></div>
+      <div class="cmd"><dt><code>fileserver folder DIR</code></dt><dd>share another folder (never <code>/</code> or anything in <code>/system</code>)</dd></div>
+    </dl>
+
+    <h3 id="rest">From a script: plain HTTP</h3>
+    <p class="sub">Every request carries the key. Folders answer with a listing in JSON; errors are JSON too.</p>
+    <pre class="code">KEY=qBfnHi6dXvegB9EvDjDC8ihn4rpb5Am9GQ3abwEW
+BEE=http://192.168.0.40:9000
+
+<span class="d"># what is there</span>
+curl -H "Authorization: Bearer $KEY" $BEE/api/files/
+<span class="m">{"path":"/","entries":[{"name":"pictures","type":"folder","size":0}]}</span>
+
+<span class="d"># send a file (the folders above it are made), fetch it, delete it</span>
+curl -H "Authorization: Bearer $KEY" -T photo.jpg $BEE/api/files/pictures/photo.jpg
+curl -H "Authorization: Bearer $KEY" -O $BEE/api/files/pictures/photo.jpg
+curl -H "Authorization: Bearer $KEY" -X DELETE $BEE/api/files/pictures/photo.jpg</pre>
+    <dl class="cmds">
+      <div class="cmd"><dt><code>GET /api/files/PATH</code></dt><dd>a file's bytes, or a folder's listing; <code>Range</code> gives a part of a file</dd></div>
+      <div class="cmd"><dt><code>HEAD /api/files/PATH</code></dt><dd>the same, without the bytes</dd></div>
+      <div class="cmd"><dt><code>PUT /api/files/PATH</code></dt><dd>write the file; a PATH that ends in <code>/</code> makes a folder</dd></div>
+      <div class="cmd"><dt><code>DELETE /api/files/PATH</code></dt><dd>remove the file, or the empty folder</dd></div>
+    </dl>
+
+    <h3 id="s3">From an S3 client</h3>
+    <p class="sub">The folders in the shared folder are the buckets, the files below them the objects: the same files the
+      HTTP interface and the OS's own terminal see.</p>
+    <dl class="cmds">
+      <div class="cmd"><dt><code>endpoint</code></dt><dd><code>http://ADDRESS:9000</code>, path style, any region</dd></div>
+      <div class="cmd"><dt><code>access key id</code></dt><dd><code>beecoders</code></dd></div>
+      <div class="cmd"><dt><code>secret access key</code></dt><dd>the key (<code>fileserver key</code>)</dd></div>
+      <div class="cmd"><dt><code>what works</code></dt><dd>buckets; put, get, head, delete, delete many; listings with prefix, delimiter and pages; uploads in parts; ranges; presigned links</dd></div>
+    </dl>
+    <pre class="code">import boto3
+from botocore.config import Config
+
+s3 = boto3.client("s3", endpoint_url="http://192.168.0.40:9000", region_name="us-east-1",
+                  aws_access_key_id="beecoders", aws_secret_access_key=KEY,
+                  config=Config(s3={"addressing_style": "path"}))
+
+s3.create_bucket(Bucket="photos")
+s3.upload_file("holiday.mp4", "photos", "2026/holiday.mp4")      <span class="d"># in parts, by itself</span>
+s3.download_file("photos", "2026/holiday.mp4", "back.mp4")      <span class="d"># in ranges, by itself</span>
+print([o["Key"] for o in s3.list_objects_v2(Bucket="photos", Prefix="2026/")["Contents"]])</pre>
+    <p class="sub">Requests are signed the way Amazon's clients sign them (AWS Signature Version 4). The OS works out
+      every signature itself and compares all of it before it touches the disk; an upload is checked against the
+      hash the client signed, or piece by piece, and gets its name only when all of it was right.</p>
+
+    <h3 id="links">A link for one file</h3>
+    <pre class="code"><span class="p">bee:/$ </span>fileserver link /share/photos/cat.jpg
+<span class="m">http://192.168.0.40:9000/photos/cat.jpg?X-Amz-Algorithm=AWS4-HMAC-SHA256&amp;X-Amz-Credential=…&amp;X-Amz-Signature=…</span>
+anyone on the network with this link can fetch the file for 24 hours; 'fileserver key new' ends every link</pre>
+    <p class="sub">The link opens in any browser, without the key, until it expires: 24 hours unless you say otherwise
+      (<code>fileserver link FILE 1</code> for one hour, a week at most). It fetches that one file and nothing else; change
+      a letter of it and it fetches nothing.</p>
+
+    <h3 id="limits">Good to know</h3>
+    <dl class="cmds">
+      <div class="cmd"><dt>How large</dt><dd>a file as large as the disk has room, about 1 GiB at most; files go to and from the disk in pieces, never through memory whole</dd></div>
+      <div class="cmd"><dt>How fast</dt><dd>100 MB reaches the HP in 10 to 16 seconds and comes back in 9 to 12</dd></div>
+      <div class="cmd"><dt>Names</dt><dd>26 characters between the <code>/</code>, 16 folders deep (the file system's limits)</dd></div>
+      <div class="cmd"><dt>Not encrypted</dt><dd>the key and the files cross the network as they are: for your own network, not the internet</dd></div>
+      <div class="cmd"><dt>One folder</dt><dd>no request can leave the shared folder, whatever its path says</dd></div>
+      <div class="cmd"><dt>Not there</dt><dd>copies between objects, versions, access lists and tags; times of change (the file system keeps none)</dd></div>
+    </dl>
+    <p class="sub">The details, and how it is tested, are in the
+      <a href="https://github.com/bartbeecoders/beecodersos#file-server-fileserver-rest-and-s3--works-on-the-hp">README</a>.</p>
+  </section>
+</main>
+
+<footer class="wrap foot">
+  <span class="brand small"><span class="logo" aria-hidden="true"></span>BeeCoders<b>Os</b></span>
+  <p>A <a href="https://beecoders.com">BeeCoders</a> project. Written with AI, reviewed by people.</p>
+  <a href="https://github.com/bartbeecoders/beecodersos">GitHub</a>
+</footer>
+
+</body>
+</html>
