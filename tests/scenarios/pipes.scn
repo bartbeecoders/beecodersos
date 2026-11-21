@@ -1,0 +1,28 @@
+# Pipes: what one command prints is the next one's input.
+$ mkdir /hive
+$ echo pear > /hive/b.txt
+$ echo apple > /hive/a.txt
+$ touch /hive/notes.md
+$ ls /hive | grep txt | sort -r | head -n 1
+~ 6  a\.txt
+$ ls /hive | wc
+~ 3 lines, 6 words
+$ cat /hive/b.txt | cat
+pear
+$ echo "one|two" | grep -i ONE
+one|two
+$ ls /hive|tail -1
+~ notes\.md
+# to a file as well
+$ ls /hive | grep txt > /found.txt
+$ wc /found.txt
+~ 2 lines
+# an error ends the line; a command that reads no input says so
+$ ls /nope | sort
+~ /nope: no such
+$ ls /hive | pwd
+~ pwd: does not read what is piped to it
+$ ls /hive |
+~ usage: COMMAND \| COMMAND
+$ echo done
+done

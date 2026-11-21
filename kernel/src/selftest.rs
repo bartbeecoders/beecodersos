@@ -92,6 +92,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("keyboard: navigation and Ctrl", keyboard_nav),
     ("layouts: compose accents", layouts_compose),
     ("shell: tokenize", shell_tokenize),
+    ("shell: pipes are cut outside quotes", shell_split_pipes),
     ("beefs: files and directories in RAM", beefs_ramdisk),
     ("json: build and escape", json_build),
     ("json: parse", json_parse),
@@ -382,6 +383,16 @@ fn layouts_compose() -> TestResult {
     check_eq!(compose('´', 'y'), Some('ý'));
     check_eq!(compose('~', 'n'), Some('ñ'));
     check_eq!(compose('^', 'x'), None);
+    Ok(())
+}
+
+fn shell_split_pipes() -> TestResult {
+    check_eq!(shell::split_pipes("ls /home"), alloc::vec!["ls /home"]);
+    check_eq!(shell::split_pipes("ls | grep txt|sort -r"), alloc::vec!["ls ", " grep txt", "sort -r"]);
+    check_eq!(shell::split_pipes(r#"grep "a|b" notes.txt | wc"#), alloc::vec![r#"grep "a|b" notes.txt "#, " wc"]);
+    check_eq!(shell::split_pipes("ls |"), alloc::vec!["ls ", ""]);
+    // A question for the AI is text, whatever is in it.
+    check_eq!(shell::split_pipes("ask what does ls | sort do"), alloc::vec!["ask what does ls | sort do"]);
     Ok(())
 }
 
