@@ -60,6 +60,36 @@ pub fn parse_count<'a>(args: &[&'a str]) -> Option<(usize, &'a str)> {
     }
 }
 
+/// The commands of a script: its lines with their numbers (from 1), without
+/// empty lines and `#` comments; `$1`..`$9` become the words given after
+/// the script's name (nothing when there is none) and `$*` all of them.
+pub fn script_lines(text: &str, args: &[&str]) -> alloc::vec::Vec<(usize, alloc::string::String)> {
+    let mut out = alloc::vec::Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut cmd = alloc::string::String::new();
+        let mut chars = line.chars().peekable();
+        while let Some(c) = chars.next() {
+            match (c, chars.peek().copied()) {
+                ('$', Some('*')) => {
+                    chars.next();
+                    cmd.push_str(&args.join(" "));
+                }
+                ('$', Some(d @ '1'..='9')) => {
+                    chars.next();
+                    cmd.push_str(args.get(d as usize - '1' as usize).copied().unwrap_or(""));
+                }
+                _ => cmd.push(c),
+            }
+        }
+        out.push((i + 1, cmd));
+    }
+    out
+}
+
 /// The lines of `text` in order (`reverse`: last first; `unique`: each
 /// line once), each ending with a line end.
 pub fn sort_lines(text: &str, reverse: bool, unique: bool) -> alloc::string::String {

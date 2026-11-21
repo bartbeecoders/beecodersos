@@ -93,6 +93,7 @@ const TESTS: &[(&str, fn() -> TestResult)] = &[
     ("layouts: compose accents", layouts_compose),
     ("shell: tokenize", shell_tokenize),
     ("shell: pipes are cut outside quotes", shell_split_pipes),
+    ("shell: a script's lines and words", shell_script_lines),
     ("beefs: files and directories in RAM", beefs_ramdisk),
     ("json: build and escape", json_build),
     ("json: parse", json_parse),
@@ -383,6 +384,18 @@ fn layouts_compose() -> TestResult {
     check_eq!(compose('´', 'y'), Some('ý'));
     check_eq!(compose('~', 'n'), Some('ñ'));
     check_eq!(compose('^', 'x'), None);
+    Ok(())
+}
+
+fn shell_script_lines() -> TestResult {
+    use crate::textops::script_lines;
+    let text = "# make a hive\n\n  mkdir $1\necho $2 $3 > $1/queen.txt\necho all: $* costs $0 or $\n";
+    let lines = script_lines(text, &["/hive", "Maja"]);
+    check_eq!(lines.len(), 3);
+    check_eq!(lines[0], (3, String::from("mkdir /hive")));
+    check_eq!(lines[1], (4, String::from("echo Maja  > /hive/queen.txt")));
+    check_eq!(lines[2], (5, String::from("echo all: /hive Maja costs $0 or $")));
+    check!(script_lines("# nothing\n\n", &[]).is_empty());
     Ok(())
 }
 
