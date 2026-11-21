@@ -1,0 +1,28 @@
+# run FILE [WORDS]: a file's lines as commands.
+$ echo "# makes a folder with a note" > /new.bee
+$ echo mkdir $1 >> /new.bee
+$ echo "echo $2 lives here > $1/note.txt" >> /new.bee
+$ echo "ls $1 | grep note" >> /new.bee
+$ run /new.bee /hive Maja
+~ note\.txt
+$ cat /hive/note.txt
+Maja lives here
+# the first command that fails ends the script
+$ echo echo before > /bad.bee
+$ echo cat /nope.txt >> /bad.bee
+$ echo echo after >> /bad.bee
+$ run /bad.bee
+before
+~ /nope.txt: no such
+run: /bad.bee stopped at line 2: cat /nope.txt
+!~ after
+# a script that runs itself ends, four deep
+$ echo run /loop.bee > /loop.bee
+$ run /loop.bee
+~ scripts run scripts 4 deep at most
+$ run /none.bee
+~ /none.bee: no such
+$ run
+~ usage: run FILE
+$ echo done
+done

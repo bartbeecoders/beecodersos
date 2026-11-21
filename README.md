@@ -341,6 +341,14 @@ the AI (`ask`, `do`, `wish`, `feedback`). An error ends the line, and a
 command that reads no input says so (`shell::split_pipes`,
 `Shell::pipeline`; `pipes.scn`).
 
+**Scripts:** `run FILE [WORDS]` runs the lines of a text file as commands,
+one after the other (`#` starts a comment; `$1`..`$9` are the WORDS, `$*`
+all of them). Each line runs with the rights of whoever typed `run`, so a
+script cannot do what you may not. The first command that fails ends the
+script and names its line; Ctrl+C ends it between two lines. A script may
+run another, four deep at most (`textops::script_lines`,
+`Shell::run_script`; `scripts.scn`).
+
 **Line editing:** ←/→, Home/End, Backspace/Delete, ↑/↓ history (with something
 typed, only the commands that start with it: `history-prefix.scn`), Esc clears the
 line, Ctrl+C cancels, Ctrl+L clears the screen, Ctrl+A/E/U/K as in bash.
@@ -352,7 +360,7 @@ they agree (`tab-complete.scn`).
 **Commands:** `help`, `whoami`, `users`, `useradd`, `userdel`, `passwd`, `login`, `logout`, `clear`, `echo`, `ls`, `cd`, `pwd`,
 `cat`, `head`, `tail`, `wc`, `grep`, `touch`, `mkdir`, `rm`, `mv`, `cp`, `tree`, `df`, `layout`, `history`,
 `mem`, `about`, `calc`, `date`, `timezone`, `uptime`, `log`, `wish`, `feedback`, `ask`, `explain`, `do`, `ai`,
-`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `cpu`, `monitor`, `view`, `screenshot`, `record`, `sound`, `beep`, `play`, `tune`, `timer`, `alarm`, `timers`, `cal`, `lsusb`, `camera`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `vnc`, `arp`, `lspci [-v]`, `threads`, `find`, `du`, `sort`, `selftest`, `crash panic|exception|hang`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
+`slots`, `install`, `update`, `display`, `desktop`, `terminal`, `edit`, `files`, `browse`, `sleep`, `run`, `cpu`, `monitor`, `view`, `screenshot`, `record`, `sound`, `beep`, `play`, `tune`, `timer`, `alarm`, `timers`, `cal`, `lsusb`, `camera`, `ai connect`, `net`, `ping`, `nslookup`, `nc`, `wget`, `ntp`, `tftp`, `httpd`, `remote`, `vnc`, `arp`, `lspci [-v]`, `threads`, `find`, `du`, `sort`, `selftest`, `crash panic|exception|hang`, `reboot`, `shutdown`. `help` in the OS describes each one. Paths can be relative; `"quotes"` group words.
 
 **Text tools** (`kernel/src/textops.rs`, self-tested; `text-tools.scn`):
 `head` / `tail [-n N | -N] FILE` show the first or last lines (10 unless N

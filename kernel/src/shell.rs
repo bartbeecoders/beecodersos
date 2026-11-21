@@ -93,6 +93,8 @@ pub struct Shell {
     host: bool,
     /// What the command before a `|` printed, for the one after it to read.
     stdin: Option<String>,
+    /// How many scripts are running inside one another (`run`).
+    scripts: usize,
 }
 
 impl Shell {
@@ -110,6 +112,7 @@ impl Shell {
             user: None,
             host: false,
             stdin: None,
+            scripts: 0,
         }
     }
 
@@ -1532,6 +1535,8 @@ impl Shell {
                 _ => error("usage: sleep SECONDS   (0 to 3600)"),
             },
             ("sleep", _) => error("usage: sleep SECONDS   (0 to 3600)"),
+            ("run", [file, words @ ..]) => self.run_script(file, words),
+            ("run", _) => error("usage: run FILE [WORDS]   (the commands in FILE, line by line; $1..$9 and $* are the WORDS)"),
             ("edit", [file]) => {
                 let path = self.abs(file);
                 match crate::desk::open_editor(&path) {
@@ -3177,6 +3182,38 @@ impl Shell {
         }
     }
 
+    /// `run FILE [WORDS]`: the lines of a file as commands, one after the
+    /// other, each with the rights of whoever typed `run`. The first one
+    /// that fails ends the script; so does Ctrl+C between two lines.
+    fn run_script(&mut self, file: &str, words: &[&str]) {
+        const MAX_DEPTH: usize = 4;
+        const MAX_LINES: usize = 1000;
+        if self.scripts >= MAX_DEPTH {
+            return error(&format!("run: {file}: scripts run scripts {MAX_DEPTH} deep at most"));
+        }
+        let Some(text) = self.read_text(file) else { return };
+        if textops::is_binary(text.as_bytes()) {
+            return error(&format!("run: {file} is not a text file"));
+        }
+        let lines = textops::script_lines(&text, words);
+        if lines.len() > MAX_LINES {
+            return error(&format!("run: {file} has more than {MAX_LINES} commands"));
+        }
+        self.scripts += 1;
+        for (number, line) in &lines {
+            if net::cancelled() {
+                self.scripts -= 1;
+                return error(&format!("run: {file} stopped before line {number}"));
+            }
+            self.run_line(line);
+            if self.status != Status::Ok {
+                self.scripts -= 1;
+                return error(&format!("run: {file} stopped at line {number}: {line}"));
+            }
+        }
+        self.scripts -= 1;
+    }
+
     /// `a | b | c`: every command but the last prints into the next one
     /// (`self.stdin`); the last prints to the screen, or to a file with `>`.
     /// An error anywhere ends the line.
@@ -3422,6 +3459,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("files [FOLDER]", "file manager in a window: browse, open in the editor, new folder, rename, delete"),
     ("cpu [start|test|auto on|off]", "the processor: name, how many, clock, features; start the others; measure; at boot or not (saved)"),
     ("sleep SECONDS", "wait (Ctrl+C ends it)"),
+    ("run FILE [WORDS]", "the commands in FILE, line by line ($1..$9, $*: the WORDS); stops at the first that fails"),
     ("terminal", "one more terminal window on the desktop, with a shell of its own"),
     ("desktop [on|off]", "graphical desktop: the terminal in a window (on by default; saved); 'desktop wallpaper FILE|none'; 'desktop tile on|off' tiles the windows (saved)"),
     ("slots", "A/B kernel slots: which one runs, last trial"),
