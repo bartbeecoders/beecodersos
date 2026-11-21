@@ -236,16 +236,27 @@ impl AhciDisk {
     /// Run one command. With `data`, one sector moves between the disk and
     /// `self.buffer` (to the disk when `to_disk`).
     fn command(&mut self, command: u8, lba: u64, to_disk: bool, data: bool) -> Result<(), FsError> {
+        self.command_at(command, lba, to_disk, self.buffer, data as u16)
+    }
+
+    /// Run one command that moves `sectors` sectors (0: none) between the
+    /// disk and the memory at `memory`: the controller reads or writes
+    /// that memory itself, so it must stay where it is until the command
+    /// is done, start at an even address and lie below 4 GiB with the
+    /// rest of the kernel's memory.
+    fn command_at(&mut self, command: u8, lba: u64, to_disk: bool, memory: *mut u8, sectors: u16) -> Result<(), FsError> {
         let regs = self.regs;
+        let data = sectors > 0;
+        let bytes = (sectors as u32).max(1) * BLOCK_SIZE as u32;
         unsafe {
             // The command table: the FIS, and where the data is.
             core::ptr::write_bytes(self.table, 0, 256);
-            let fis = command_fis(command, lba, data as u16);
+            let fis = command_fis(command, lba, sectors);
             core::ptr::copy_nonoverlapping(fis.as_ptr(), self.table, FIS_LEN);
             let descriptor = self.table.add(TABLE_DESCRIPTOR) as *mut u32;
-            write_volatile(descriptor, self.buffer as u32);
+            write_volatile(descriptor, memory as u32);
             write_volatile(descriptor.add(1), 0);
-            write_volatile(descriptor.add(3), BLOCK_SIZE as u32 - 1);
+            write_volatile(descriptor.add(3), bytes - 1);
             // Command header 0: FIS length in 32-bit words, direction, one descriptor.
             let header = self.lists as *mut u32;
             let flags = (FIS_LEN as u32 / 4) | (to_disk as u32) << 6 | (data as u32) << 16;
@@ -269,8 +280,8 @@ impl AhciDisk {
                 }
                 return Err(FsError::Io);
             }
-            if data && read_volatile(header.add(1)) != BLOCK_SIZE as u32 {
-                return Err(FsError::Io); // the disk moved less than a sector
+            if data && read_volatile(header.add(1)) != bytes {
+                return Err(FsError::Io); // the disk moved less than was asked
             }
         }
         Ok(())
@@ -301,6 +312,46 @@ impl BlockDevice for AhciDisk {
 
     fn flush(&mut self) -> Result<(), FsError> {
         self.command(ATA_FLUSH_CACHE_EXT, 0, false, false)
+    }
+
+    /// Many sectors per command, straight from and to the caller's memory:
+    /// one command per sector is what made large files slow (4 MB/s on the HP).
+    fn read_blocks(&mut self, first: u64, bufs: &mut [Block]) -> Result<(), FsError> {
+        if !self.whole_run(first, bufs.len(), bufs.as_ptr() as usize) {
+            return bufs.iter_mut().enumerate().try_for_each(|(i, buf)| self.read_block(first + i as u64, buf));
+        }
+        for (n, part) in bufs.chunks_mut(MAX_SECTORS).enumerate() {
+            self.command_at(ATA_READ_DMA_EXT, first + (n * MAX_SECTORS) as u64, false, part.as_mut_ptr() as *mut u8, part.len() as u16)?;
+        }
+        Ok(())
+    }
+
+    fn write_blocks(&mut self, first: u64, bufs: &[Block]) -> Result<(), FsError> {
+        if !self.whole_run(first, bufs.len(), bufs.as_ptr() as usize) {
+            return bufs.iter().enumerate().try_for_each(|(i, buf)| self.write_block(first + i as u64, buf));
+        }
+        for (n, part) in bufs.chunks(MAX_SECTORS).enumerate() {
+            // The controller only reads this memory.
+            self.command_at(ATA_WRITE_DMA_EXT, first + (n * MAX_SECTORS) as u64, true, part.as_ptr() as *mut u8, part.len() as u16)?;
+        }
+        Ok(())
+    }
+}
+
+/// The most sectors one command moves (1 MiB: one descriptor holds up to 4 MiB).
+const MAX_SECTORS: usize = 2048;
+
+/// May `count` sectors from `first` on move in whole commands from or to
+/// memory at `address`? (All on the disk, and memory the controller can use.)
+pub fn run_fits(first: u64, count: usize, sectors: u64, address: usize) -> bool {
+    let on_disk = first.checked_add(count as u64).is_some_and(|end| end <= sectors);
+    let end = address as u64 + (count * BLOCK_SIZE) as u64;
+    on_disk && count > 0 && address % 2 == 0 && end <= 1 << 32
+}
+
+impl AhciDisk {
+    fn whole_run(&self, first: u64, count: usize, address: usize) -> bool {
+        run_fits(first, count, self.identity.sectors, address)
     }
 }
 
