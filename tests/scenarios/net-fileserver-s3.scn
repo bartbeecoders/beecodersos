@@ -120,7 +120,7 @@ HTTP/1.1 404 Not Found
 @s3 PUT /nothing/a.txt x
 HTTP/1.1 404 Not Found
 ~ <Code>NoSuchBucket</Code>
-@s3 POST /photos/big.bin?uploads
+@s3 GET /photos?versions
 HTTP/1.1 501 Not Implemented
 ~ <Code>NotImplemented</Code>
 @s3 PUT /photos/a-name-that-is-much-too-long-for-beefs.txt x

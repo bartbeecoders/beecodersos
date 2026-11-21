@@ -784,9 +784,67 @@ pub fn deleted_xml(deleted: &[String], failed: &[(String, &str)], quiet: bool) -
     out + "</DeleteResult>"
 }
 
-/// May a folder of this name be a bucket? (Letters, digits, `.`, `-`, `_`.)
+// --- uploads in parts (multipart) -------------------------------------------------------
+
+/// An upload has this many parts at most (S3's own limit).
+pub const MAX_PARTS: u32 = 10_000;
+
+/// Is this the name of an upload in parts that the server gave out? (16 hex digits.)
+pub fn upload_id_ok(id: &str) -> bool {
+    id.len() == 16 && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// The answer to "start an upload in parts".
+pub fn initiated_xml(bucket: &str, key: &str, id: &str) -> String {
+    format!(
+        "{XML}<InitiateMultipartUploadResult xmlns=\"{NS}\"><Bucket>{}</Bucket><Key>{}</Key><UploadId>{}</UploadId></InitiateMultipartUploadResult>",
+        xml_escape(bucket),
+        xml_escape(key),
+        xml_escape(id)
+    )
+}
+
+/// The answer to "the parts are complete": where the object is now.
+pub fn completed_xml(bucket: &str, key: &str, etag: &str) -> String {
+    format!(
+        "<CompleteMultipartUploadResult xmlns=\"{NS}\"><Location>/{}/{}</Location><Bucket>{}</Bucket><Key>{}</Key><ETag>&quot;{}&quot;</ETag></CompleteMultipartUploadResult>",
+        xml_escape(bucket),
+        uri_encode(key, true),
+        xml_escape(bucket),
+        xml_escape(key),
+        xml_escape(etag)
+    )
+}
+
+/// The part numbers in a "the parts are complete" request, in the order
+/// the object is put together: rising, each 1 to `MAX_PARTS`, at least one.
+/// `None`: anything else.
+pub fn completed_parts(xml: &[u8]) -> Option<Vec<u32>> {
+    let text = core::str::from_utf8(xml).ok()?;
+    let mut parts = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("<PartNumber>") {
+        let after = &rest[at + 12..];
+        let end = after.find("</PartNumber>")?;
+        let number = after[..end].trim();
+        if number.is_empty() || number.len() > 5 || !number.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let number: u32 = number.parse().ok()?;
+        if number == 0 || number > MAX_PARTS || parts.last().is_some_and(|last| *last >= number) {
+            return None;
+        }
+        parts.push(number);
+        rest = &after[end + 13..];
+    }
+    (!parts.is_empty()).then_some(parts)
+}
+
+/// May a folder of this name be a bucket? (Letters, digits, `.`, `-`, `_`;
+/// not starting with a dot: those are the server's own.)
 pub fn bucket_name_ok(name: &str, max: usize) -> bool {
     !name.is_empty()
+        && !name.starts_with('.')
         && name.len() <= max
         && name != "api"
         && name != "."
@@ -1199,11 +1257,44 @@ mod tests {
     }
 
     #[test]
+    fn uploads_in_parts() {
+        assert!(upload_id_ok("0123456789abcdef"));
+        for bad in ["", "0123456789abcde", "0123456789abcdef0", "0123456789ABCDEF", "../../system/key", "0123456789abcde/"] {
+            assert!(!upload_id_ok(bad), "{bad}");
+        }
+        let xml = b"<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>\"a\"</ETag></Part>\
+<Part><ETag>\"b\"</ETag><PartNumber> 2 </PartNumber></Part><Part><PartNumber>10000</PartNumber></Part></CompleteMultipartUpload>";
+        assert_eq!(completed_parts(xml), Some(vec![1, 2, 10000]));
+        // Cut anywhere: refused or fewer parts, never a panic.
+        for cut in 0..xml.len() {
+            let _ = completed_parts(&xml[..cut]);
+        }
+        for bad in [
+            &b"<CompleteMultipartUpload></CompleteMultipartUpload>"[..],
+            b"<PartNumber>0</PartNumber>",
+            b"<PartNumber>10001</PartNumber>",
+            b"<PartNumber>2</PartNumber><PartNumber>1</PartNumber>",
+            b"<PartNumber>1</PartNumber><PartNumber>1</PartNumber>",
+            b"<PartNumber>-1</PartNumber>",
+            b"<PartNumber>1e3</PartNumber>",
+            b"<PartNumber>99999999999</PartNumber>",
+            b"<PartNumber></PartNumber>",
+            b"<PartNumber>1",
+            b"<PartNumber>\xff</PartNumber>",
+        ] {
+            assert_eq!(completed_parts(bad), None, "{:?}", core::str::from_utf8(bad));
+        }
+        assert!(initiated_xml("b", "a<b>/c.txt", "0123456789abcdef").contains("<Key>a&lt;b&gt;/c.txt</Key><UploadId>0123456789abcdef</UploadId>"));
+        let done = completed_xml("photos", "2026/my cat.jpg", "bee1-3");
+        assert!(done.contains("<Location>/photos/2026/my%20cat.jpg</Location>") && done.contains("<ETag>&quot;bee1-3&quot;</ETag>"), "{done}");
+    }
+
+    #[test]
     fn bucket_names() {
         for good in ["photos", "my-bucket_1", "a", "Backups.2026"] {
             assert!(bucket_name_ok(good, 26), "{good}");
         }
-        for bad in ["", "api", ".", "..", "a/b", "a b", "ümlaut", "a-name-that-is-longer-than-26"] {
+        for bad in ["", "api", ".", "..", ".mp-0123456789abcdef", ".hidden", "a/b", "a b", "ümlaut", "a-name-that-is-longer-than-26"] {
             assert!(!bucket_name_ok(bad, 26), "{bad}");
         }
     }

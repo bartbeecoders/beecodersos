@@ -73,8 +73,9 @@ Scenario files (tests/scenarios/*.scn):
                                with another secret), `late` (signed an hour ago), `chunked`
                                (the body in signed aws-chunked pieces), `changed` (the body
                                is changed after signing)
-    @capture NAME REGEX        remember group 1 of REGEX in the last command's output: {NAME}
-                               in later commands and `@remote` lines becomes that text
+    @capture NAME REGEX        remember group 1 of REGEX in the last command's output (or the
+                               last `@request` / `@s3` answer): {NAME} in later commands and
+                               `@remote`, `@request` and `@s3` lines becomes that text
     @remote LINE | LINE ...    (with @forward) connect to the OS's remote shell and type
                                these lines one by one (^C / ^D: those keys); everything it
                                sent is checked like a command's output. Telnet option bytes
@@ -1205,12 +1206,18 @@ def test_scenario(path: Path):
                 if kind == "request":
                     if not forward:
                         raise TestFailure(f"{path.name}: @request needs @forward")
-                    check_output(path, f"@request {cmd}", http_request(forward, cmd), expectations)
+                    for name, value in names.items():
+                        cmd = cmd.replace(name, value)
+                    out = http_request(forward, cmd)
+                    check_output(path, f"@request {cmd}", out, expectations)
                     continue
                 if kind == "s3":
                     if not forward:
                         raise TestFailure(f"{path.name}: @s3 needs @forward")
-                    check_output(path, f"@s3 {cmd}", http_exchange(forward, s3_signed(forward, cmd)), expectations)
+                    for name, value in names.items():
+                        cmd = cmd.replace(name, value)
+                    out = http_exchange(forward, s3_signed(forward, cmd))
+                    check_output(path, f"@s3 {cmd}", out, expectations)
                     continue
                 if kind == "remote":
                     if not forward_shell:
