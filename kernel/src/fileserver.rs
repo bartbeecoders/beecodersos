@@ -42,8 +42,8 @@ use beenet::fileserver::{self as proto, Entry, Head, HeadReader};
 pub const DEFAULT_PORT: u16 = 9000;
 pub const DEFAULT_FOLDER: &str = "/share";
 const SETTING_FILE: &str = "/system/fileserver";
-/// The largest file that can be sent or fetched: what BeeFS can hold (about
-/// 8 MiB), and never more than 16 MiB, as it is held in memory whole.
+/// The largest file that can be sent or fetched: 16 MiB, as it is held in
+/// memory whole (BeeFS itself holds files of about 1 GiB).
 pub const MAX_BODY: u64 = if beefs::MAX_FILE_SIZE < 16 * 1024 * 1024 { beefs::MAX_FILE_SIZE } else { 16 * 1024 * 1024 };
 /// A client gets this long to send its request's head...
 const HEAD_TIMEOUT_MS: u64 = 5_000;
@@ -553,7 +553,7 @@ fn s3_act(folder: &str, head: &Head, body: Vec<u8>) -> Answer {
     let is_folder_key = head.path.ends_with('/');
     let no_key = || fail(404, "Not Found", "NoSuchKey", "no such key");
     match method {
-        "PUT" | "POST" if has("uploads") || has("uploadId") || has("partNumber") => not_done("multipart uploads (send the file in one piece: 8 MiB at most)"),
+        "PUT" | "POST" if has("uploads") || has("uploadId") || has("partNumber") => not_done("multipart uploads (send the file in one piece: 16 MiB at most)"),
         "PUT" if head.header("x-amz-copy-source").is_some() => not_done("copies"),
         "PUT" if has("acl") || has("tagging") || has("retention") || has("legal-hold") => not_done("object settings"),
         "PUT" if !bucket_there => no_bucket(),
