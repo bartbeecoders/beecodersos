@@ -28,6 +28,14 @@ $ ls /
 ~ ^ +6389760  big\.txt$
 # The fourth piece crosses the old limit (8 459 264 bytes).
 $ cat /piece.txt >> /big.txt
+# A copy of a file that large (8 519 680 bytes), made piece by piece.
+$ cp /big.txt /copy.txt
+$ ls /
+~ ^ +8519680  big\.txt$
+~ ^ +8519680  copy\.txt$
+$ tail -n 1 /copy.txt
+0123456789 0123456789 0123456789 0123456789 0123456789 012345678
+$ rm /copy.txt
 $ cat /piece.txt >> /big.txt
 $ cat /piece.txt >> /big.txt
 $ ls /
@@ -47,6 +55,14 @@ $ ls /
 ~ ^ +17039360  big\.txt$
 $ wc /big.txt
 ~ /big\.txt: file too large
+# It can still be read in pieces: a copy is made that way. This one does
+# not fit on the disk any more: said so, and no half copy stays.
+$ cp /big.txt /big.txt
+/big.txt: that is the same file
+$ cp /big.txt /third.txt
+~ no space
+$ ls /
+!~ third
 $ df
 ~ ^disk: \d+ KiB used, [1-6]\d{3} KiB free
 # Removed, all of it is free again.

@@ -3403,9 +3403,33 @@ impl Shell {
         if !self.may_change(&dst) {
             return;
         }
+        if beefs::normalize(&src) == beefs::normalize(&dst) {
+            return error(&format!("{from}: that is the same file"));
+        }
+        // In pieces, so that a file larger than memory can be copied; the
+        // file system is let go between them (other threads, the watchdog).
+        let mut piece = alloc::vec![0u8; 64 * 1024];
+        let mut offset = 0u64;
         let mut fs = self.storage.fs();
-        let r = fs.read_file(&src).and_then(|d| fs.write_file(&dst, &d));
+        let mut r = fs.metadata(&src).and_then(|m| match m.kind {
+            FileKind::Directory => Err(beefs::FsError::IsADirectory),
+            FileKind::File => fs.write_file(&dst, &[]),
+        });
         drop(fs);
+        while r.is_ok() {
+            let mut fs = self.storage.fs();
+            let step = fs.read_at(&src, offset, &mut piece).and_then(|n| fs.append(&dst, &piece[..n]).map(|()| n));
+            drop(fs);
+            match step {
+                Ok(0) => break,
+                Ok(n) => offset += n as u64,
+                Err(e) => {
+                    let _ = self.storage.fs().remove(&dst); // no half copy stays
+                    r = Err(e);
+                }
+            }
+            thread::yield_now();
+        }
         report(r);
     }
 

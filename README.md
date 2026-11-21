@@ -276,7 +276,7 @@ disk **image file** on the host.
 **On-disk format** (512-byte blocks): superblock → block bitmap → inode table
 (64-byte inodes: 10 direct + single + double + triple indirect pointers, max file ≈ 1 GiB;
 the triple-indirect pointer came later, in bytes that were zero, so disks from before read as they did.
-A file of more than 16 MiB is not read into memory whole: `read_file` says "file too large", `read_at` reads it in pieces; `large-files.scn`)
+A file of more than 16 MiB is not read into memory whole: `read_file` says "file too large", `read_at` reads it in pieces, which is how `cp` copies and the file server sends; `large-files.scn`)
 → data. Directories hold 32-byte entries; names up to 26 bytes.
 
 **Writing speed:** during one operation BeeFS keeps the bookkeeping blocks
@@ -1067,7 +1067,9 @@ is not empty, a file where a folder is), 411, 413, 507 the disk is full.
   A request's path is taken apart into names: `..`, `.`, empty names and
   `\` are refused, encoded or not, so no request leaves the folder
   (`beenet::fileserver::safe_path`).
-- **Limits:** a file of 16 MiB at most (it is held in memory whole), names
+- **Limits:** a file as large as the disk has room, about 1 GiB at most
+  (the BeeFS limit): files are received and sent in pieces of 64 KiB, never
+  held in memory whole. Names
   of 26 characters (BeeFS), 16 folders deep, an 8 KiB request head with 64
   headers, 5 s to send the head and 10 s without progress for a body. One
   request at a time, one per connection.
@@ -1128,16 +1130,25 @@ print([o["Key"] for o in s3.list_objects_v2(Bucket="photos", Prefix="2026/")["Co
   file: no listings, no changes. `fileserver key new` ends every link at
   once. The machine's clock must be set (`ntp`); without one no link is
   accepted, as none could expire (`net-fileserver-link.scn`).
+- **Large files:** an upload goes to the disk as it arrives, under a
+  temporary name (`.up-…` in the shared folder), checked piece by piece
+  (its SHA-256, or each signed chunk) while it is written; only a complete
+  upload that is what the client signed gets its own name. Anything else
+  (a cut connection, a changed byte, a full disk) is removed again, and so
+  is what a restart interrupted. Downloads are read from the disk in
+  pieces. On the HP a 100 MB file goes up in 14 s and comes back in 30 s,
+  byte for byte; other threads keep running meanwhile.
 - **Not there** (answered with `501 NotImplemented`): multipart uploads
-  (so 16 MiB per object: keep a client's multipart threshold above that),
-  copies, versions, access lists, tags. `Range` is not honoured: the whole
+  (send a file in one request: keep a client's multipart threshold above
+  the file's size), copies, versions, access lists, tags. `Range` is not honoured: the whole
   object is sent.
 - **Different from S3:** names between the `/` have 26 characters at most
   and a key 16 levels (BeeFS); a bucket named `api` cannot exist; BeeFS
   keeps no times, so `LastModified` is the time of the answer; an `ETag`
   names the file and its size (`"bee…-1"`), it is not a hash of the content.
 - Tested with boto3 against the HP (bucket, uploads of 6 MB, listings in
-  pages, downloads compared byte for byte, deletes, a wrong secret; links
+  pages, downloads compared byte for byte, deletes, a wrong secret; 40 MB
+  with `put_object` and `upload_file`; links
   made by the OS and by boto3, a changed and an expired one);
   `net-fileserver-s3.scn` signs its own requests (`@s3` in
   `tests/boot_test.py`), including chunked and tampered ones.

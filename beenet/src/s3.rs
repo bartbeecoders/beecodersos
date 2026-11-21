@@ -9,7 +9,7 @@
 
 use crate::fileserver::Head;
 use crate::http::percent_decode;
-use crate::sha256::{hmac, sha256};
+use crate::sha256::{hmac, sha256, Sha256};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -271,58 +271,183 @@ pub fn verify(head: &Head, secret: &str, now: Option<u64>) -> Result<Auth, AuthE
 /// together from its `aws-chunked` pieces (each one's signature checked).
 /// `decoded_length`: the `x-amz-decoded-content-length` header, if sent.
 pub fn body(auth: &Auth, received: Vec<u8>, decoded_length: Option<u64>) -> Result<Vec<u8>, AuthError> {
-    match auth.payload {
-        Payload::Unsigned => Ok(received),
-        Payload::Hash(hash) => (sha256(&received) == hash).then_some(received).ok_or(AuthError::BadBody),
-        Payload::Chunked { signed } => {
-            let data = unchunk(auth, &received, signed)?;
-            match decoded_length {
-                Some(n) if n != data.len() as u64 => Err(AuthError::BadBody),
-                _ => Ok(data),
+    if auth.payload == Payload::Unsigned {
+        return Ok(received);
+    }
+    let mut reader = BodyReader::new(auth, decoded_length);
+    let mut data = Vec::new();
+    reader.feed(&received, &mut data)?;
+    reader.finish()?;
+    Ok(data)
+}
+
+/// A body taken as it arrives, piece by piece, so that a large upload goes
+/// to the disk without being held in memory: what comes out of `feed` is
+/// the file's bytes, and `finish` says whether all of it was what the client
+/// signed. Until `finish` says yes, nothing of it may be kept.
+pub struct BodyReader {
+    kind: Kind,
+    /// The file's bytes given out so far.
+    total: u64,
+    expected: Option<u64>,
+}
+
+enum Kind {
+    Plain,
+    Hash(Sha256, [u8; 32]),
+    Chunked(Unchunker),
+}
+
+impl BodyReader {
+    /// For a body that is taken as it is (the REST interface, `UNSIGNED-PAYLOAD`).
+    pub fn plain() -> BodyReader {
+        BodyReader { kind: Kind::Plain, total: 0, expected: None }
+    }
+
+    /// For the body of a request whose signature was right.
+    pub fn new(auth: &Auth, decoded_length: Option<u64>) -> BodyReader {
+        let kind = match auth.payload {
+            Payload::Unsigned => Kind::Plain,
+            Payload::Hash(hash) => Kind::Hash(Sha256::new(), hash),
+            Payload::Chunked { signed } => Kind::Chunked(Unchunker {
+                signed,
+                amz_date: auth.amz_date.clone(),
+                scope: auth.scope.clone(),
+                key: auth.signing_key,
+                previous: auth.signature.clone(),
+                line: Vec::new(),
+                state: ChunkState::Line,
+            }),
+        };
+        BodyReader { kind, total: 0, expected: if matches!(auth.payload, Payload::Chunked { .. }) { decoded_length } else { None } }
+    }
+
+    /// Take the next received bytes; the file's bytes in them are added to `out`.
+    pub fn feed(&mut self, input: &[u8], out: &mut Vec<u8>) -> Result<(), AuthError> {
+        let before = out.len();
+        match &mut self.kind {
+            Kind::Plain => out.extend_from_slice(input),
+            Kind::Hash(hasher, _) => {
+                hasher.update(input);
+                out.extend_from_slice(input);
             }
+            Kind::Chunked(chunks) => chunks.feed(input, out)?,
         }
+        self.total += (out.len() - before) as u64;
+        Ok(())
+    }
+
+    /// The body is complete: was it what was signed? Its length, if so.
+    pub fn finish(self) -> Result<u64, AuthError> {
+        let good = match self.kind {
+            Kind::Plain => true,
+            Kind::Hash(hasher, want) => hasher.finish() == want,
+            Kind::Chunked(chunks) => matches!(chunks.state, ChunkState::Done) && self.expected.is_none_or(|n| n == self.total),
+        };
+        good.then_some(self.total).ok_or(AuthError::BadBody)
     }
 }
 
-/// `SIZE[;chunk-signature=SIG]\r\n DATA \r\n` ... ending with a chunk of size 0.
-fn unchunk(auth: &Auth, mut rest: &[u8], signed: bool) -> Result<Vec<u8>, AuthError> {
-    let empty_hash = hex(&sha256(b""));
-    let mut previous = auth.signature.clone();
-    let mut out = Vec::new();
-    loop {
-        let line_end = rest.iter().take(256).position(|b| *b == b'\n').ok_or(AuthError::BadBody)?;
-        let line = core::str::from_utf8(&rest[..line_end]).map_err(|_| AuthError::BadBody)?.trim_end_matches('\r');
-        rest = &rest[line_end + 1..];
-        let (size, extension) = line.split_once(';').unwrap_or((line, ""));
-        if size.is_empty() || size.len() > 8 {
-            return Err(AuthError::BadBody);
-        }
-        let size = usize::from_str_radix(size, 16).map_err(|_| AuthError::BadBody)?;
-        if size > rest.len() {
-            return Err(AuthError::BadBody);
-        }
-        let data = &rest[..size];
-        rest = &rest[size..];
-        if signed {
-            let given = extension.strip_prefix("chunk-signature=").ok_or(AuthError::BadBody)?;
-            let to_sign = format!(
-                "AWS4-HMAC-SHA256-PAYLOAD\n{}\n{}\n{previous}\n{empty_hash}\n{}",
-                auth.amz_date,
-                auth.scope,
-                hex(&sha256(data))
-            );
-            let right = hex(&hmac(&auth.signing_key, to_sign.as_bytes()));
-            if !same(&right, given) {
-                return Err(AuthError::BadBody);
+/// `SIZE[;chunk-signature=SIG]\r\n DATA \r\n` ... ending with a chunk of
+/// size 0, taken apart as the bytes arrive.
+struct Unchunker {
+    signed: bool,
+    amz_date: String,
+    scope: String,
+    key: [u8; 32],
+    /// The signature before this chunk's (the request's own, at first).
+    previous: String,
+    /// The chunk's first line, while it is still arriving.
+    line: Vec<u8>,
+    state: ChunkState,
+}
+
+enum ChunkState {
+    Line,
+    /// Inside a chunk's data: bytes still to come, its signature, its hash so far.
+    Data(usize, String, Sha256),
+    /// After a chunk's data: the line end (`true`: its CR was seen).
+    DataEnd(bool),
+    /// The last chunk came. Trailers (checksums, their signature) may follow; they are not used.
+    Done,
+}
+
+impl Unchunker {
+    fn feed(&mut self, mut input: &[u8], out: &mut Vec<u8>) -> Result<(), AuthError> {
+        while !input.is_empty() {
+            match &mut self.state {
+                ChunkState::Done => return Ok(()),
+                ChunkState::Line => {
+                    let byte = input[0];
+                    input = &input[1..];
+                    if byte != b'\n' {
+                        if self.line.len() >= 256 {
+                            return Err(AuthError::BadBody);
+                        }
+                        self.line.push(byte);
+                        continue;
+                    }
+                    let line = core::mem::take(&mut self.line);
+                    let line = core::str::from_utf8(&line).map_err(|_| AuthError::BadBody)?.trim_end_matches('\r');
+                    let (size, extension) = line.split_once(';').unwrap_or((line, ""));
+                    if size.is_empty() || size.len() > 8 || !size.bytes().all(|b| b.is_ascii_hexdigit()) {
+                        return Err(AuthError::BadBody);
+                    }
+                    let size = usize::from_str_radix(size, 16).map_err(|_| AuthError::BadBody)?;
+                    let given = if self.signed { extension.strip_prefix("chunk-signature=").ok_or(AuthError::BadBody)? } else { "" };
+                    self.state = ChunkState::Data(size, String::from(given), Sha256::new());
+                    if size == 0 {
+                        self.end_of_chunk()?;
+                        self.state = ChunkState::Done;
+                    }
+                }
+                ChunkState::Data(left, _, hasher) => {
+                    let n = (*left).min(input.len());
+                    if self.signed {
+                        hasher.update(&input[..n]);
+                    }
+                    out.extend_from_slice(&input[..n]);
+                    input = &input[n..];
+                    *left -= n;
+                    if *left == 0 {
+                        self.end_of_chunk()?;
+                        self.state = ChunkState::DataEnd(false);
+                    }
+                }
+                ChunkState::DataEnd(cr) => {
+                    let byte = input[0];
+                    input = &input[1..];
+                    match (byte, *cr) {
+                        (b'\r', false) => *cr = true,
+                        (b'\n', _) => self.state = ChunkState::Line,
+                        _ => return Err(AuthError::BadBody),
+                    }
+                }
             }
-            previous = right;
         }
-        if size == 0 {
-            // Trailers (checksums, their signature) may follow; they are not used.
-            return Ok(out);
+        Ok(())
+    }
+
+    /// A chunk's data is complete: its signature must be the one the key gives.
+    fn end_of_chunk(&mut self) -> Result<(), AuthError> {
+        let ChunkState::Data(_, given, hasher) = core::mem::replace(&mut self.state, ChunkState::Line) else { return Ok(()) };
+        if !self.signed {
+            return Ok(());
         }
-        out.extend_from_slice(data);
-        rest = rest.strip_prefix(b"\r\n").or_else(|| rest.strip_prefix(b"\n")).ok_or(AuthError::BadBody)?;
+        let to_sign = format!(
+            "AWS4-HMAC-SHA256-PAYLOAD\n{}\n{}\n{}\n{}\n{}",
+            self.amz_date,
+            self.scope,
+            self.previous,
+            hex(&sha256(b"")),
+            hex(&hasher.finish())
+        );
+        let right = hex(&hmac(&self.key, to_sign.as_bytes()));
+        if !same(&right, &given) {
+            return Err(AuthError::BadBody);
+        }
+        self.previous = right;
+        Ok(())
     }
 }
 
@@ -803,6 +928,44 @@ mod tests {
         for cut in (0..sent.len() - 2).step_by(997).chain(sent.len() - 120..sent.len() - 2) {
             assert_eq!(body(&auth, sent[..cut].to_vec(), None), Err(AuthError::BadBody), "cut at {cut}");
         }
+    }
+
+    #[test]
+    fn bodies_in_pieces_of_any_size() {
+        let (mut head, sent) = chunked_example();
+        head.headers.iter_mut().find(|(n, _)| n == "host").unwrap().1 = String::from("s3.amazonaws.com");
+        let auth = verify(&head, SECRET, Some(NOW)).unwrap();
+        for size in [1, 2, 3, 7, 85, 86, 87, 1000, 65535, 65536, 65537, 70000] {
+            let mut reader = BodyReader::new(&auth, Some(66560));
+            let mut data = Vec::new();
+            for piece in sent.chunks(size) {
+                reader.feed(piece, &mut data).unwrap();
+            }
+            assert_eq!(reader.finish(), Ok(66560), "pieces of {size}");
+            assert_eq!(data, vec![b'a'; 66560], "pieces of {size}");
+            // A changed byte is noticed however the pieces fall, at the latest at the end.
+            let mut changed = sent.clone();
+            changed[66000] = b'b';
+            let mut reader = BodyReader::new(&auth, Some(66560));
+            let mut data = Vec::new();
+            let fed = changed.chunks(size).try_for_each(|piece| reader.feed(piece, &mut data));
+            assert!(fed.is_err() || reader.finish().is_err(), "pieces of {size}");
+        }
+        // A body checked by its hash, and one taken as it is.
+        let hashed = Auth { payload: Payload::Hash(sha256(b"hello, bees")), ..auth.clone() };
+        let mut reader = BodyReader::new(&hashed, None);
+        let mut data = Vec::new();
+        reader.feed(b"hello, ", &mut data).unwrap();
+        reader.feed(b"bees", &mut data).unwrap();
+        assert_eq!((reader.finish(), data.as_slice()), (Ok(11), &b"hello, bees"[..]));
+        let mut reader = BodyReader::new(&hashed, None);
+        reader.feed(b"hello, wasps", &mut Vec::new()).unwrap();
+        assert_eq!(reader.finish(), Err(AuthError::BadBody));
+        let mut reader = BodyReader::plain();
+        let mut data = Vec::new();
+        reader.feed(b"any", &mut data).unwrap();
+        reader.feed(b"thing", &mut data).unwrap();
+        assert_eq!((reader.finish(), data.as_slice()), (Ok(8), &b"anything"[..]));
     }
 
     #[test]

@@ -77,6 +77,9 @@ HTTP/1.1 400 Bad Request
 HTTP/1.1 400 Bad Request
 $ ls /share/photos
 !~ changed
+# (an upload waits under a name of its own until it is complete and checked; nothing of it stays)
+$ ls /share
+!~ \.up-
 # Listings: all keys, as folders, by prefix, in pages.
 @s3 GET /photos?list-type=2
 HTTP/1.1 200 OK
