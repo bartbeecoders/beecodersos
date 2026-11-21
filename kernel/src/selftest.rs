@@ -209,6 +209,18 @@ fn ring_buffer() -> TestResult {
 
 fn sata_formats() -> TestResult {
     use crate::ahci::{command_fis, parse_identity, Identity};
+    // Runs of sectors: all on the disk, in memory the controller can use.
+    use crate::ahci::run_fits;
+    check!(run_fits(0, 2048, 4096, 0x10_0000));
+    check!(run_fits(4095, 1, 4096, 0x10_0000));
+    check!(!run_fits(4095, 2, 4096, 0x10_0000)); // past the end of the disk
+    check!(!run_fits(u64::MAX, 2, 4096, 0x10_0000)); // no wrapping round
+    check!(!run_fits(0, 0, 4096, 0x10_0000));
+    check!(!run_fits(0, 8, 4096, 0x10_0001)); // an odd address
+    check!(!run_fits(0, 8, 4096, 0xFFFF_F800)); // would reach past 4 GiB
+    check!(run_fits(0, 4, 4096, 0xFFFF_F800));
+    // The number of sectors goes into bytes 12 and 13 of the command.
+    check_eq!(command_fis(0x25, 0, 2048)[12..14], [0x00, 0x08]);
     // Read one sector at a 48-bit address.
     let fis = command_fis(0x25, 0x1122_3344_5566, 1);
     check_eq!(fis[..4], [0x27, 0x80, 0x25, 0]);

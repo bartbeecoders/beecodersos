@@ -685,6 +685,18 @@ impl BodyError {
     }
 }
 
+/// Wait for the network during a transfer. While data is moving (the last
+/// piece came or went less than 50 ms ago) the other threads get a turn
+/// and the card is looked at again at once: sleeping until the next timer
+/// tick would cost up to 10 ms for every buffer of 16 KiB. Otherwise sleep.
+fn wait_for_network(last_progress_ms: u64) {
+    if time::uptime_ms() - last_progress_ms < 50 {
+        thread::yield_now();
+    } else {
+        thread::pause(|| false);
+    }
+}
+
 /// A small body, held in memory: the list of keys of a "delete these" request.
 fn body(stream: &net::TcpStream, head: &Head, early: Vec<u8>) -> Result<Vec<u8>, BodyError> {
     let length = match head.content_length() {
@@ -711,7 +723,7 @@ fn body(stream: &net::TcpStream, head: &Head, early: Vec<u8>) -> Result<Vec<u8>,
                 last_progress = time::uptime_ms();
             }
             net::Received::Nothing if time::uptime_ms() - last_progress < STALL_MS => {
-                thread::pause(|| false);
+                wait_for_network(last_progress);
             }
             _ => return Err(BodyError::EndedEarly),
         }
@@ -799,7 +811,7 @@ fn receive_upload(stream: &net::TcpStream, head: &Head, early: Vec<u8>, mut read
                     thread::yield_now();
                 }
                 net::Received::Nothing if time::uptime_ms() - last_progress < STALL_MS => {
-                    thread::pause(|| false);
+                    wait_for_network(last_progress);
                 }
                 _ => return Err(BodyError::EndedEarly),
             }
@@ -843,7 +855,7 @@ fn send(stream: &net::TcpStream, answer: &Answer, head_only: bool) {
         match stream.send_some(rest) {
             Ok(0) if time::uptime_ms() - last_progress > STALL_MS => return,
             Ok(0) => {
-                thread::pause(|| false);
+                wait_for_network(last_progress);
             }
             Ok(n) => {
                 rest = &rest[n..];
@@ -869,7 +881,7 @@ fn send(stream: &net::TcpStream, answer: &Answer, head_only: bool) {
                 match stream.send_some(rest) {
                     Ok(0) if time::uptime_ms() - last_progress > STALL_MS => return,
                     Ok(0) => {
-                        thread::pause(|| false);
+                        wait_for_network(last_progress);
                     }
                     Ok(n) => {
                         rest = &rest[n..];

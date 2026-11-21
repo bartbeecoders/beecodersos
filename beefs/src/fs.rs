@@ -7,6 +7,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 const MAGIC: [u8; 8] = *b"BEEFS\0v1";
+/// The most blocks that are read or written with one call to the device.
+const MAX_RUN: usize = 256;
 
 const INODE_SIZE: usize = 64;
 const INODES_PER_BLOCK: u32 = (BLOCK_SIZE / INODE_SIZE) as u32;
@@ -666,6 +668,22 @@ impl<D: BlockDevice> FileSystem<D> {
             let block_off = (pos % BLOCK_SIZE as u64) as usize;
             let n = (BLOCK_SIZE - block_off).min(len - done);
             let block = self.map_block(inode, pos / BLOCK_SIZE as u64, false)?;
+            if block != 0 && n == BLOCK_SIZE {
+                // Whole blocks that lie one after the other on the device
+                // are read with one call (a disk moves them in one command).
+                let most = ((len - done) / BLOCK_SIZE).min(MAX_RUN);
+                let mut count = 1;
+                while count < most && self.map_block(inode, pos / BLOCK_SIZE as u64 + count as u64, false)? == block + count as u32 {
+                    count += 1;
+                }
+                let mut run = vec![[0u8; BLOCK_SIZE]; count];
+                self.dev.read_blocks(block as u64, &mut run)?;
+                for (i, b) in run.iter().enumerate() {
+                    out[done + i * BLOCK_SIZE..done + (i + 1) * BLOCK_SIZE].copy_from_slice(b);
+                }
+                done += count * BLOCK_SIZE;
+                continue;
+            }
             if block == 0 {
                 out[done..done + n].fill(0); // sparse hole
             } else {
@@ -691,6 +709,30 @@ impl<D: BlockDevice> FileSystem<D> {
             let block = self.map_block(inode, pos / BLOCK_SIZE as u64, true);
             self.whole_block = false;
             let block = block?;
+            if n == BLOCK_SIZE {
+                // Whole blocks that get places one after the other on the
+                // device are written with one call. A block that lands
+                // elsewhere (or cannot be had) starts the next run.
+                let most = ((data.len() - done) / BLOCK_SIZE).min(MAX_RUN);
+                let mut count = 1;
+                while count < most {
+                    self.whole_block = true;
+                    let next = self.map_block(inode, pos / BLOCK_SIZE as u64 + count as u64, true);
+                    self.whole_block = false;
+                    match next {
+                        Ok(next) if next == block + count as u32 => count += 1,
+                        _ => break,
+                    }
+                }
+                let mut run = vec![[0u8; BLOCK_SIZE]; count];
+                for (i, b) in run.iter_mut().enumerate() {
+                    b.copy_from_slice(&data[done + i * BLOCK_SIZE..done + (i + 1) * BLOCK_SIZE]);
+                }
+                self.dev.write_blocks(block as u64, &run)?;
+                done += count * BLOCK_SIZE;
+                inode.size = inode.size.max(pos + (count * BLOCK_SIZE) as u64);
+                continue;
+            }
             if n < BLOCK_SIZE {
                 self.dev.read_block(block as u64, &mut buf)?;
             }
@@ -1175,6 +1217,79 @@ mod tests {
             self.writes += 1;
             self.disk.write_block(i, b)
         }
+    }
+
+    /// A RamDisk that counts the commands a disk would get: one per call,
+    /// however many blocks it moves.
+    struct Commands {
+        disk: RamDisk,
+        commands: u64,
+        longest: usize,
+    }
+
+    impl BlockDevice for Commands {
+        fn block_count(&self) -> u64 {
+            self.disk.block_count()
+        }
+        fn read_block(&mut self, i: u64, b: &mut Block) -> Result<()> {
+            self.commands += 1;
+            self.disk.read_block(i, b)
+        }
+        fn write_block(&mut self, i: u64, b: &Block) -> Result<()> {
+            self.commands += 1;
+            self.disk.write_block(i, b)
+        }
+        fn read_blocks(&mut self, first: u64, bufs: &mut [Block]) -> Result<()> {
+            self.commands += 1;
+            self.longest = self.longest.max(bufs.len());
+            self.disk.read_blocks(first, bufs)
+        }
+        fn write_blocks(&mut self, first: u64, bufs: &[Block]) -> Result<()> {
+            self.commands += 1;
+            self.longest = self.longest.max(bufs.len());
+            self.disk.write_blocks(first, bufs)
+        }
+    }
+
+    #[test]
+    fn neighbouring_blocks_move_in_one_command() {
+        let dev = Commands { disk: RamDisk::new(8 * 1024 * 1024), commands: 0, longest: 0 };
+        let mut fs = FileSystem::format(dev).unwrap();
+        let byte = |i: usize| (i * 13 % 251) as u8;
+        // 2 MiB and a bit, starting and ending inside a block when appended to.
+        let data: Vec<u8> = (0..2 * 1024 * 1024 + 777).map(byte).collect();
+        let blocks = data.len().div_ceil(BLOCK_SIZE) as u64;
+        let before = fs.device().commands;
+        fs.write_file("/film.avi", &data).unwrap();
+        let writing = fs.device().commands - before;
+        assert!(writing < blocks / 20, "{writing} commands to write {blocks} blocks");
+        let before = fs.device().commands;
+        assert_eq!(fs.read_file("/film.avi").unwrap(), data);
+        let reading = fs.device().commands - before;
+        assert!(reading < blocks / 20, "{reading} commands to read {blocks} blocks");
+        assert!(fs.device().longest <= MAX_RUN);
+        // In pieces that do not line up with blocks, and from the middle.
+        let mut piece = vec![0u8; 100_000];
+        for at in [0usize, 1, 511, 512, 513, 70_000, data.len() - 100_001, data.len() - 50_000] {
+            let n = fs.read_at("/film.avi", at as u64, &mut piece).unwrap();
+            assert_eq!(n, piece.len().min(data.len() - at));
+            assert!(piece[..n].iter().enumerate().all(|(i, b)| *b == byte(at + i)), "from {at}");
+        }
+        // Two files that grow in turns: their blocks alternate on the disk,
+        // so runs are short. The content must not care.
+        let (mut a, mut b) = (Vec::new(), Vec::new());
+        for round in 0..40usize {
+            let part_a: Vec<u8> = (0..3000 + round * 37).map(|i| byte(i + round)).collect();
+            let part_b: Vec<u8> = (0..5000 - round * 11).map(|i| byte(i * 3 + round)).collect();
+            fs.append("/a.log", &part_a).unwrap();
+            fs.append("/b.log", &part_b).unwrap();
+            a.extend_from_slice(&part_a);
+            b.extend_from_slice(&part_b);
+        }
+        let mut fs = FileSystem::mount(fs.into_device().disk).unwrap();
+        assert_eq!(fs.read_file("/a.log").unwrap(), a);
+        assert_eq!(fs.read_file("/b.log").unwrap(), b);
+        assert_eq!(fs.read_file("/film.avi").unwrap(), data);
     }
 
     #[test]

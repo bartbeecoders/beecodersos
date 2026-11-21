@@ -196,6 +196,19 @@ impl<D: BlockDevice> BlockDevice for Partition<D> {
         }
         self.dev.write_block(self.start + index, buf)
     }
+    // Runs of blocks go to the disk as runs (one command each, on disks that can).
+    fn read_blocks(&mut self, first: u64, bufs: &mut [Block]) -> Result<()> {
+        if first.checked_add(bufs.len() as u64).is_none_or(|end| end > self.len) {
+            return Err(FsError::OutOfRange);
+        }
+        self.dev.read_blocks(self.start + first, bufs)
+    }
+    fn write_blocks(&mut self, first: u64, bufs: &[Block]) -> Result<()> {
+        if first.checked_add(bufs.len() as u64).is_none_or(|end| end > self.len) {
+            return Err(FsError::OutOfRange);
+        }
+        self.dev.write_blocks(self.start + first, bufs)
+    }
     fn flush(&mut self) -> Result<()> {
         self.dev.flush()
     }
@@ -285,6 +298,28 @@ mod tests {
         let crc = crc32(0, &h[..92]);
         h[16..20].copy_from_slice(&crc.to_le_bytes());
         disk.write_block(1, &h).unwrap();
+    }
+
+    #[test]
+    fn runs_of_blocks_stay_inside_the_partition() {
+        // Blocks 4..9 of a 16-block disk.
+        let mut part = Partition::new(RamDisk::new(16 * BLOCK_SIZE), 4, 5).unwrap();
+        let run: Vec<Block> = (0..5u8).map(|i| [i + 1; BLOCK_SIZE]).collect();
+        part.write_blocks(0, &run).unwrap();
+        let mut back = vec![[0u8; BLOCK_SIZE]; 3];
+        part.read_blocks(2, &mut back).unwrap();
+        assert_eq!((back[0][0], back[1][7], back[2][511]), (3, 4, 5));
+        // Past its end, by one block or by an overflow: refused, nothing moved.
+        assert_eq!(part.write_blocks(1, &run).err(), Some(FsError::OutOfRange));
+        assert_eq!(part.read_blocks(3, &mut back).err(), Some(FsError::OutOfRange));
+        assert_eq!(part.read_blocks(u64::MAX, &mut back).err(), Some(FsError::OutOfRange));
+        // On the disk the run starts at the partition's first block, and its neighbours are untouched.
+        let mut disk = part.dev;
+        let mut block = [0u8; BLOCK_SIZE];
+        for (index, want) in [(3u64, 0u8), (4, 1), (8, 5), (9, 0)] {
+            disk.read_block(index, &mut block).unwrap();
+            assert_eq!(block[0], want, "block {index}");
+        }
     }
 
     #[test]
