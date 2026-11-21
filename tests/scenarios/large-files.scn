@@ -36,6 +36,17 @@ $ ls /
 $ tail -n 1 /copy.txt
 0123456789 0123456789 0123456789 0123456789 0123456789 012345678
 $ rm /copy.txt
+# Output to a file or a pipe is collected in memory, 4 MiB at most: more is
+# said, not silently lost.
+$ cat /big.txt > /part.txt
+cat: more than 4 MiB of output: only the first 4 MiB went to /part.txt (cp copies a file of any size)
+$ ls /
+~ ^ +4194304  part\.txt$
+$ cat /big.txt | wc
+cat: more than 4 MiB of output: too much for a pipe
+$ cat /piece.txt | wc
+~ ^32768 lines, 196608 words, 2129920 bytes$
+$ rm /part.txt
 $ cat /piece.txt >> /big.txt
 $ cat /piece.txt >> /big.txt
 $ ls /

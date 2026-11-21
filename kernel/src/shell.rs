@@ -1119,9 +1119,14 @@ impl Shell {
                 let line: Vec<String> = core::iter::once(cmd.clone()).chain(a.iter().map(|w| quote(w))).collect();
                 console::capture_start();
                 self.execute(&line.join(" "));
-                let text = console::capture_end();
+                let (text, cut) = console::capture_end();
                 let mut fs = self.storage.fs();
                 let r = if append { fs.append(&path, text.as_bytes()) } else { fs.write_file(&path, text.as_bytes()) };
+                drop(fs);
+                if cut && r.is_ok() {
+                    let most = console::MAX_CAPTURE >> 20;
+                    return error(&format!("{cmd}: more than {most} MiB of output: only the first {most} MiB went to {file} (cp copies a file of any size)"));
+                }
                 return report(r);
             }
             let mut text = a.join(" ");
@@ -3309,7 +3314,12 @@ impl Shell {
             }
             self.execute(stage);
             if !last {
-                input = Some(console::capture_end());
+                let (text, cut) = console::capture_end();
+                if cut {
+                    let name = stage.split_whitespace().next().unwrap_or("");
+                    return error(&format!("{name}: more than {} MiB of output: too much for a pipe", console::MAX_CAPTURE >> 20));
+                }
+                input = Some(text);
             }
             let unread = self.stdin.take().is_some();
             if last_error().is_some() || self.status != Status::Ok {
