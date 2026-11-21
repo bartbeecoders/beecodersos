@@ -1,0 +1,94 @@
+# The file server's S3 side: an upload in parts (multipart), as S3 clients
+# send any file over a few megabytes. Start, send the parts in any order,
+# say they are complete; the parts become one object.
+@net
+@disk
+@forward
+$ net dhcp
+~ ^address 10\.0\.2\.15/24 \(DHCP\)
+$ echo key TestKeyTestKeyTestKeyTestKeyTestKey12345 > /system/fileserver
+$ fileserver on 80
+~ file server on, port 80
+@s3 PUT /films
+HTTP/1.1 200 OK
+@s3 POST /films/2026/bees.txt?uploads
+HTTP/1.1 200 OK
+~ <InitiateMultipartUploadResult.*<Bucket>films</Bucket><Key>2026/bees.txt</Key><UploadId>[0-9a-f]{16}</UploadId>
+@capture id <UploadId>([0-9a-f]{16})</UploadId>
+# The parts wait out of sight: no bucket, no object, nothing in the folder's listing.
+@s3 GET /
+~ <Buckets><Bucket><Name>films</Name>[^N]*</Bucket></Buckets>
+@s3 GET /films?list-type=2
+~ <KeyCount>0</KeyCount>
+@request raw GET /api/files/ HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
+{"path":"/","entries":[{"name":"films","type":"folder","size":0}]}
+# Parts in any order; one sent again replaces the first try; one in chunks.
+@s3 PUT /films/2026/bees.txt?partNumber=2&uploadId={id} and wax,\n
+HTTP/1.1 200 OK
+~ ETag: "bee
+@s3 PUT /films/2026/bees.txt?partNumber=1&uploadId={id} a first try
+HTTP/1.1 200 OK
+@s3 PUT /films/2026/bees.txt?partNumber=1&uploadId={id} honey\x20
+HTTP/1.1 200 OK
+@s3 chunked PUT /films/2026/bees.txt?partNumber=7&uploadId={id} from the bees.\n
+HTTP/1.1 200 OK
+# What is not an upload, or not this one, is refused.
+@s3 PUT /films/2026/bees.txt?partNumber=3&uploadId=0123456789abcdef x
+HTTP/1.1 404 Not Found
+~ <Code>NoSuchUpload</Code>
+@s3 PUT /films/other.txt?partNumber=3&uploadId={id} x
+HTTP/1.1 404 Not Found
+@s3 PUT /films/2026/bees.txt?partNumber=0&uploadId={id} x
+HTTP/1.1 400 Bad Request
+@s3 PUT /films/2026/bees.txt?partNumber=3&uploadId=../../system x
+HTTP/1.1 404 Not Found
+@s3 wrong-secret PUT /films/2026/bees.txt?partNumber=3&uploadId={id} x
+HTTP/1.1 403 Forbidden
+@s3 POST /films/2026/bees.txt?uploadId={id} <CompleteMultipartUpload><Part><PartNumber>1</PartNumber></Part><Part><PartNumber>3</PartNumber></Part></CompleteMultipartUpload>
+HTTP/1.1 400 Bad Request
+~ <Code>InvalidPart</Code>
+@s3 POST /films/2026/bees.txt?uploadId={id} <CompleteMultipartUpload><Part><PartNumber>2</PartNumber></Part><Part><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>
+HTTP/1.1 400 Bad Request
+~ <Code>MalformedXML</Code>
+$ ls /share/films
+!~ 2026
+# Complete: the parts, in the order of their numbers, are the object.
+@s3 POST /films/2026/bees.txt?uploadId={id} <CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>"a"</ETag></Part><Part><PartNumber>2</PartNumber><ETag>"b"</ETag></Part><Part><PartNumber>7</PartNumber><ETag>"c"</ETag></Part></CompleteMultipartUpload>
+HTTP/1.1 200 OK
+~ <CompleteMultipartUploadResult.*<Location>/films/2026/bees.txt</Location><Bucket>films</Bucket><Key>2026/bees.txt</Key><ETag>&quot;bee
+$ cat /share/films/2026/bees.txt
+honey and wax,
+from the bees.
+@s3 GET /films?list-type=2
+~ <KeyCount>1</KeyCount><Contents><Key>2026/bees.txt</Key>.*<Size>30</Size>
+# The upload is over: its parts are gone, and it cannot be completed twice.
+$ ls /share
+!~ \.mp-
+!~ \.up-
+@s3 POST /films/2026/bees.txt?uploadId={id} <CompleteMultipartUpload><Part><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>
+HTTP/1.1 404 Not Found
+~ <Code>NoSuchUpload</Code>
+# An upload that is given up leaves nothing; one that a restart interrupts neither.
+@s3 POST /films/dropped.txt?uploads
+HTTP/1.1 200 OK
+@capture id2 <UploadId>([0-9a-f]{16})</UploadId>
+@s3 PUT /films/dropped.txt?partNumber=1&uploadId={id2} never to be seen
+HTTP/1.1 200 OK
+@s3 DELETE /films/dropped.txt?uploadId={id2}
+HTTP/1.1 204 No Content
+@s3 DELETE /films/dropped.txt?uploadId={id2}
+HTTP/1.1 404 Not Found
+@s3 POST /films/lost.txt?uploads
+HTTP/1.1 200 OK
+@s3 POST /nothing/lost.txt?uploads
+HTTP/1.1 404 Not Found
+~ <Code>NoSuchBucket</Code>
+$ ls /share
+~ \.mp-
+@reboot
+~ \[fileserver\] files on port 80
+$ ls /share
+!~ \.mp-
+$ cat /share/films/2026/bees.txt
+honey and wax,
+from the bees.

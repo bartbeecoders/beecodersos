@@ -17,9 +17,9 @@
 //! key id `beecoders` and the same key as the secret; an unsigned or wrongly
 //! signed request gets 403 and nothing else. Buckets: list, make, remove.
 //! Objects: put, get, head, delete, delete many, list (both versions, with
-//! prefix, delimiter and pages). A link (`fileserver link FILE`, or a
+//! prefix, delimiter and pages), uploads in parts (multipart). A link (`fileserver link FILE`, or a
 //! client's presigned URL) fetches one file without a key until it expires.
-//! Not there: multipart uploads, copies, versions, access lists.
+//! Not there: copies, versions, access lists.
 //!
 //! The key is made up by the OS and kept in the setting file. The link is
 //! not encrypted: this is for the local network. The shared folder may not be
@@ -45,12 +45,15 @@ const SETTING_FILE: &str = "/system/fileserver";
 /// The largest body that is held in memory (a list of keys to delete).
 /// A file goes to the disk as it arrives, and comes from it piece by piece:
 /// it may be as large as the disk has room, and as BeeFS holds (about 1 GiB).
-pub const MAX_BODY: u64 = 1024 * 1024;
+pub const MAX_BODY: u64 = 2 * 1024 * 1024;
 /// The size of the pieces in which a file is received and sent.
 const PIECE: usize = 64 * 1024;
 /// Uploads are written under this name in the shared folder until they are
 /// complete and checked; only then do they get their own name.
 const UPLOAD_PREFIX: &str = ".up-";
+/// The parts of an upload in parts wait in a folder of this name (and the
+/// upload's 16 hex digits) in the shared folder until they are put together.
+const PARTS_PREFIX: &str = ".mp-";
 /// A client gets this long to send its request's head...
 const HEAD_TIMEOUT_MS: u64 = 5_000;
 /// ...and may stall this long while a body is received or sent.
@@ -289,6 +292,10 @@ struct Answer {
     length: Option<u64>,
     /// The file whose content is the body: sent from the disk piece by piece.
     file: Option<String>,
+    /// The head went out already (an answer that took long to make): only the body follows.
+    headless: bool,
+    /// Where in the file the body starts (a `Range` request).
+    offset: u64,
 }
 
 /// What came with a request: a small body, or an upload already on the disk.
@@ -300,7 +307,7 @@ enum Body {
 
 impl Answer {
     fn new(status: u16, reason: &'static str, kind: &'static str, body: Vec<u8>) -> Answer {
-        Answer { status, reason, kind, more: String::new(), body, length: None, file: None }
+        Answer { status, reason, kind, more: String::new(), body, length: None, file: None, headless: false, offset: 0 }
     }
 
     fn error(status: u16, reason: &'static str, message: &str) -> Answer {
@@ -388,6 +395,25 @@ fn s3_xml(text: String) -> Answer {
     Answer::new(200, "OK", "application/xml", text.into_bytes())
 }
 
+/// A file's answer cut down to the part a `Range` header asks for (206), or
+/// `None` when the file has no such part (416: each side says that its way).
+fn ranged(mut answer: Answer, head: &Head) -> Option<Answer> {
+    let (Some(size), true) = (answer.length, answer.file.is_some()) else { return Some(answer) };
+    answer.more += "Accept-Ranges: bytes\r\n";
+    match head.header("range").map(|range| proto::byte_range(range, size)) {
+        None | Some(Ok(None)) => Some(answer),
+        Some(Ok(Some((first, last)))) => {
+            answer.status = 206;
+            answer.reason = "Partial Content";
+            answer.offset = first;
+            answer.length = Some(last - first + 1);
+            answer.more += &format!("Content-Range: bytes {first}-{last}/{size}\r\n");
+            Some(answer)
+        }
+        Some(Err(())) => None,
+    }
+}
+
 /// Run a request's action; an upload that the action did not take (it gave
 /// the file its name) is removed afterwards.
 fn acted(body: Body, act: impl FnOnce(Body) -> Answer) -> Answer {
@@ -414,12 +440,119 @@ fn s3_request(stream: &net::TcpStream, folder: &str, head: &Head, early: Vec<u8>
         body(stream, head, early).and_then(|received| s3::body(auth, received, decoded).map(Body::Bytes).map_err(|_| BodyError::NotAsSigned))
     };
     match taken {
+        Ok(Body::Bytes(xml)) if head.method == "POST" && object && head.query_value("uploadId").is_some() => complete_parts(stream, folder, head, &xml),
         Ok(body) => acted(body, |body| s3_act(folder, head, body)),
         Err(e) => {
             let (status, reason, code, message) = e.parts();
             s3_error(status, reason, code, &message, &head.path)
         }
     }
+}
+
+/// Where the parts of upload `id` wait, if that is an upload for this key.
+fn parts_dir(fs: &mut storage::FsGuard, folder: &str, id: &str, key: &str) -> Option<String> {
+    if !s3::upload_id_ok(id) {
+        return None;
+    }
+    let dir = format!("{folder}/{PARTS_PREFIX}{id}");
+    let for_key = fs.read_file(&format!("{dir}/key")).ok()?;
+    (for_key == key.as_bytes()).then_some(dir)
+}
+
+/// Remove a folder of parts and what is in it.
+fn remove_parts(fs: &mut storage::FsGuard, dir: &str) {
+    for entry in fs.read_dir(dir).unwrap_or_default() {
+        let _ = fs.remove(&format!("{dir}/{}", entry.name));
+    }
+    let _ = fs.remove(dir);
+}
+
+/// "The parts are complete": put them together, in the order the client
+/// names them, into the object. That can take a while for a large file, so
+/// the answer starts at once (200, as S3 does) and spaces keep the
+/// connection alive until the result, or the error, can follow.
+fn complete_parts(stream: &net::TcpStream, folder: &str, head: &Head, xml: &[u8]) -> Answer {
+    let fail = |status: u16, reason: &'static str, code: &str, message: &str| s3_error(status, reason, code, message, &head.path);
+    let no_upload = || fail(404, "Not Found", "NoSuchUpload", "no such upload in parts (finished, given up, or never started)");
+    let names = match proto::safe_path(&head.path, MAX_NAME_LEN) {
+        Some(names) if names.len() >= 2 && s3::bucket_name_ok(names[0], MAX_NAME_LEN) => names,
+        _ => return fail(400, "Bad Request", "KeyTooLongError", "not a usable key"),
+    };
+    let key = names.join("/");
+    let id = head.query_value("uploadId").unwrap_or_default();
+    let Some(parts) = s3::completed_parts(xml) else {
+        return fail(400, "Bad Request", "MalformedXML", "not a list of parts, numbered 1 to 10000 in rising order");
+    };
+    let Some(mut storage) = storage::handle() else { return fail(503, "Service Unavailable", "ServiceUnavailable", "no file system") };
+    let path = format!("{folder}/{key}");
+    // Everything that can be refused is, before the answer starts.
+    let dir = {
+        let mut fs = storage.fs();
+        let Some(dir) = parts_dir(&mut fs, folder, &id, &key) else { return no_upload() };
+        if !fs.is_dir(&format!("{folder}/{}", names[0])) {
+            return fail(404, "Not Found", "NoSuchBucket", "no such bucket");
+        }
+        if fs.is_dir(&path) {
+            return fail(409, "Conflict", "InvalidRequest", "a folder has that name");
+        }
+        let mut total = 0u64;
+        for part in &parts {
+            match fs.metadata(&format!("{dir}/{part}")) {
+                Ok(m) if m.kind == FileKind::File => total += m.size,
+                _ => return fail(400, "Bad Request", "InvalidPart", &format!("part {part} was not sent")),
+            }
+        }
+        if total > beefs::MAX_FILE_SIZE {
+            return fail(400, "Bad Request", "EntityTooLarge", "the parts together are larger than a file can be");
+        }
+        dir
+    };
+    let _ = stream.send_some(b"HTTP/1.1 200 OK\r\nContent-Type: application/xml\r\nConnection: close\r\n\r\n<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    let temp = format!("{folder}/{UPLOAD_PREFIX}{:08x}", rand::next_u32());
+    let result = (|| -> Result<(u32, u64), FsError> {
+        // The first part becomes the file; the others are added to it piece by piece.
+        storage.fs().rename(&format!("{dir}/{}", parts[0]), &temp)?;
+        let mut piece = alloc::vec![0u8; PIECE];
+        let mut last_sign = time::uptime_ms();
+        for part in &parts[1..] {
+            let from = format!("{dir}/{part}");
+            let mut offset = 0u64;
+            loop {
+                let mut fs = storage.fs();
+                let n = fs.read_at(&from, offset, &mut piece)?;
+                if n > 0 {
+                    fs.append(&temp, &piece[..n])?;
+                }
+                drop(fs);
+                if n == 0 {
+                    break;
+                }
+                offset += n as u64;
+                if time::uptime_ms() - last_sign > 2_000 {
+                    let _ = stream.send_some(b" "); // still at it
+                    last_sign = time::uptime_ms();
+                }
+                thread::yield_now();
+            }
+        }
+        let mut fs = storage.fs();
+        place_upload(&mut fs, &temp, &path)?;
+        let m = fs.metadata(&path)?;
+        Ok((m.inode, m.size))
+    })();
+    let mut fs = storage.fs();
+    remove_parts(&mut fs, &dir);
+    let text = match result {
+        Ok((inode, size)) => s3::completed_xml(names[0], &names[1..].join("/"), &etag(inode, size)),
+        Err(e) => {
+            let _ = fs.remove(&temp);
+            // The answer has begun: the error goes where the result would (S3 does the same).
+            format!("<Error><Code>InternalError</Code><Message>{e}</Message></Error>")
+        }
+    };
+    let mut a = Answer::new(200, "OK", "application/xml", text.into_bytes());
+    a.headless = true;
+    a
 }
 
 /// How much larger than the file a chunked upload may be on the wire: what
@@ -598,7 +731,53 @@ fn s3_act(folder: &str, head: &Head, body: Body) -> Answer {
     let is_folder_key = head.path.ends_with('/');
     let no_key = || fail(404, "Not Found", "NoSuchKey", "no such key");
     match method {
-        "PUT" | "POST" if has("uploads") || has("uploadId") || has("partNumber") => not_done("multipart uploads (send the file in one piece)"),
+        // An upload in parts: started, part by part, given up. (Putting the
+        // parts together takes long and is done in `complete_parts`.)
+        "POST" if has("uploads") => {
+            if !bucket_there {
+                return no_bucket();
+            }
+            let id = format!("{:08x}{:08x}", rand::next_u32(), rand::next_u32());
+            let dir = format!("{folder}/{PARTS_PREFIX}{id}");
+            let key = names.join("/");
+            match fs.mkdir_all(&dir).and_then(|()| fs.write_file(&format!("{dir}/key"), key.as_bytes())) {
+                Ok(()) => s3_xml(s3::initiated_xml(bucket, &names[1..].join("/"), &id)),
+                Err(e) => {
+                    remove_parts(&mut fs, &dir);
+                    fs_failed(e)
+                }
+            }
+        }
+        "PUT" if has("uploadId") || has("partNumber") => {
+            let id = head.query_value("uploadId").unwrap_or_default();
+            let number = head.query_value("partNumber").and_then(|n| n.parse::<u32>().ok()).filter(|n| (1..=s3::MAX_PARTS).contains(n));
+            let Some(dir) = parts_dir(&mut fs, folder, &id, &names.join("/")) else {
+                return fail(404, "Not Found", "NoSuchUpload", "no such upload in parts (finished, given up, or never started)");
+            };
+            let (Some(number), Body::File(temp, _)) = (number, &body) else {
+                return fail(400, "Bad Request", "InvalidArgument", "a part needs a number from 1 to 10000 and its data");
+            };
+            let part = format!("{dir}/{number}");
+            match place_upload(&mut fs, temp, &part).and_then(|_| fs.metadata(&part)) {
+                Ok(m) => {
+                    let mut a = Answer::new(200, "OK", "application/xml", Vec::new());
+                    a.more = format!("ETag: \"{}\"\r\n", etag(m.inode, m.size));
+                    a
+                }
+                Err(e) => fs_failed(e),
+            }
+        }
+        "DELETE" if has("uploadId") => {
+            let id = head.query_value("uploadId").unwrap_or_default();
+            match parts_dir(&mut fs, folder, &id, &names.join("/")) {
+                Some(dir) => {
+                    remove_parts(&mut fs, &dir);
+                    Answer::new(204, "No Content", "application/xml", Vec::new())
+                }
+                None => fail(404, "Not Found", "NoSuchUpload", "no such upload in parts (finished, given up, or never started)"),
+            }
+        }
+        "POST" if has("uploadId") => not_done("this request"),
         "PUT" if head.header("x-amz-copy-source").is_some() => not_done("copies"),
         "PUT" if has("acl") || has("tagging") || has("retention") || has("legal-hold") => not_done("object settings"),
         "PUT" if !bucket_there => no_bucket(),
@@ -635,12 +814,18 @@ fn s3_act(folder: &str, head: &Head, body: Body) -> Answer {
                 a.length = Some(size);
                 a.file = (!folder_key).then(|| path.clone());
                 a.more = format!("ETag: \"{tag}\"\r\nLast-Modified: {}\r\n", s3::http_time(now));
-                a
+                match ranged(a, head) {
+                    Some(a) => a,
+                    None => {
+                        let mut a = fail(416, "Range Not Satisfiable", "InvalidRange", "the object has no such bytes");
+                        a.more = format!("Content-Range: bytes */{size}\r\n");
+                        a
+                    }
+                }
             }
             Err(FsError::NotFound | FsError::NotADirectory) => no_key(),
             Err(e) => fs_failed(e),
         },
-        "DELETE" if has("uploadId") => Answer::new(204, "No Content", "application/xml", Vec::new()),
         "DELETE" => {
             // Gone is gone: a key that is not there is no error in S3.
             match fs.remove(&path) {
@@ -749,6 +934,9 @@ fn clear_uploads(folder: &str) {
         if entry.kind == FileKind::File && entry.name.starts_with(UPLOAD_PREFIX) {
             let _ = fs.remove(&format!("{folder}/{}", entry.name));
         }
+        if entry.kind == FileKind::Directory && entry.name.starts_with(PARTS_PREFIX) {
+            remove_parts(&mut fs, &format!("{folder}/{}", entry.name));
+        }
     }
 }
 
@@ -845,7 +1033,7 @@ fn place_upload(fs: &mut storage::FsGuard, temp: &str, path: &str) -> Result<boo
 
 fn send(stream: &net::TcpStream, answer: &Answer, head_only: bool) {
     let length = answer.length.unwrap_or(answer.body.len() as u64);
-    let mut out = proto::response_head(answer.status, answer.reason, answer.kind, length, &answer.more).into_bytes();
+    let mut out = if answer.headless { Vec::new() } else { proto::response_head(answer.status, answer.reason, answer.kind, length, &answer.more).into_bytes() };
     if !head_only {
         out.extend_from_slice(&answer.body);
     }
@@ -867,9 +1055,10 @@ fn send(stream: &net::TcpStream, answer: &Answer, head_only: bool) {
     if let (Some(path), false) = (&answer.file, head_only) {
         // The file, from the disk piece by piece: it need not fit in memory.
         let mut buf = alloc::vec![0u8; PIECE];
-        let mut offset = 0u64;
-        while offset < length {
-            let read = storage::handle().map(|mut storage| storage.fs().read_at(path, offset, &mut buf));
+        let (mut offset, end) = (answer.offset, answer.offset + length);
+        while offset < end {
+            let want = ((end - offset) as usize).min(buf.len());
+            let read = storage::handle().map(|mut storage| storage.fs().read_at(path, offset, &mut buf[..want]));
             let Some(Ok(n)) = read else { return };
             if n == 0 {
                 return; // shorter than announced (changed meanwhile): the client sees it cut off
@@ -917,7 +1106,7 @@ fn rest(folder: &str, head: &Head, body: Body) -> Answer {
                 Ok(list) => {
                     let mut entries: Vec<Entry> = list
                         .into_iter()
-                        .filter(|e| !(names.is_empty() && e.name.starts_with(UPLOAD_PREFIX))) // uploads still arriving
+                        .filter(|e| !(names.is_empty() && (e.name.starts_with(UPLOAD_PREFIX) || e.name.starts_with(PARTS_PREFIX)))) // uploads still arriving
                         .map(|e| Entry { name: e.name, folder: e.kind == FileKind::Directory, size: e.size })
                         .collect();
                     for e in entries.iter_mut().filter(|e| e.folder) {
@@ -932,7 +1121,14 @@ fn rest(folder: &str, head: &Head, body: Body) -> Answer {
                 let mut a = Answer::new(200, "OK", content_type(&shown), Vec::new());
                 a.length = Some(m.size);
                 a.file = Some(path.clone());
-                a
+                match ranged(a, head) {
+                    Some(a) => a,
+                    None => {
+                        let mut a = Answer::error(416, "Range Not Satisfiable", "the file has no such bytes");
+                        a.more = format!("Content-Range: bytes */{}\r\n", m.size);
+                        a
+                    }
+                }
             }
             Err(FsError::NotFound | FsError::NotADirectory) => not_found(),
             Err(e) => failed(e),

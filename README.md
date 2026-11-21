@@ -1149,17 +1149,28 @@ print([o["Key"] for o in s3.list_objects_v2(Bucket="photos", Prefix="2026/")["Co
   (It was 14 s and 30 s while every 512-byte block cost the disk a command
   of its own: BeeFS now reads and writes blocks that lie one after the
   other with one call, and the SATA driver moves them in one command.)
-- **Not there** (answered with `501 NotImplemented`): multipart uploads
-  (send a file in one request: keep a client's multipart threshold above
-  the file's size), copies, versions, access lists, tags. `Range` is not honoured: the whole
-  object is sent.
+- **Uploads in parts** (multipart), which S3 clients use by themselves
+  for anything over a few megabytes: start, send the parts in any order
+  (each checked like any upload), say they are complete, or give up. The
+  parts wait in a folder of their own (`.mp-…` in the shared folder, in no
+  listing) and are put together in the order of their numbers; that
+  answer starts at once and keeps the connection alive while a large file
+  is put together, as S3's does. An upload that is given up, or that a
+  restart interrupts, leaves nothing (`net-fileserver-parts.scn`).
+- **Parts of a file:** `Range: bytes=A-B`, `A-` and `-N` are answered with
+  206 and `Content-Range`, on both interfaces (a range the file does not
+  have: 416). Download tools fetch large files in several ranges at once;
+  before this the whole file went out each time and they put together a
+  wrong one.
+- **Not there** (answered with `501 NotImplemented`): versions, access lists, tags, the list of an upload's parts.
 - **Different from S3:** names between the `/` have 26 characters at most
   and a key 16 levels (BeeFS); a bucket named `api` cannot exist; BeeFS
   keeps no times, so `LastModified` is the time of the answer; an `ETag`
   names the file and its size (`"bee…-1"`), it is not a hash of the content.
 - Tested with boto3 against the HP (bucket, uploads of 6 MB, listings in
   pages, downloads compared byte for byte, deletes, a wrong secret; 40 MB
-  with `put_object` and `upload_file`; links
+  with `put_object`; 100 MB with `upload_file` and `download_file` as they
+  come (in parts, ten at once: 16 s up, 9 s down); links
   made by the OS and by boto3, a changed and an expired one);
   `net-fileserver-s3.scn` signs its own requests (`@s3` in
   `tests/boot_test.py`), including chunked and tampered ones.

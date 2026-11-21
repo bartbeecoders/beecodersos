@@ -146,6 +146,35 @@ pub fn bearer(head: &Head) -> Option<&str> {
     scheme.eq_ignore_ascii_case("bearer").then_some(key.trim())
 }
 
+/// The part of a file of `size` bytes that a `Range` header asks for, as
+/// its first and last byte: `bytes=A-B`, `bytes=A-` (from A on) or
+/// `bytes=-N` (the last N). `Ok(None)`: not a range this server serves
+/// (another unit, several ranges): the whole file is the answer.
+/// `Err`: a range that the file does not have.
+pub fn byte_range(header: &str, size: u64) -> Result<Option<(u64, u64)>, ()> {
+    let Some(spec) = header.trim().strip_prefix("bytes=") else { return Ok(None) };
+    let Some((from, to)) = spec.split_once('-') else { return Ok(None) };
+    let number = |text: &str| -> Option<u64> { (!text.is_empty() && text.len() <= 18 && text.bytes().all(|b| b.is_ascii_digit())).then(|| text.parse().ok()).flatten() };
+    match (from.trim(), to.trim()) {
+        ("", last) => match number(last) {
+            Some(0) => Err(()),
+            Some(n) if size > 0 => Ok(Some((size.saturating_sub(n), size - 1))),
+            Some(_) => Err(()),
+            None => Ok(None),
+        },
+        (first, "") => match number(first) {
+            Some(a) if a < size => Ok(Some((a, size - 1))),
+            Some(_) => Err(()),
+            None => Ok(None),
+        },
+        (first, last) => match (number(first), number(last)) {
+            (Some(a), Some(b)) if a <= b && a < size => Ok(Some((a, b.min(size - 1)))),
+            (Some(a), Some(b)) if a <= b => Err(()),
+            _ => Ok(None),
+        },
+    }
+}
+
 /// Text inside a JSON string.
 pub fn json_escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -303,6 +332,27 @@ mod tests {
         assert_eq!(bearer(&head), None);
         let head = parse_head(b"GET / HTTP/1.1").unwrap();
         assert_eq!(bearer(&head), None);
+    }
+
+    #[test]
+    fn byte_ranges() {
+        assert_eq!(byte_range("bytes=0-9", 100), Ok(Some((0, 9))));
+        assert_eq!(byte_range("bytes=10-", 100), Ok(Some((10, 99))));
+        assert_eq!(byte_range("bytes=-10", 100), Ok(Some((90, 99))));
+        assert_eq!(byte_range("bytes=-1000", 100), Ok(Some((0, 99))));
+        assert_eq!(byte_range("bytes=90-1000", 100), Ok(Some((90, 99))));
+        assert_eq!(byte_range(" bytes=5-5 ", 100), Ok(Some((5, 5))));
+        assert_eq!(byte_range("bytes=99-99", 100), Ok(Some((99, 99))));
+        // Not in the file: refused.
+        for gone in ["bytes=100-", "bytes=100-200", "bytes=-0", "bytes=500-600"] {
+            assert_eq!(byte_range(gone, 100), Err(()), "{gone}");
+        }
+        assert_eq!(byte_range("bytes=0-", 0), Err(()));
+        assert_eq!(byte_range("bytes=-5", 0), Err(()));
+        // Not a range we serve: the whole file.
+        for whole in ["", "bytes", "bytes=", "bytes=-", "items=0-9", "bytes=0-9,20-29", "bytes=9-0", "bytes=a-b", "bytes=1-b", "bytes=--5", "bytes=99999999999999999999-", "bytes=0x10-"] {
+            assert_eq!(byte_range(whole, 100), Ok(None), "{whole}");
+        }
     }
 
     #[test]
