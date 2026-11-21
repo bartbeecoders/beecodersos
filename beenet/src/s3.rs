@@ -326,6 +326,106 @@ fn unchunk(auth: &Auth, mut rest: &[u8], signed: bool) -> Result<Vec<u8>, AuthEr
     }
 }
 
+// --- links (presigned URLs) -------------------------------------------------------------
+
+/// A link is valid this long at most (S3's own limit: seven days).
+pub const MAX_LINK_SECONDS: u64 = 7 * 24 * 3600;
+/// The region the OS writes into the links it makes (clients may use any).
+const REGION: &str = "us-east-1";
+
+/// `YYYYMMDDTHHMMSSZ` for seconds since 1970.
+pub fn amz_date(unix: u64) -> String {
+    let (y, mo, d, h, mi, s, _) = civil(unix);
+    format!("{y:04}{mo:02}{d:02}T{h:02}{mi:02}{s:02}Z")
+}
+
+/// Does this request carry its signature in the address (a link)?
+pub fn is_link(head: &Head) -> bool {
+    head.query.split('&').any(|pair| pair.starts_with("X-Amz-Signature="))
+}
+
+/// The signature a link must carry: over the method, the path, every query
+/// parameter but the signature itself, and the headers the link names.
+/// `None`: the link is not complete.
+fn link_signature(head: &Head, secret: &str) -> Option<String> {
+    let credential = head.query_value("X-Amz-Credential")?;
+    let (_, scope) = credential.split_once('/')?;
+    let parts: Vec<&str> = scope.split('/').collect();
+    let [date, region, service, "aws4_request"] = parts.as_slice() else { return None };
+    let amz_date = head.query_value("X-Amz-Date")?;
+    let signed = head.query_value("X-Amz-SignedHeaders")?;
+    let without: Vec<&str> = head.query.split('&').filter(|pair| !pair.starts_with("X-Amz-Signature=")).collect();
+    let mut canonical = format!("{}\n{}\n{}\n", head.method, uri_encode(&head.path, true), canonical_query(&without.join("&"))?);
+    for name in signed.split(';') {
+        let values: Vec<String> = head.headers.iter().filter(|(n, _)| n == name).map(|(_, v)| canonical_value(v)).collect();
+        if values.is_empty() {
+            return None;
+        }
+        canonical += &format!("{name}:{}\n", values.join(","));
+    }
+    canonical += &format!("\n{signed}\nUNSIGNED-PAYLOAD");
+    let to_sign = format!("AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{}", hex(&sha256(canonical.as_bytes())));
+    let mut key = hmac(format!("AWS4{secret}").as_bytes(), date.as_bytes());
+    for part in [region.as_bytes(), service.as_bytes(), b"aws4_request".as_slice()] {
+        key = hmac(&key, part);
+    }
+    Some(hex(&hmac(&key, to_sign.as_bytes())))
+}
+
+/// Check a link: made with `secret`, for our access key, and not expired.
+/// `now`: our clock (seconds since 1970); without a clock no link is valid,
+/// as nothing could tell whether it has expired.
+pub fn verify_link(head: &Head, secret: &str, now: Option<u64>) -> Result<(), AuthError> {
+    let value = |name: &str| head.query_value(name).ok_or(AuthError::Malformed);
+    if value("X-Amz-Algorithm")? != "AWS4-HMAC-SHA256" {
+        return Err(AuthError::Malformed);
+    }
+    let credential = value("X-Amz-Credential")?;
+    let (access_key, scope) = credential.split_once('/').ok_or(AuthError::Malformed)?;
+    let amz_date = value("X-Amz-Date")?;
+    let made = parse_amz_date(&amz_date).ok_or(AuthError::Malformed)?;
+    let seconds = value("X-Amz-Expires")?.parse::<u64>().map_err(|_| AuthError::Malformed)?;
+    let given = value("X-Amz-Signature")?;
+    let names_host = value("X-Amz-SignedHeaders")?.split(';').any(|n| n == "host");
+    let scope_ok = scope.len() > 9 && amz_date.starts_with(&scope[..8]) && scope.ends_with("/s3/aws4_request");
+    if !names_host || !scope_ok || unhex32(&given).is_none() || seconds == 0 || seconds > MAX_LINK_SECONDS {
+        return Err(AuthError::Malformed);
+    }
+    if !same(access_key, ACCESS_KEY) {
+        return Err(AuthError::UnknownKey);
+    }
+    let right = link_signature(head, secret).ok_or(AuthError::Malformed)?;
+    if secret.is_empty() || !same(&right, &given) {
+        return Err(AuthError::BadSignature);
+    }
+    match now {
+        Some(now) if now + MAX_SKEW >= made && now <= made + seconds => Ok(()),
+        _ => Err(AuthError::Skewed),
+    }
+}
+
+/// A link to fetch the object at `path` ("/bucket/key", not encoded) from
+/// `host` ("address:port"): the path and query to put after "http://host".
+/// Valid for `seconds` from `now`.
+pub fn link(path: &str, host: &str, secret: &str, now: u64, seconds: u64) -> String {
+    let amz = amz_date(now);
+    let scope = format!("{}/{REGION}/s3/aws4_request", &amz[..8]);
+    let query = format!(
+        "X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential={}&X-Amz-Date={amz}&X-Amz-Expires={seconds}&X-Amz-SignedHeaders=host",
+        uri_encode(&format!("{ACCESS_KEY}/{scope}"), false)
+    );
+    let encoded = uri_encode(path, true);
+    let head = Head {
+        method: String::from("GET"),
+        raw_path: encoded.clone(),
+        path: String::from(path),
+        query: query.clone(),
+        headers: alloc::vec![(String::from("host"), String::from(host))],
+    };
+    let signature = link_signature(&head, secret).unwrap_or_default();
+    format!("{encoded}?{query}&X-Amz-Signature={signature}")
+}
+
 // --- listings ---------------------------------------------------------------------------
 
 /// One object of a bucket.
@@ -762,6 +862,54 @@ mod tests {
         assert_eq!(verify(&head, SECRET, None), Err(AuthError::Missing));
         assert!(!is_signed(&head));
         assert!(is_signed(&good));
+    }
+
+    #[test]
+    fn aws_example_presigned_link() {
+        // "Authenticating Requests: Using Query Parameters" in the Amazon S3 API reference.
+        let head = parse_head(
+            b"GET /test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request\
+&X-Amz-Date=20130524T000000Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host\
+&X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404 HTTP/1.1\r\nHost: examplebucket.s3.amazonaws.com",
+        )
+        .unwrap();
+        assert!(is_link(&head));
+        assert_eq!(link_signature(&head, SECRET).as_deref(), Some("aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404"));
+        // The documentation's access key id is not ours.
+        assert_eq!(verify_link(&head, SECRET, Some(NOW)), Err(AuthError::UnknownKey));
+    }
+
+    #[test]
+    fn links_made_here() {
+        let made = link("/photos/2026/my cat.jpg", "192.168.0.40:9000", SECRET, NOW, 3600);
+        assert!(made.starts_with("/photos/2026/my%20cat.jpg?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=beecoders%2F20130524%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20130524T000000Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature="), "{made}");
+        let request = |method: &str, target: &str, host: &str| parse_head(format!("{method} {target} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: a browser").as_bytes()).unwrap();
+        let head = request("GET", &made, "192.168.0.40:9000");
+        assert_eq!(head.path, "/photos/2026/my cat.jpg");
+        assert_eq!(verify_link(&head, SECRET, Some(NOW)), Ok(()));
+        assert_eq!(verify_link(&head, SECRET, Some(NOW + 3600)), Ok(()));
+        // Expired, from the future, or no clock to tell: refused.
+        assert_eq!(verify_link(&head, SECRET, Some(NOW + 3601)), Err(AuthError::Skewed));
+        assert_eq!(verify_link(&head, SECRET, Some(NOW - MAX_SKEW - 1)), Err(AuthError::Skewed));
+        assert_eq!(verify_link(&head, SECRET, None), Err(AuthError::Skewed));
+        // Another secret, file, host or method: refused.
+        assert_eq!(verify_link(&head, "another", Some(NOW)), Err(AuthError::BadSignature));
+        assert_eq!(verify_link(&head, "", Some(NOW)), Err(AuthError::BadSignature));
+        assert_eq!(verify_link(&request("GET", &made.replace("my%20cat", "my%20dog"), "192.168.0.40:9000"), SECRET, Some(NOW)), Err(AuthError::BadSignature));
+        assert_eq!(verify_link(&request("GET", &made, "evil.example"), SECRET, Some(NOW)), Err(AuthError::BadSignature));
+        assert_eq!(verify_link(&request("DELETE", &made, "192.168.0.40:9000"), SECRET, Some(NOW)), Err(AuthError::BadSignature));
+        // A longer life than was signed, or than is allowed at all: refused.
+        assert_eq!(verify_link(&request("GET", &made.replace("Expires=3600", "Expires=360000"), "192.168.0.40:9000"), SECRET, Some(NOW)), Err(AuthError::BadSignature));
+        let forever = link("/a/b", "h", SECRET, NOW, MAX_LINK_SECONDS + 1);
+        assert_eq!(verify_link(&request("GET", &forever, "h"), SECRET, Some(NOW)), Err(AuthError::Malformed));
+        // Cut anywhere, a link is refused and nothing panics.
+        for cut in made.find('?').unwrap()..made.len() {
+            let head = request("GET", &made[..cut], "192.168.0.40:9000");
+            assert!(verify_link(&head, SECRET, Some(NOW)).is_err(), "cut at {cut}");
+        }
+        assert!(!is_link(&request("GET", "/photos/a.jpg?list-type=2", "h")));
+        assert_eq!(amz_date(NOW), "20130524T000000Z");
+        assert_eq!(parse_amz_date(&amz_date(1_709_251_199)), Some(1_709_251_199));
     }
 
     #[test]

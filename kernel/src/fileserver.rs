@@ -17,8 +17,9 @@
 //! key id `beecoders` and the same key as the secret; an unsigned or wrongly
 //! signed request gets 403 and nothing else. Buckets: list, make, remove.
 //! Objects: put, get, head, delete, delete many, list (both versions, with
-//! prefix, delimiter and pages). Not there: multipart uploads, copies,
-//! versions, access lists, presigned links.
+//! prefix, delimiter and pages). A link (`fileserver link FILE`, or a
+//! client's presigned URL) fetches one file without a key until it expires.
+//! Not there: multipart uploads, copies, versions, access lists.
 //!
 //! The key is made up by the OS and kept in the setting file. The link is
 //! not encrypted: this is for the local network. The shared folder may not be
@@ -218,6 +219,30 @@ fn start(port: u16) -> Result<(), String> {
     Ok(())
 }
 
+/// A link that fetches the file at `path` (inside a folder of the shared
+/// folder) without a key, for `hours`: "http://ADDRESS:PORT/..." to open
+/// in a browser or hand to someone on the network.
+pub fn link(path: &str, hours: u64) -> Result<String, String> {
+    let s = setting();
+    let port = port().ok_or("the file server is off ('fileserver on')")?;
+    let ip = net::address().ok_or("no network address yet (see 'net')")?;
+    let now = time::now_unix().ok_or("the clock is not set (see 'ntp'): a link could never expire")?;
+    if hours == 0 || hours * 3600 > s3::MAX_LINK_SECONDS {
+        return Err(format!("a link lasts 1 to {} hours", s3::MAX_LINK_SECONDS / 3600));
+    }
+    let inside = path.strip_prefix(s.folder.as_str()).filter(|rest| rest.starts_with('/')).ok_or(format!("only files in {} can be linked", s.folder))?;
+    let names = proto::safe_path(inside, MAX_NAME_LEN).ok_or("not a usable path")?;
+    if names.len() < 2 || !s3::bucket_name_ok(names[0], MAX_NAME_LEN) {
+        return Err(format!("the file must be in a folder of {} (a bucket), not in {} itself", s.folder, s.folder));
+    }
+    let is_file = storage::handle().map(|mut st| st.fs().metadata(path).is_ok_and(|m| m.kind == FileKind::File)).unwrap_or(false);
+    if !is_file {
+        return Err(format!("{path}: no such file"));
+    }
+    let host = format!("{ip}:{port}");
+    Ok(format!("http://{host}{}", s3::link(&format!("/{}", names.join("/")), &host, &s.key, now, hours * 3600)))
+}
+
 /// At boot: start the server if it was left switched on. Returns its port.
 pub fn load() -> Option<u16> {
     let s = setting();
@@ -308,6 +333,17 @@ fn answer(stream: &net::TcpStream) -> bool {
                     (Answer::error(status, reason, &message), true)
                 }
             }
+        }
+    } else if s3::is_link(&head) {
+        // A link (presigned URL): its signature is in the address, so a
+        // browser can follow it. It fetches one file, until it expires.
+        let one_file = proto::safe_path(&head.path, MAX_NAME_LEN).is_some_and(|names| names.len() >= 2) && !head.path.ends_with('/');
+        match s3::verify_link(&head, &setting.key, time::now_unix()) {
+            Err(e) => (s3_error(403, "Forbidden", e.code(), if e == s3::AuthError::Skewed { "the link has expired" } else { e.message() }, &head.path), false),
+            Ok(()) if !one_file || !matches!(head.method.as_str(), "GET" | "HEAD") => {
+                (s3_error(403, "Forbidden", "AccessDenied", "a link only fetches one file", &head.path), false)
+            }
+            Ok(()) => (s3_act(&setting.folder, &head, Vec::new()), true),
         }
     } else {
         // Everything else is S3: nothing happens before the signature is right.

@@ -1115,16 +1115,27 @@ print([o["Key"] for o in s3.list_objects_v2(Bucket="photos", Prefix="2026/")["Co
 - **Folders:** a key's `/` are folders on the disk; folders that become
   empty when an object is deleted are removed, as a prefix disappears in
   S3. A key ending in `/` makes an empty folder.
+- **Links:** `fileserver link FILE [HOURS]` prints an address that fetches
+  that one file without the key, for 24 hours unless told otherwise (a week
+  at most): to open in a browser, or to hand to someone on the network.
+  It is an S3 presigned URL: the signature is in the address and covers
+  the file, the machine's address and the time it expires, so a changed
+  link fetches nothing. Links that S3 clients make themselves
+  (`generate_presigned_url`) work too. A link only fetches (GET, HEAD) one
+  file: no listings, no changes. `fileserver key new` ends every link at
+  once. The machine's clock must be set (`ntp`); without one no link is
+  accepted, as none could expire (`net-fileserver-link.scn`).
 - **Not there** (answered with `501 NotImplemented`): multipart uploads
   (so 8 MiB per object: keep a client's multipart threshold above that),
-  copies, versions, access lists, tags, presigned links. `Range` is not
-  honoured: the whole object is sent.
+  copies, versions, access lists, tags. `Range` is not honoured: the whole
+  object is sent.
 - **Different from S3:** names between the `/` have 26 characters at most
   and a key 16 levels (BeeFS); a bucket named `api` cannot exist; BeeFS
   keeps no times, so `LastModified` is the time of the answer; an `ETag`
   names the file and its size (`"bee…-1"`), it is not a hash of the content.
 - Tested with boto3 against the HP (bucket, uploads of 6 MB, listings in
-  pages, downloads compared byte for byte, deletes, a wrong secret);
+  pages, downloads compared byte for byte, deletes, a wrong secret; links
+  made by the OS and by boto3, a changed and an expired one);
   `net-fileserver-s3.scn` signs its own requests (`@s3` in
   `tests/boot_test.py`), including chunked and tampered ones.
 
