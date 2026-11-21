@@ -15,9 +15,14 @@ const PTRS_PER_BLOCK: u64 = (BLOCK_SIZE / 4) as u64;
 const DIRECT: usize = 10;
 const DIRENT_SIZE: usize = 32;
 
-/// Largest file BeeFS can hold, in bytes.
-pub const MAX_FILE_SIZE: u64 =
-    (DIRECT as u64 + PTRS_PER_BLOCK + PTRS_PER_BLOCK * PTRS_PER_BLOCK) * BLOCK_SIZE as u64;
+/// Largest file BeeFS can hold, in bytes (about 1 GiB): what the direct
+/// pointers and the single-, double- and triple-indirect tables reach.
+pub const MAX_FILE_SIZE: u64 = (DIRECT as u64 + PTRS_PER_BLOCK + PTRS_PER_BLOCK * PTRS_PER_BLOCK + PTRS_PER_BLOCK * PTRS_PER_BLOCK * PTRS_PER_BLOCK)
+    * BLOCK_SIZE as u64;
+
+/// Largest file `read_file` gives whole, in memory. A larger one is read in
+/// pieces with `read_at`.
+pub const MAX_WHOLE_READ: u64 = 16 * 1024 * 1024;
 
 const KIND_FREE: u8 = 0;
 const KIND_FILE: u8 = 1;
@@ -155,6 +160,9 @@ struct Inode {
     direct: [u32; DIRECT],
     indirect: u32,
     dindirect: u32,
+    /// Triple-indirect table (0: none). Disks written before it existed
+    /// have zeros there, and a file that needs none is stored as before.
+    tindirect: u32,
 }
 
 impl Inode {
@@ -162,7 +170,7 @@ impl Inode {
         Inode { kind, ..Default::default() }
     }
 
-    // layout: kind u8 @0 | pad | size u64 @8 | direct[10] @16 | indirect @56 | dindirect @60
+    // layout: kind u8 @0 | pad | tindirect @4 | size u64 @8 | direct[10] @16 | indirect @56 | dindirect @60
     fn decode(b: &[u8]) -> Self {
         let mut direct = [0u32; DIRECT];
         for (i, d) in direct.iter_mut().enumerate() {
@@ -174,6 +182,7 @@ impl Inode {
             direct,
             indirect: rd32(b, 56),
             dindirect: rd32(b, 60),
+            tindirect: rd32(b, 4),
         }
     }
 
@@ -186,6 +195,7 @@ impl Inode {
         }
         wr32(b, 56, self.indirect);
         wr32(b, 60, self.dindirect);
+        wr32(b, 4, self.tindirect);
     }
 
     fn file_kind(&self) -> Result<FileKind> {
@@ -406,6 +416,9 @@ impl<D: BlockDevice> FileSystem<D> {
         let mut inode = self.read_inode(ino)?;
         if inode.kind == KIND_DIR {
             return Err(FsError::IsADirectory);
+        }
+        if inode.size > MAX_WHOLE_READ {
+            return Err(FsError::FileTooLarge); // too much for memory: read_at
         }
         let mut out = vec![0u8; inode.size as usize];
         self.read_range(&mut inode, 0, &mut out)?;
@@ -715,6 +728,22 @@ impl<D: BlockDevice> FileSystem<D> {
             }
             return self.table_entry(mid, (idx % p) as usize, alloc, false);
         }
+        let idx = idx - p * p;
+        if idx < p * p * p {
+            let top = self.ensure(&mut inode.tindirect, alloc, true)?;
+            if top == 0 {
+                return Ok(0);
+            }
+            let upper = self.table_entry(top, (idx / (p * p)) as usize, alloc, true)?;
+            if upper == 0 {
+                return Ok(0);
+            }
+            let mid = self.table_entry(upper, (idx / p % p) as usize, alloc, true)?;
+            if mid == 0 {
+                return Ok(0);
+            }
+            return self.table_entry(mid, (idx % p) as usize, alloc, false);
+        }
         Err(FsError::FileTooLarge)
     }
 
@@ -759,6 +788,9 @@ impl<D: BlockDevice> FileSystem<D> {
         }
         if inode.dindirect != 0 {
             self.free_table(inode.dindirect, 2)?;
+        }
+        if inode.tindirect != 0 {
+            self.free_table(inode.tindirect, 3)?;
         }
         *inode = Inode::new(inode.kind);
         Ok(())
@@ -1031,6 +1063,97 @@ mod tests {
         let mut fs = FileSystem::mount(fs.into_device()).unwrap();
         assert_eq!(fs.read_file("/big.bin").unwrap(), data);
         assert_eq!(fs.metadata("/big.bin").unwrap().size, 200_000);
+    }
+
+    #[test]
+    fn very_large_file_uses_triple_indirect() {
+        // Past 10 + 128 + 128 * 128 blocks (about 8.3 MiB) the triple-indirect table is needed.
+        let old_limit = (DIRECT as u64 + PTRS_PER_BLOCK + PTRS_PER_BLOCK * PTRS_PER_BLOCK) * BLOCK_SIZE as u64;
+        let mut fs = FileSystem::format(RamDisk::new(24 * 1024 * 1024)).unwrap();
+        // The root folder gets its block of entries with its first file, and keeps it.
+        fs.write_file("/first.txt", b"x").unwrap();
+        fs.remove("/first.txt").unwrap();
+        let free_at_start = fs.stats().free_blocks;
+        let byte = |i: u64| (i * 31 % 251) as u8;
+        // Written in pieces, as a download or an upload arrives.
+        let piece = 300_000u64;
+        let total = old_limit + 3 * piece + 12_345;
+        let mut written = 0;
+        while written < total {
+            let n = piece.min(total - written);
+            let data: Vec<u8> = (written..written + n).map(byte).collect();
+            fs.append("/huge.bin", &data).unwrap();
+            written += n;
+        }
+        let mut fs = FileSystem::mount(fs.into_device()).unwrap();
+        assert_eq!(fs.metadata("/huge.bin").unwrap().size, total);
+        // Whole, and in pieces around where the old limit was and at the end.
+        let whole = fs.read_file("/huge.bin").unwrap();
+        assert!(whole.iter().enumerate().all(|(i, b)| *b == byte(i as u64)));
+        for at in [0, old_limit - 700, old_limit - 1, old_limit, old_limit + 511, total - 1000] {
+            let mut buf = [0u8; 1000];
+            let n = fs.read_at("/huge.bin", at, &mut buf).unwrap();
+            assert_eq!(n as u64, 1000.min(total - at));
+            assert!(buf[..n].iter().enumerate().all(|(i, b)| *b == byte(at + i as u64)), "at {at}");
+        }
+        let mut buf = [0u8; 10];
+        assert_eq!(fs.read_at("/huge.bin", total, &mut buf).unwrap(), 0);
+        // Written over, it shrinks; removed, every block (tables too) is free again.
+        fs.write_file("/huge.bin", b"small now").unwrap();
+        assert_eq!(fs.read_file("/huge.bin").unwrap(), b"small now");
+        fs.remove("/huge.bin").unwrap();
+        assert_eq!(fs.stats().free_blocks, free_at_start);
+    }
+
+    #[test]
+    fn a_file_too_large_for_memory_is_read_in_pieces() {
+        let mut fs = FileSystem::format(RamDisk::new(24 * 1024 * 1024)).unwrap();
+        let chunk = vec![7u8; 1024 * 1024];
+        for _ in 0..17 {
+            fs.append("/video.avi", &chunk).unwrap();
+        }
+        assert_eq!(fs.metadata("/video.avi").unwrap().size, 17 * 1024 * 1024);
+        assert_eq!(fs.read_file("/video.avi").err(), Some(FsError::FileTooLarge));
+        let mut buf = [0u8; 4096];
+        assert_eq!(fs.read_at("/video.avi", MAX_WHOLE_READ + 5, &mut buf).unwrap(), 4096);
+        assert!(buf.iter().all(|b| *b == 7));
+        // The disk is full before the file's own limit: said so.
+        let mut result = Ok(());
+        for _ in 0..8 {
+            result = fs.append("/video.avi", &chunk);
+            if result.is_err() {
+                break;
+            }
+        }
+        assert_eq!(result.err(), Some(FsError::NoSpace));
+        let free = fs.stats().free_blocks;
+        fs.remove("/video.avi").unwrap();
+        assert!(fs.stats().free_blocks > free + 17 * 2048);
+    }
+
+    #[test]
+    fn inodes_of_older_disks_read_and_write_as_before() {
+        // An inode as kernels before the triple-indirect table wrote it:
+        // kind, seven zero bytes, size, ten direct pointers, single, double.
+        let mut old = [0u8; INODE_SIZE];
+        old[0] = KIND_FILE;
+        wr64(&mut old, 8, 123_456);
+        for i in 0..DIRECT {
+            wr32(&mut old, 16 + i * 4, 1000 + i as u32);
+        }
+        wr32(&mut old, 56, 2000);
+        wr32(&mut old, 60, 3000);
+        let inode = Inode::decode(&old);
+        assert_eq!((inode.size, inode.direct[9], inode.indirect, inode.dindirect, inode.tindirect), (123_456, 1009, 2000, 3000, 0));
+        // Written back it is the same 64 bytes: an older kernel reads it too.
+        let mut again = [0xFFu8; INODE_SIZE];
+        inode.encode(&mut again);
+        assert_eq!(again, old);
+        // A file that needs the new table keeps it at bytes 4..8.
+        let big = Inode { tindirect: 4000, ..inode };
+        big.encode(&mut again);
+        assert_eq!(rd32(&again, 4), 4000);
+        assert_eq!(Inode::decode(&again).tindirect, 4000);
     }
 
     /// A RamDisk that counts what is done to it.

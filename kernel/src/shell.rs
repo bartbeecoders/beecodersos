@@ -2390,8 +2390,10 @@ impl Shell {
         if !self.may_change(&path) {
             return;
         }
+        // No more than fits: the disk's free room, or what a file can hold.
+        let room = self.room_for(&path);
         let mut download = Download::start(&mut self.storage, &path);
-        let result = net::http_get(url, beefs::MAX_FILE_SIZE, &mut |data| download.write(data));
+        let result = net::http_get(url, room, &mut |data| download.write(data));
         match result.and_then(|r| download.finish().map(|()| r)) {
             Ok(r) => {
                 if let Some(to) = &r.redirected_to {
@@ -2402,9 +2404,8 @@ impl Shell {
                     println!("({note})");
                 }
             }
-            Err(e) if e == "too large" => {
-                error(&format!("{url}: too large (files can be {} MiB at most)", beefs::MAX_FILE_SIZE >> 20))
-            }
+            Err(e) if e == "too large" && room < beefs::MAX_FILE_SIZE => error(&format!("{url}: too large (the disk has {} KiB free)", room / 1024)),
+            Err(e) if e == "too large" => error(&format!("{url}: too large (files can be {} MiB at most)", beefs::MAX_FILE_SIZE >> 20)),
             Err(e) => error(&format!("{url}: {e}")),
         }
     }
@@ -2451,12 +2452,22 @@ impl Shell {
             return;
         }
         let started = time::uptime_ms();
+        let room = self.room_for(&path);
         let mut download = Download::start(&mut self.storage, &path);
-        let result = net::tftp_get(ip, port, remote, beefs::MAX_FILE_SIZE, &mut |data| download.write(data));
+        let result = net::tftp_get(ip, port, remote, room, &mut |data| download.write(data));
         match result.and_then(|n| download.finish().map(|()| n)) {
             Ok(n) => println!("received {n} bytes into {path}{}", rate(n, started)),
             Err(e) => error(&format!("{remote}: {e}")),
         }
+    }
+
+    /// How large a new file at `path` can become: what is free on its
+    /// disk (the data partition for /data), and no more than a file holds.
+    fn room_for(&mut self, path: &str) -> u64 {
+        let fs = self.storage.fs();
+        let on_data = crate::storage::route(path, fs.has_data()).0;
+        let stats = if on_data { fs.data_stats().unwrap_or(fs.stats()) } else { fs.stats() };
+        (stats.free_blocks as u64 * stats.block_size as u64).min(beefs::MAX_FILE_SIZE)
     }
 
     /// `tftp put HOST[:PORT] FILE [REMOTE]`: store a file on a TFTP server.

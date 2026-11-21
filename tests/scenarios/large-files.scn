@@ -1,0 +1,56 @@
+# Files larger than the old limit of about 8 MiB (BeeFS's triple-indirect
+# table). A text file of 65 bytes is doubled 15 times by adding it to itself
+# (2 129 920 bytes); that piece is then added to /big.txt again and again.
+@bootdisk
+@sata
+$ echo 0123456789 0123456789 0123456789 0123456789 0123456789 012345678 > /piece.txt
+$ cat /piece.txt >> /piece.txt
+$ cat /piece.txt >> /piece.txt
+$ cat /piece.txt >> /piece.txt
+$ cat /piece.txt >> /piece.txt
+$ cat /piece.txt >> /piece.txt
+$ cat /piece.txt >> /piece.txt
+$ cat /piece.txt >> /piece.txt
+$ cat /piece.txt >> /piece.txt
+$ cat /piece.txt >> /piece.txt
+$ cat /piece.txt >> /piece.txt
+$ cat /piece.txt >> /piece.txt
+$ cat /piece.txt >> /piece.txt
+$ cat /piece.txt >> /piece.txt
+$ cat /piece.txt >> /piece.txt
+$ cat /piece.txt >> /piece.txt
+$ ls /
+~ ^ +2129920  piece\.txt$
+$ cat /piece.txt >> /big.txt
+$ cat /piece.txt >> /big.txt
+$ cat /piece.txt >> /big.txt
+$ ls /
+~ ^ +6389760  big\.txt$
+# The fourth piece crosses the old limit (8 459 264 bytes).
+$ cat /piece.txt >> /big.txt
+$ cat /piece.txt >> /big.txt
+$ cat /piece.txt >> /big.txt
+$ ls /
+~ ^ +12779520  big\.txt$
+$ wc /big.txt
+~ ^196608 lines, 1179648 words, 12779520 bytes  /big\.txt$
+$ tail -n 1 /big.txt
+0123456789 0123456789 0123456789 0123456789 0123456789 012345678
+# Still there, whole, after a restart.
+@reboot
+$ wc /big.txt
+~ ^196608 lines, 1179648 words, 12779520 bytes
+# Past 16 MiB a file no longer fits in memory at once: said so, not a crash.
+$ cat /piece.txt >> /big.txt
+$ cat /piece.txt >> /big.txt
+$ ls /
+~ ^ +17039360  big\.txt$
+$ wc /big.txt
+~ /big\.txt: file too large
+$ df
+~ ^disk: \d+ KiB used, [1-6]\d{3} KiB free
+# Removed, all of it is free again.
+$ rm /big.txt
+$ rm /piece.txt
+$ df
+~ ^disk: \d+ KiB used, 23\d{3} KiB free

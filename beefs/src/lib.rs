@@ -13,8 +13,9 @@
 //! after inode table       data blocks
 //! ```
 //!
-//! Inodes hold 10 direct block pointers, one single-indirect and one
-//! double-indirect pointer (max file size ≈ 8 MiB). Directories are files
+//! Inodes hold 10 direct block pointers and one single-, one double- and
+//! one triple-indirect pointer (max file size ≈ 1 GiB; the triple one was
+//! added later, in bytes that were zero, so older disks read as before). Directories are files
 //! made of 32-byte entries. Inode numbers start at 1; inode 1 is `/`.
 
 #![cfg_attr(not(test), no_std)]
@@ -26,7 +27,7 @@ mod fs;
 mod partition;
 
 pub use device::{Block, BlockDevice, RamDisk};
-pub use fs::{normalize, DirEntry, FileKind, FileSystem, FsStats, Metadata, MAX_FILE_SIZE};
+pub use fs::{normalize, DirEntry, FileKind, FileSystem, FsStats, Metadata, MAX_FILE_SIZE, MAX_WHOLE_READ};
 pub use partition::{
     crc32, find_beefs_gpt, find_beefs_partition, gpt_header, mbr_partitions, GptHeader, Partition, BEEFS_GPT_TYPE,
     BEEFS_GPT_TYPE_TEXT, BEEFS_PARTITION_TYPE, GPT_MAX_ENTRIES,

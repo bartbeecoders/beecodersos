@@ -70,8 +70,9 @@ $ wget http://{http}/missing page.txt
 ~ 404 Not Found$
 $ wget http://{http}/cut page.txt
 ~ the connection ended before the whole answer arrived$
+# More than fits on the disk (9 MB announced, a 4 MiB disk): refused before it starts.
 $ wget http://{http}/huge page.txt
-~ /huge: too large \(files can be 8 MiB at most\)$
+~ /huge: too large \(the disk has \d+ KiB free\)$
 $ cat page.txt
 first
 second
