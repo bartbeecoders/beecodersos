@@ -1017,7 +1017,7 @@ Still open in N6: downloading a new kernel into the spare slot (phase H4 of
 `Docs/beehive-network-plan.html`, not built). Signals to beehive over the
 network: see the next section.
 
-## File server: `fileserver` (REST) ✅ in QEMU
+## File server: `fileserver` (REST and S3) ✅ works on the HP
 
 ```
 bee:/$ fileserver on
@@ -1044,8 +1044,10 @@ curl -H "Authorization: Bearer $KEY" -X DELETE $HP/api/files/pictures/photo.jpg
 | `PUT /api/files/PATH` | write the file (201 new, 200 replaced); the folders above it are made. A PATH ending in `/` makes a folder |
 | `DELETE /api/files/PATH` | remove the file or the empty folder (204) |
 
+(Every other path is the S3 protocol: see below.)
+
 Errors are JSON too (`{"error":"no such file or folder"}`) with the usual
-status: 400 a bad path, 401 no or a wrong key, 404, 405, 409 (a folder that
+status: 400 a bad path, 401 no or a wrong key (403 on the S3 side), 404, 405, 409 (a folder that
 is not empty, a file where a folder is), 411, 413, 507 the disk is full.
 
 - **Off by default.** `fileserver on [PORT]` starts it (port 9000 unless
@@ -1072,8 +1074,59 @@ is not empty, a file where a folder is), 411, 413, 507 the disk is full.
 - The protocol side (`beenet/src/fileserver.rs`) is tested on the host,
   with every truncated head; the service is `kernel/src/fileserver.rs`
   (thread `fileserver`); `net-fileserver.scn` tests it from the host.
-- **Next:** the S3 protocol on the same port, for backup tools and S3
-  clients.
+
+### The S3 protocol
+
+On the same port, every path that does not start with `/api/` speaks S3
+(path style: `/BUCKET/KEY`). The folders of the shared folder are the
+buckets, the files below them the objects, so both interfaces and the OS's
+own shell see the same files. Settings for an S3 client:
+
+| | |
+|---|---|
+| endpoint | `http://ADDRESS:9000` (path style, any region, for example `us-east-1`) |
+| access key id | `beecoders` |
+| secret access key | the file server's key (`fileserver key`) |
+
+```python
+import boto3
+from botocore.config import Config
+s3 = boto3.client("s3", endpoint_url="http://192.168.0.40:9000", region_name="us-east-1",
+                  aws_access_key_id="beecoders", aws_secret_access_key=KEY,
+                  config=Config(s3={"addressing_style": "path"}))
+s3.create_bucket(Bucket="photos")
+s3.upload_file("cat.jpg", "photos", "2026/cat.jpg")
+print([o["Key"] for o in s3.list_objects_v2(Bucket="photos", Prefix="2026/")["Contents"]])
+```
+
+- **What it does:** buckets: list, make, head, remove (only when empty),
+  location. Objects: put, get, head, delete, delete many at once, and
+  listings (versions 1 and 2) with prefix, delimiter, `max-keys`, pages
+  (marker / continuation token) and `encoding-type=url`.
+- **Signed requests only** (AWS Signature Version 4, `beenet/src/s3.rs`).
+  The OS builds the canonical request itself and compares the whole
+  signature; nothing is read from or written to the disk before it is
+  right. Unsigned, wrongly signed, or signed more than 15 minutes from the
+  machine's clock: 403 and nothing else. The body is checked too: against
+  its SHA-256, or, for `aws-chunked` uploads, piece by piece against each
+  piece's signature; a body that is not what was signed is not written.
+  The implementation gives the signatures of the examples in the AWS
+  documentation (plain, with a query, chunked), which are its unit tests.
+- **Folders:** a key's `/` are folders on the disk; folders that become
+  empty when an object is deleted are removed, as a prefix disappears in
+  S3. A key ending in `/` makes an empty folder.
+- **Not there** (answered with `501 NotImplemented`): multipart uploads
+  (so 8 MiB per object: keep a client's multipart threshold above that),
+  copies, versions, access lists, tags, presigned links. `Range` is not
+  honoured: the whole object is sent.
+- **Different from S3:** names between the `/` have 26 characters at most
+  and a key 16 levels (BeeFS); a bucket named `api` cannot exist; BeeFS
+  keeps no times, so `LastModified` is the time of the answer; an `ETag`
+  names the file and its size (`"bee…-1"`), it is not a hash of the content.
+- Tested with boto3 against the HP (bucket, uploads of 6 MB, listings in
+  pages, downloads compared byte for byte, deletes, a wrong secret);
+  `net-fileserver-s3.scn` signs its own requests (`@s3` in
+  `tests/boot_test.py`), including chunked and tampered ones.
 
 ## Beehive over the network (phases H1–H3) ✅ (the HP is driven this way every day)
 

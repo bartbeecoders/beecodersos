@@ -63,6 +63,16 @@ Scenario files (tests/scenarios/*.scn):
                                the answer (status line, headers, body) are checked like a
                                command's output. No answer: the one line "(no answer)".
                                `@request raw TEXT` sends TEXT as it is (\r \n allowed)
+    @s3 [FLAGS] METHOD PATH [BODY]
+                               (with @forward) send that request to the OS signed as an S3
+                               client does (AWS Signature Version 4, access key `beecoders`,
+                               secret S3_SECRET below: the scenario makes it the file
+                               server's key); the answer's lines are checked like a command's
+                               output. PATH is sent as written (so percent-encoded, with its
+                               query); BODY may use \r \n. FLAGS: `wrong-secret` (signed
+                               with another secret), `late` (signed an hour ago), `chunked`
+                               (the body in signed aws-chunked pieces), `changed` (the body
+                               is changed after signing)
     @capture NAME REGEX        remember group 1 of REGEX in the last command's output: {NAME}
                                in later commands and `@remote` lines becomes that text
     @remote LINE | LINE ...    (with @forward) connect to the OS's remote shell and type
@@ -469,6 +479,8 @@ def parse_scenario(path: Path):
             steps.append((kind, extra.strip(), []))
         elif line.startswith("@request "):
             steps.append(("request", line[9:].strip(), []))
+        elif line.startswith("@s3 "):
+            steps.append(("s3", line[4:].strip(), []))
         elif line == "@remote" or line.startswith("@remote "):
             steps.append(("remote", line[8:].strip(), []))
         elif line.startswith("@capture "):
@@ -878,6 +890,71 @@ def http_request(port: int, request: str) -> list[str]:
         data = request[4:].encode().decode("unicode_escape").encode("latin-1")
     else:
         data = f"{request} HTTP/1.1\r\nHost: test\r\n\r\n".encode()
+    return http_exchange(port, data)
+
+
+# The secret key `@s3` signs with; the access key id is the OS's fixed one.
+S3_ACCESS_KEY = "beecoders"
+S3_SECRET = "TestKeyTestKeyTestKeyTestKeyTestKey12345"
+
+
+def s3_signed(port: int, spec: str) -> bytes:
+    """The bytes of an S3 request (see @s3), signed with AWS Signature Version 4."""
+    import hashlib
+    import hmac
+    import urllib.parse
+    words = spec.split(" ")
+    flags = set()
+    while words and words[0] in ("wrong-secret", "late", "chunked", "changed"):
+        flags.add(words.pop(0))
+    method, target = words[0], words[1]
+    body = " ".join(words[2:]).encode().decode("unicode_escape").encode("latin-1")
+    path, _, query = target.partition("?")
+    secret = "not-the-secret" if "wrong-secret" in flags else S3_SECRET
+    now = time.gmtime(time.time() - (3600 if "late" in flags else 0))
+    amz_date, date = time.strftime("%Y%m%dT%H%M%SZ", now), time.strftime("%Y%m%d", now)
+    scope = f"{date}/us-east-1/s3/aws4_request"
+
+    def sign(key: bytes, text: str) -> bytes:
+        return hmac.new(key, text.encode(), hashlib.sha256).digest()
+
+    key = sign(sign(sign(sign(("AWS4" + secret).encode(), date), "us-east-1"), "s3"), "aws4_request")
+    headers = {"host": f"127.0.0.1:{port}", "x-amz-date": amz_date}
+    if "chunked" in flags:
+        headers["x-amz-content-sha256"] = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD"
+        headers["x-amz-decoded-content-length"] = str(len(body))
+        headers["content-encoding"] = "aws-chunked"
+    else:
+        headers["x-amz-content-sha256"] = hashlib.sha256(body).hexdigest()
+    quote = lambda text: urllib.parse.quote(urllib.parse.unquote(text), safe="-_.~")
+    pairs = sorted((quote(n), quote(v)) for n, _, v in (p.partition("=") for p in query.split("&") if p))
+    canonical = "\n".join([
+        method, path, "&".join(f"{n}={v}" for n, v in pairs),
+        "".join(f"{n}:{headers[n]}\n" for n in sorted(headers)), ";".join(sorted(headers)),
+        headers["x-amz-content-sha256"],
+    ])
+    to_sign = f"AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{hashlib.sha256(canonical.encode()).hexdigest()}"
+    signature = sign(key, to_sign).hex()
+    if "chunked" in flags:
+        # Pieces of 5 bytes, each signed with the one before it, then an empty one.
+        sent, previous, empty = b"", signature, hashlib.sha256(b"").hexdigest()
+        for piece in [body[i:i + 5] for i in range(0, len(body), 5)] + [b""]:
+            previous = sign(key, f"AWS4-HMAC-SHA256-PAYLOAD\n{amz_date}\n{scope}\n{previous}\n{empty}\n"
+                                 f"{hashlib.sha256(piece).hexdigest()}").hex()
+            sent += f"{len(piece):x};chunk-signature={previous}\r\n".encode() + piece + b"\r\n"
+        body = sent
+    if "changed" in flags:
+        body = body.replace(b"e", b"E")
+    head = f"{method} {target} HTTP/1.1\r\n" + "".join(f"{n}: {v}\r\n" for n, v in headers.items())
+    head += (f"Authorization: AWS4-HMAC-SHA256 Credential={S3_ACCESS_KEY}/{scope}, "
+             f"SignedHeaders={';'.join(sorted(headers))}, Signature={signature}\r\n")
+    if body or method in ("PUT", "POST"):
+        head += f"Content-Length: {len(body)}\r\n"
+    return head.encode() + b"\r\n" + body
+
+
+def http_exchange(port: int, data: bytes) -> list[str]:
+    """Send these bytes to the OS's forwarded port; the answer's lines."""
     answer = b""
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=5) as conn:
@@ -1125,6 +1202,11 @@ def test_scenario(path: Path):
                     if not forward:
                         raise TestFailure(f"{path.name}: @request needs @forward")
                     check_output(path, f"@request {cmd}", http_request(forward, cmd), expectations)
+                    continue
+                if kind == "s3":
+                    if not forward:
+                        raise TestFailure(f"{path.name}: @s3 needs @forward")
+                    check_output(path, f"@s3 {cmd}", http_exchange(forward, s3_signed(forward, cmd)), expectations)
                     continue
                 if kind == "remote":
                     if not forward_shell:
