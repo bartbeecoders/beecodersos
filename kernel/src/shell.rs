@@ -1442,7 +1442,9 @@ impl Shell {
                 Ok(()) => println!("the file server shares {}", fileserver::setting().folder),
                 Err(e) => error(&format!("fileserver: {e}")),
             },
-            ("fileserver", _) => error("usage: fileserver [on [PORT] | off | key [new] | folder DIR]"),
+            ("fileserver", ["link", file]) => self.fileserver_link(file, "24"),
+            ("fileserver", ["link", file, hours]) => self.fileserver_link(file, hours),
+            ("fileserver", _) => error("usage: fileserver [on [PORT] | off | key [new] | folder DIR | link FILE [HOURS]]"),
             ("remote", []) => self.remote_status(),
             ("remote", ["on"]) => self.remote_command(Some(Some(remote::DEFAULT_PORT))),
             ("remote", ["on", port]) => match port.parse::<u16>() {
@@ -2209,6 +2211,18 @@ impl Shell {
                 println!("REST: /api/files/ with 'Authorization: Bearer KEY'. S3: access key '{}', secret key: the key ('fileserver' shows more)", beenet::s3::ACCESS_KEY);
             }
             None => println!("file server off{saved}"),
+        }
+    }
+
+    /// `fileserver link FILE [HOURS]`: an address that fetches the file without the key, for a while.
+    fn fileserver_link(&mut self, file: &str, hours: &str) {
+        let Ok(hours) = hours.parse::<u64>() else { return error("usage: fileserver link FILE [HOURS]   (24 hours unless given, 168 at most)") };
+        match fileserver::link(&self.abs(file), hours) {
+            Ok(link) => {
+                println!("{link}");
+                println!("anyone on the network with this link can fetch the file for {hours} hour{}; 'fileserver key new' ends every link", if hours == 1 { "" } else { "s" });
+            }
+            Err(e) => error(&format!("fileserver: {e}")),
         }
     }
 
@@ -3477,7 +3491,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("nslookup NAME", "look up the address of a host name"),
     ("nc HOST PORT [TEXT]", "open a TCP connection: type lines, see the answers"),
     ("httpd [on [PORT]|off]", "status page for the local network (off by default)"),
-    ("fileserver [on [PORT]|off]", "one folder for programs on the network, with a key (off by default); fileserver key [new], fileserver folder DIR"),
+    ("fileserver [on [PORT]|off]", "one folder for programs on the network, with a key (off by default); fileserver key [new], fileserver folder DIR, fileserver link FILE [HOURS]"),
     ("vnc [on|off|password]", "remote desktop: see and use this screen from a VNC viewer (off by default; not encrypted)"),
     ("remote [on|off]", "remote shell with a password, not encrypted (off by default)"),
     ("wget URL [FILE]", "fetch a web address (http://): show it or save it"),

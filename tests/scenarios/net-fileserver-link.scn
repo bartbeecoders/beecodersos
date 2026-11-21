@@ -1,0 +1,55 @@
+# The file server's links: an address that fetches one file without the key,
+# for a while (an S3 "presigned URL"). The signature is in the address.
+@net
+@disk
+@forward
+$ net dhcp
+~ ^address 10\.0\.2\.15/24 \(DHCP\)
+$ echo key TestKeyTestKeyTestKeyTestKeyTestKey12345 > /system/fileserver
+$ mkdir /share
+$ mkdir /share/photos
+$ echo meow > /share/photos/cat.txt
+$ echo top > /share/top.txt
+$ echo private > /secret.txt
+# Only while the server is on.
+$ fileserver link /share/photos/cat.txt
+fileserver: the file server is off ('fileserver on')
+$ fileserver on 80
+~ file server on, port 80
+$ fileserver link /share/photos/cat.txt
+~ ^http://10\.0\.2\.15:80/photos/cat\.txt\?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=beecoders%2F\d{8}%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=\d{8}T\d{6}Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=[0-9a-f]{64}$
+~ for 24 hours; 'fileserver key new' ends every link
+$ cd /share/photos
+$ fileserver link cat.txt 1
+~ X-Amz-Expires=3600&
+~ for 1 hour;
+$ cd /
+# Only files in the shared folder's folders, for a week at most.
+$ fileserver link /secret.txt
+fileserver: only files in /share can be linked
+$ fileserver link /share/top.txt
+~ fileserver: the file must be in a folder of /share
+$ fileserver link /share/photos/dog.txt
+fileserver: /share/photos/dog.txt: no such file
+$ fileserver link /share/photos
+~ fileserver: the file must be in a folder of /share
+$ fileserver link /share/photos/cat.txt 0
+fileserver: a link lasts 1 to 168 hours
+$ fileserver link /share/photos/cat.txt 169
+fileserver: a link lasts 1 to 168 hours
+$ fileserver link /share/photos/cat.txt soon
+~ usage: fileserver link FILE \[HOURS\]
+# A link nobody signed with the key fetches nothing; nor does one for more than a file.
+@request raw GET /photos/cat.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=beecoders%2F20261121%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261121T080000Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=0000000000000000000000000000000000000000000000000000000000000000 HTTP/1.1\r\nHost: 10.0.2.15:80\r\n\r\n
+HTTP/1.1 403 Forbidden
+~ <Code>SignatureDoesNotMatch</Code>
+!~ meow
+@request raw GET /photos/cat.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=beecoders%2F20261121%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261121T080000Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=short HTTP/1.1\r\nHost: 10.0.2.15:80\r\n\r\n
+HTTP/1.1 403 Forbidden
+!~ meow
+@request raw GET /photos/cat.txt?X-Amz-Signature=0000000000000000000000000000000000000000000000000000000000000000 HTTP/1.1\r\nHost: 10.0.2.15:80\r\n\r\n
+HTTP/1.1 403 Forbidden
+~ <Code>AuthorizationHeaderMalformed</Code>
+!~ meow
+$ fileserver
+~ \d+ requests answered, 3 of them without the right key
