@@ -53,6 +53,15 @@ $ ls /
 $ df
 ~ ^disk: \d+ KiB used
 ~ ^data \(/data\): \d+ KiB used
+# Copies are made piece by piece, within the data partition and across to the system's.
+$ cp /data/notes.txt /data/copy.txt
+$ cat /data/copy.txt
+~ .
+$ cp /data/notes.txt /copy-on-os.txt
+$ cat /copy-on-os.txt
+~ .
+$ rm /data/copy.txt
+$ rm /copy-on-os.txt
 $ mv /data/notes.txt /notes-on-os.txt
 $ cat /notes-on-os.txt
 mine

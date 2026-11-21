@@ -26,7 +26,7 @@
 //! `/` or lie in /system, so settings and passwords stay out of reach.
 //!
 //! One thread, one request at a time. Clients are untrusted: the head is
-//! bounded in size and time, a body in size (`MAX_BODY`) and in how long it
+//! bounded in size and time, a body in size (the disk's free room) and in how long it
 //! may stall, and a path can never leave the folder (`beenet::fileserver`).
 //! Client addresses and file names are never logged.
 
@@ -42,9 +42,15 @@ use beenet::fileserver::{self as proto, Entry, Head, HeadReader};
 pub const DEFAULT_PORT: u16 = 9000;
 pub const DEFAULT_FOLDER: &str = "/share";
 const SETTING_FILE: &str = "/system/fileserver";
-/// The largest file that can be sent or fetched: 16 MiB, as it is held in
-/// memory whole (BeeFS itself holds files of about 1 GiB).
-pub const MAX_BODY: u64 = if beefs::MAX_FILE_SIZE < 16 * 1024 * 1024 { beefs::MAX_FILE_SIZE } else { 16 * 1024 * 1024 };
+/// The largest body that is held in memory (a list of keys to delete).
+/// A file goes to the disk as it arrives, and comes from it piece by piece:
+/// it may be as large as the disk has room, and as BeeFS holds (about 1 GiB).
+pub const MAX_BODY: u64 = 1024 * 1024;
+/// The size of the pieces in which a file is received and sent.
+const PIECE: usize = 64 * 1024;
+/// Uploads are written under this name in the shared folder until they are
+/// complete and checked; only then do they get their own name.
+const UPLOAD_PREFIX: &str = ".up-";
 /// A client gets this long to send its request's head...
 const HEAD_TIMEOUT_MS: u64 = 5_000;
 /// ...and may stall this long while a body is received or sent.
@@ -208,6 +214,7 @@ fn start(port: u16) -> Result<(), String> {
         return Err(String::from("no network card"));
     }
     net::tcp_listen(port).map_err(String::from)?;
+    clear_uploads(&setting().folder);
     STATE.get().wanted = Some(port);
     let id = thread::spawn("fileserver", None, move || serve(port));
     if id.is_none() {
@@ -278,13 +285,22 @@ struct Answer {
     kind: &'static str,
     more: String,
     body: Vec<u8>,
-    /// For HEAD of a file: the length to announce (the body stays empty).
+    /// For a file: the length to announce (the body stays empty).
     length: Option<u64>,
+    /// The file whose content is the body: sent from the disk piece by piece.
+    file: Option<String>,
+}
+
+/// What came with a request: a small body, or an upload already on the disk.
+enum Body {
+    Bytes(Vec<u8>),
+    /// A complete, checked upload under its temporary name, and its size.
+    File(String, u64),
 }
 
 impl Answer {
     fn new(status: u16, reason: &'static str, kind: &'static str, body: Vec<u8>) -> Answer {
-        Answer { status, reason, kind, more: String::new(), body, length: None }
+        Answer { status, reason, kind, more: String::new(), body, length: None, file: None }
     }
 
     fn error(status: u16, reason: &'static str, message: &str) -> Answer {
@@ -326,8 +342,13 @@ fn answer(stream: &net::TcpStream) -> bool {
             a.more = String::from("WWW-Authenticate: Bearer\r\n");
             (a, false)
         } else {
-            match body(stream, &head, early, 0) {
-                Ok(body) => (rest(&setting.folder, &head, body), true),
+            let taken = if head.method == "PUT" && !head.path.ends_with('/') {
+                receive_upload(stream, &head, early, s3::BodyReader::plain(), &setting.folder, 0)
+            } else {
+                body(stream, &head, early).map(Body::Bytes)
+            };
+            match taken {
+                Ok(body) => (acted(body, |body| rest(&setting.folder, &head, body)), true),
                 Err(e) => {
                     let (status, reason, _, message) = e.parts();
                     (Answer::error(status, reason, &message), true)
@@ -343,7 +364,7 @@ fn answer(stream: &net::TcpStream) -> bool {
             Ok(()) if !one_file || !matches!(head.method.as_str(), "GET" | "HEAD") => {
                 (s3_error(403, "Forbidden", "AccessDenied", "a link only fetches one file", &head.path), false)
             }
-            Ok(()) => (s3_act(&setting.folder, &head, Vec::new()), true),
+            Ok(()) => (s3_act(&setting.folder, &head, Body::Bytes(Vec::new())), true),
         }
     } else {
         // Everything else is S3: nothing happens before the signature is right.
@@ -367,24 +388,47 @@ fn s3_xml(text: String) -> Answer {
     Answer::new(200, "OK", "application/xml", text.into_bytes())
 }
 
+/// Run a request's action; an upload that the action did not take (it gave
+/// the file its name) is removed afterwards.
+fn acted(body: Body, act: impl FnOnce(Body) -> Answer) -> Answer {
+    let temp = match &body {
+        Body::File(temp, _) => Some(temp.clone()),
+        Body::Bytes(_) => None,
+    };
+    let answer = act(body);
+    if let (Some(temp), Some(mut storage)) = (temp, storage::handle()) {
+        let _ = storage.fs().remove(&temp);
+    }
+    answer
+}
+
 /// A signed S3 request: take its body as the client meant it, then act.
 fn s3_request(stream: &net::TcpStream, folder: &str, head: &Head, early: Vec<u8>, auth: &s3::Auth) -> Answer {
     let chunked = matches!(auth.payload, s3::Payload::Chunked { .. });
-    let received = match body(stream, head, early, if chunked { CHUNK_ROOM } else { 0 }) {
-        Ok(data) => data,
+    let decoded = head.header("x-amz-decoded-content-length").and_then(|v| v.parse::<u64>().ok());
+    let object = proto::safe_path(&head.path, MAX_NAME_LEN).is_some_and(|names| names.len() >= 2);
+    let taken = if head.method == "PUT" && object && !head.path.ends_with('/') && head.header("x-amz-copy-source").is_none() {
+        // An object: to the disk as it arrives, checked piece by piece.
+        receive_upload(stream, head, early, s3::BodyReader::new(auth, decoded), folder, if chunked { length_room(head) } else { 0 })
+    } else {
+        body(stream, head, early).and_then(|received| s3::body(auth, received, decoded).map(Body::Bytes).map_err(|_| BodyError::NotAsSigned))
+    };
+    match taken {
+        Ok(body) => acted(body, |body| s3_act(folder, head, body)),
         Err(e) => {
             let (status, reason, code, message) = e.parts();
-            return s3_error(status, reason, code, &message, &head.path);
-        }
-    };
-    let decoded = head.header("x-amz-decoded-content-length").and_then(|v| v.parse::<u64>().ok());
-    match s3::body(auth, received, decoded) {
-        Ok(data) if data.len() as u64 > MAX_BODY => {
-            let (status, reason, code, message) = BodyError::TooLarge.parts();
             s3_error(status, reason, code, &message, &head.path)
         }
-        Ok(data) => s3_act(folder, head, data),
-        Err(e) => s3_error(400, "Bad Request", e.code(), e.message(), &head.path),
+    }
+}
+
+/// How much larger than the file a chunked upload may be on the wire: what
+/// the client says the wrapping takes, within reason.
+fn length_room(head: &Head) -> u64 {
+    let decoded = head.header("x-amz-decoded-content-length").and_then(|v| v.parse::<u64>().ok());
+    match (head.content_length(), decoded) {
+        (Ok(Some(length)), Some(decoded)) if length >= decoded => (length - decoded).min(decoded / 8 + CHUNK_ROOM),
+        _ => CHUNK_ROOM,
     }
 }
 
@@ -433,7 +477,7 @@ fn prune(fs: &mut storage::FsGuard, bucket_dir: &str, path: &str) {
 }
 
 /// The S3 interface: /BUCKET/KEY below the shared folder.
-fn s3_act(folder: &str, head: &Head, body: Vec<u8>) -> Answer {
+fn s3_act(folder: &str, head: &Head, body: Body) -> Answer {
     let resource = head.path.as_str();
     let fail = |status: u16, reason: &'static str, code: &str, message: &str| s3_error(status, reason, code, message, resource);
     let not_done = |what: &str| fail(501, "Not Implemented", "NotImplemented", &format!("{what}: this file server does not do that"));
@@ -520,7 +564,8 @@ fn s3_act(folder: &str, head: &Head, body: Vec<u8>) -> Answer {
                 }
             }
             "POST" if has("delete") => {
-                let Some((keys, quiet)) = s3::delete_keys(&body) else {
+                let Body::Bytes(body) = &body else { return fail(400, "Bad Request", "MalformedXML", "not a list of keys") };
+                let Some((keys, quiet)) = s3::delete_keys(body) else {
                     return fail(400, "Bad Request", "MalformedXML", "not a list of at most 1000 keys");
                 };
                 let (mut deleted, mut failed) = (Vec::new(), Vec::new());
@@ -553,7 +598,7 @@ fn s3_act(folder: &str, head: &Head, body: Vec<u8>) -> Answer {
     let is_folder_key = head.path.ends_with('/');
     let no_key = || fail(404, "Not Found", "NoSuchKey", "no such key");
     match method {
-        "PUT" | "POST" if has("uploads") || has("uploadId") || has("partNumber") => not_done("multipart uploads (send the file in one piece: 16 MiB at most)"),
+        "PUT" | "POST" if has("uploads") || has("uploadId") || has("partNumber") => not_done("multipart uploads (send the file in one piece)"),
         "PUT" if head.header("x-amz-copy-source").is_some() => not_done("copies"),
         "PUT" if has("acl") || has("tagging") || has("retention") || has("legal-hold") => not_done("object settings"),
         "PUT" if !bucket_there => no_bucket(),
@@ -566,21 +611,15 @@ fn s3_act(folder: &str, head: &Head, body: Vec<u8>) -> Answer {
             Err(e) => fs_failed(e),
         },
         "PUT" => {
-            let existed = fs.exists(&path);
-            let parent = &path[..path.rfind('/').unwrap_or(0)];
-            let written = fs.mkdir_all(parent).and_then(|()| fs.write_file(&path, &body));
-            match written.and_then(|()| fs.metadata(&path)) {
+            let Body::File(temp, _) = &body else { return fail(400, "Bad Request", "InvalidRequest", "no object came with the request") };
+            match place_upload(&mut fs, temp, &path).and_then(|_| fs.metadata(&path)) {
                 Ok(m) => {
                     let mut a = Answer::new(200, "OK", "application/xml", Vec::new());
                     a.more = format!("ETag: \"{}\"\r\n", etag(m.inode, m.size));
                     a
                 }
                 Err(e) => {
-                    // Nothing half-written stays behind under a new name.
-                    if !existed {
-                        let _ = fs.remove(&path);
-                        prune(&mut fs, &bucket_dir, &path);
-                    }
+                    prune(&mut fs, &bucket_dir, &path);
                     fs_failed(e)
                 }
             }
@@ -589,20 +628,12 @@ fn s3_act(folder: &str, head: &Head, body: Vec<u8>) -> Answer {
         "GET" | "HEAD" => match fs.metadata(&path) {
             _ if !bucket_there => no_bucket(),
             Ok(m) if (m.kind == FileKind::Directory) != is_folder_key => no_key(),
-            Ok(m) if m.size > MAX_BODY => fail(413, "Content Too Large", "EntityTooLarge", "the file is too large to send"),
             Ok(m) => {
                 let folder_key = m.kind == FileKind::Directory;
                 let (size, tag) = if folder_key { (0, etag(0, 0)) } else { (m.size, etag(m.inode, m.size)) };
-                let data = if method == "HEAD" || folder_key {
-                    Vec::new()
-                } else {
-                    match fs.read_file(&path) {
-                        Ok(data) => data,
-                        Err(e) => return fs_failed(e),
-                    }
-                };
-                let mut a = Answer::new(200, "OK", content_type(&path), data);
+                let mut a = Answer::new(200, "OK", content_type(&path), Vec::new());
                 a.length = Some(size);
+                a.file = (!folder_key).then(|| path.clone());
                 a.more = format!("ETag: \"{tag}\"\r\nLast-Modified: {}\r\n", s3::http_time(now));
                 a
             }
@@ -629,8 +660,12 @@ fn s3_act(folder: &str, head: &Head, body: Vec<u8>) -> Answer {
 enum BodyError {
     BadLength,
     NoLength,
-    TooLarge,
+    /// Larger than this many bytes.
+    TooLarge(u64),
     EndedEarly,
+    /// Not what the client signed.
+    NotAsSigned,
+    Disk(FsError),
 }
 
 impl BodyError {
@@ -639,23 +674,26 @@ impl BodyError {
         match self {
             BodyError::BadLength => (400, "Bad Request", "InvalidArgument", String::from("Content-Length is not a number")),
             BodyError::NoLength => (411, "Length Required", "MissingContentLength", String::from("PUT needs a Content-Length")),
-            BodyError::TooLarge => (413, "Content Too Large", "EntityTooLarge", format!("a file may have {} KiB at most", MAX_BODY >> 10)),
+            BodyError::TooLarge(most) => (413, "Content Too Large", "EntityTooLarge", format!("too large: {} KiB at most here", most >> 10)),
             BodyError::EndedEarly => (400, "Bad Request", "IncompleteBody", String::from("the body ended early")),
+            BodyError::NotAsSigned => (400, "Bad Request", s3::AuthError::BadBody.code(), String::from(s3::AuthError::BadBody.message())),
+            BodyError::Disk(FsError::NoSpace | FsError::NoInodes | FsError::FileTooLarge) => {
+                (507, "Insufficient Storage", "EntityTooLarge", String::from("the disk is full"))
+            }
+            BodyError::Disk(e) => (500, "Internal Server Error", "InternalError", format!("{e}")),
         }
     }
 }
 
-/// The request's body, for the methods that have one. `room`: how much
-/// larger than a file it may be (the wrapping of a chunked upload).
-fn body(stream: &net::TcpStream, head: &Head, early: Vec<u8>, room: u64) -> Result<Vec<u8>, BodyError> {
+/// A small body, held in memory: the list of keys of a "delete these" request.
+fn body(stream: &net::TcpStream, head: &Head, early: Vec<u8>) -> Result<Vec<u8>, BodyError> {
     let length = match head.content_length() {
         Err(()) => return Err(BodyError::BadLength),
         Ok(Some(n)) => n,
-        Ok(None) if head.method == "PUT" && !head.path.ends_with('/') => return Err(BodyError::NoLength),
         Ok(None) => 0,
     };
-    if length > MAX_BODY + room {
-        return Err(BodyError::TooLarge);
+    if length > MAX_BODY {
+        return Err(BodyError::TooLarge(MAX_BODY));
     }
     let length = length as usize;
     let mut data = early;
@@ -681,6 +719,118 @@ fn body(stream: &net::TcpStream, head: &Head, early: Vec<u8>, room: u64) -> Resu
     Ok(data)
 }
 
+/// How large a file in the shared folder can become: what its disk has
+/// free, and no more than a file holds.
+fn room(folder: &str) -> u64 {
+    let Some(mut storage) = storage::handle() else { return 0 };
+    let fs = storage.fs();
+    let on_data = storage::route(folder, fs.has_data()).0;
+    let stats = if on_data { fs.data_stats().unwrap_or(fs.stats()) } else { fs.stats() };
+    (stats.free_blocks as u64 * stats.block_size as u64).min(beefs::MAX_FILE_SIZE)
+}
+
+/// Remove what interrupted uploads left behind (when the server starts).
+fn clear_uploads(folder: &str) {
+    let Some(mut storage) = storage::handle() else { return };
+    let mut fs = storage.fs();
+    for entry in fs.read_dir(folder).unwrap_or_default() {
+        if entry.kind == FileKind::File && entry.name.starts_with(UPLOAD_PREFIX) {
+            let _ = fs.remove(&format!("{folder}/{}", entry.name));
+        }
+    }
+}
+
+/// Take a file as it arrives: through `reader` (which checks it against
+/// what the client signed) to a temporary file in the shared folder, piece
+/// by piece, so that it never has to fit in memory. Only a complete and
+/// checked upload is returned; anything else is removed again. `wrapping`:
+/// how much larger than the file the body may be (a chunked upload).
+fn receive_upload(stream: &net::TcpStream, head: &Head, early: Vec<u8>, mut reader: s3::BodyReader, folder: &str, wrapping: u64) -> Result<Body, BodyError> {
+    let length = match head.content_length() {
+        Err(()) => return Err(BodyError::BadLength),
+        Ok(None) => return Err(BodyError::NoLength),
+        Ok(Some(n)) => n,
+    };
+    let most = room(folder);
+    if length > most + wrapping {
+        return Err(BodyError::TooLarge(most));
+    }
+    let temp = format!("{folder}/{UPLOAD_PREFIX}{:08x}", rand::next_u32());
+    let on_disk = |act: &mut dyn FnMut(&mut storage::FsGuard) -> Result<(), FsError>| -> Result<(), BodyError> {
+        let mut storage = storage::handle().ok_or(BodyError::Disk(FsError::Io))?;
+        let mut fs = storage.fs();
+        let done = act(&mut fs);
+        drop(fs);
+        done.map_err(BodyError::Disk)
+    };
+    on_disk(&mut |fs| fs.write_file(&temp, &[]))?;
+    let result = (|| {
+        let mut left = length;
+        let mut written = 0u64;
+        let mut piece = Vec::with_capacity(PIECE);
+        let mut take = |received: &[u8], last: bool, reader: &mut s3::BodyReader| -> Result<(), BodyError> {
+            reader.feed(received, &mut piece).map_err(|_| BodyError::NotAsSigned)?;
+            if piece.len() >= PIECE || (last && !piece.is_empty()) {
+                written += piece.len() as u64;
+                if written > most {
+                    return Err(BodyError::TooLarge(most));
+                }
+                on_disk(&mut |fs| fs.append(&temp, &piece))?;
+                piece.clear();
+            }
+            Ok(())
+        };
+        let first = (early.len() as u64).min(left) as usize;
+        left -= first as u64;
+        take(&early[..first], left == 0, &mut reader)?;
+        if left > 0 && head.header("expect").is_some_and(|v| v.eq_ignore_ascii_case("100-continue")) {
+            let _ = stream.send_some(b"HTTP/1.1 100 Continue\r\n\r\n");
+        }
+        let mut buf = alloc::vec![0u8; PIECE];
+        let mut last_progress = time::uptime_ms();
+        while left > 0 {
+            let want = (left as usize).min(buf.len());
+            match stream.receive(&mut buf[..want]) {
+                net::Received::Data(n) => {
+                    left -= n as u64;
+                    take(&buf[..n], left == 0, &mut reader)?;
+                    last_progress = time::uptime_ms();
+                    // A long upload must not keep the processor from the other threads.
+                    thread::yield_now();
+                }
+                net::Received::Nothing if time::uptime_ms() - last_progress < STALL_MS => {
+                    thread::pause(|| false);
+                }
+                _ => return Err(BodyError::EndedEarly),
+            }
+        }
+        reader.finish().map_err(|_| BodyError::NotAsSigned)
+    })();
+    match result {
+        Ok(size) => Ok(Body::File(temp, size)),
+        Err(e) => {
+            let _ = on_disk(&mut |fs| fs.remove(&temp));
+            Err(e)
+        }
+    }
+}
+
+/// Give a complete upload its name: `path` (a file that is there is
+/// replaced; the folders above it are made). True: there was such a file.
+fn place_upload(fs: &mut storage::FsGuard, temp: &str, path: &str) -> Result<bool, FsError> {
+    let existed = match fs.metadata(path) {
+        Ok(m) if m.kind == FileKind::Directory => return Err(FsError::IsADirectory),
+        Ok(_) => true,
+        Err(_) => false,
+    };
+    fs.mkdir_all(&path[..path.rfind('/').unwrap_or(0)])?;
+    if existed {
+        fs.remove(path)?;
+    }
+    fs.rename(temp, path)?;
+    Ok(existed)
+}
+
 fn send(stream: &net::TcpStream, answer: &Answer, head_only: bool) {
     let length = answer.length.unwrap_or(answer.body.len() as u64);
     let mut out = proto::response_head(answer.status, answer.reason, answer.kind, length, &answer.more).into_bytes();
@@ -702,11 +852,41 @@ fn send(stream: &net::TcpStream, answer: &Answer, head_only: bool) {
             Err(_) => return,
         }
     }
+    if let (Some(path), false) = (&answer.file, head_only) {
+        // The file, from the disk piece by piece: it need not fit in memory.
+        let mut buf = alloc::vec![0u8; PIECE];
+        let mut offset = 0u64;
+        while offset < length {
+            let read = storage::handle().map(|mut storage| storage.fs().read_at(path, offset, &mut buf));
+            let Some(Ok(n)) = read else { return };
+            if n == 0 {
+                return; // shorter than announced (changed meanwhile): the client sees it cut off
+            }
+            offset += n as u64;
+            let mut rest = &buf[..n];
+            let mut last_progress = time::uptime_ms();
+            while !rest.is_empty() {
+                match stream.send_some(rest) {
+                    Ok(0) if time::uptime_ms() - last_progress > STALL_MS => return,
+                    Ok(0) => {
+                        thread::pause(|| false);
+                    }
+                    Ok(n) => {
+                        rest = &rest[n..];
+                        last_progress = time::uptime_ms();
+                    }
+                    Err(_) => return,
+                }
+            }
+            // A long download must not keep the processor from the other threads.
+            thread::yield_now();
+        }
+    }
     stream.finish();
 }
 
 /// The REST interface: /api/files/PATH below the shared folder.
-fn rest(folder: &str, head: &Head, body: Vec<u8>) -> Answer {
+fn rest(folder: &str, head: &Head, body: Body) -> Answer {
     let not_found = || Answer::error(404, "Not Found", "no such file or folder");
     let relative = match head.path.strip_prefix("/api/files") {
         Some(rest) if rest.is_empty() || rest.starts_with('/') => rest,
@@ -725,6 +905,7 @@ fn rest(folder: &str, head: &Head, body: Vec<u8>) -> Answer {
                 Ok(list) => {
                     let mut entries: Vec<Entry> = list
                         .into_iter()
+                        .filter(|e| !(names.is_empty() && e.name.starts_with(UPLOAD_PREFIX))) // uploads still arriving
                         .map(|e| Entry { name: e.name, folder: e.kind == FileKind::Directory, size: e.size })
                         .collect();
                     for e in entries.iter_mut().filter(|e| e.folder) {
@@ -735,16 +916,12 @@ fn rest(folder: &str, head: &Head, body: Vec<u8>) -> Answer {
                 }
                 Err(e) => failed(e),
             },
-            Ok(m) if m.size > MAX_BODY => Answer::error(413, "Content Too Large", "the file is too large to send"),
-            Ok(m) if head.method == "HEAD" => {
+            Ok(m) => {
                 let mut a = Answer::new(200, "OK", content_type(&shown), Vec::new());
                 a.length = Some(m.size);
+                a.file = Some(path.clone());
                 a
             }
-            Ok(_) => match fs.read_file(&path) {
-                Ok(data) => Answer::new(200, "OK", content_type(&shown), data),
-                Err(e) => failed(e),
-            },
             Err(FsError::NotFound | FsError::NotADirectory) => not_found(),
             Err(e) => failed(e),
         },
@@ -754,25 +931,17 @@ fn rest(folder: &str, head: &Head, body: Vec<u8>) -> Answer {
             Err(e) => failed(e),
         },
         "PUT" => {
-            let existed = fs.exists(&path);
-            let parent = &path[..path.rfind('/').unwrap_or(0)];
-            let written = fs.mkdir_all(parent).and_then(|()| fs.write_file(&path, &body));
-            match written {
-                Ok(()) => {
-                    let text = format!("{{\"path\":\"{}\",\"type\":\"file\",\"size\":{}}}\n", proto::json_escape(&shown), body.len());
+            let Body::File(temp, size) = &body else { return Answer::error(400, "Bad Request", "no file came with the request") };
+            match place_upload(&mut fs, temp, &path) {
+                Ok(existed) => {
+                    let text = format!("{{\"path\":\"{}\",\"type\":\"file\",\"size\":{size}}}\n", proto::json_escape(&shown));
                     if existed {
                         Answer::json(200, "OK", text)
                     } else {
                         Answer::json(201, "Created", text)
                     }
                 }
-                Err(e) => {
-                    // Nothing half-written stays behind under a new name.
-                    if !existed {
-                        let _ = fs.remove(&path);
-                    }
-                    failed(e)
-                }
+                Err(e) => failed(e),
             }
         }
         "DELETE" if names.is_empty() => Answer::error(403, "Forbidden", "the shared folder itself stays"),

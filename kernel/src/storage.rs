@@ -91,6 +91,13 @@ impl Mounts {
         fs.read_file(&path)
     }
 
+    /// Read up to `buf.len()` bytes of a file from `offset` on: how a file
+    /// too large for memory is read. Returns how many were read.
+    pub fn read_at(&mut self, path: &str, offset: u64, buf: &mut [u8]) -> Result<usize, FsError> {
+        let (fs, path) = self.at(path);
+        fs.read_at(&path, offset, buf)
+    }
+
     pub fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), FsError> {
         let (fs, path) = self.at(path);
         fs.write_file(&path, data)

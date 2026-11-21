@@ -82,6 +82,8 @@ HTTP/1.1 403 Forbidden
 HTTP/1.1 400 Bad Request
 $ ls /
 !~ planted
+$ ls /share
+!~ \.up-
 # What cannot be done says why.
 @request raw GET /api/files/none.txt HTTP/1.1\r\nAuthorization: Bearer TestKeyTestKeyTestKeyTestKeyTestKey12345\r\n\r\n
 HTTP/1.1 404 Not Found
