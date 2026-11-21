@@ -3416,9 +3416,9 @@ impl Shell {
         if beefs::normalize(&src) == beefs::normalize(&dst) {
             return error(&format!("{from}: that is the same file"));
         }
-        // In pieces, so that a file larger than memory can be copied; the
+        // In pieces of 1 MiB, so that a file larger than memory can be copied; the
         // file system is let go between them (other threads, the watchdog).
-        let mut piece = alloc::vec![0u8; 64 * 1024];
+        let mut piece = alloc::vec![0u8; 1024 * 1024];
         let mut offset = 0u64;
         let mut fs = self.storage.fs();
         let mut r = fs.metadata(&src).and_then(|m| match m.kind {

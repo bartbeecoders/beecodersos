@@ -16,7 +16,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=344">
+<link rel="stylesheet" href="style.css?v=347">
 <script src="site.js" defer></script>
 </head>
 <body>
@@ -45,7 +45,7 @@
   <div class="hive-bg" aria-hidden="true"></div>
   <div class="wrap hero-grid">
     <div class="hero-text">
-      <p class="pill"><span class="dot"></span> v0.0.3 · build 344 · running on real hardware</p>
+      <p class="pill"><span class="dot"></span> v0.0.3 · build 347 · running on real hardware</p>
       <h1>The operating system that <span class="honey">improves itself</span>.</h1>
       <p class="lead">BeeCodersOs is a 64-bit OS written from scratch in Rust. It notices what goes
         wrong and what people miss, and an AI turns that into small, tested changes that a person
@@ -85,7 +85,7 @@ clover
 <section class="wrap numbers" aria-label="In numbers">
   <div><strong data-count="47800">47.8k</strong><span>lines of Rust, from boot code to TCP</span></div>
   <div><strong data-count="434">434</strong><span>automated tests, run on every change</span></div>
-  <div><strong data-count="344">344</strong><span>builds in the first eight days</span></div>
+  <div><strong data-count="347">347</strong><span>builds in the first eight days</span></div>
   <div><strong>1</strong><span>outside crate in the kernel, for its heap. Everything else is written here</span></div>
 </section>
 
@@ -261,7 +261,7 @@ clover
         <b>S3 protocol</b> for everything that already speaks it: folders are buckets, files are objects, and
         boto3 works against it as it is, uploads in parts and downloads in ranges included. Every request needs the key the OS made up; S3 requests are signed as
         Amazon's clients sign them, and the OS checks each signature, down to every piece of a chunked upload, before
-        it touches the disk. Files go to the disk as they arrive, so they can be as large as the disk has room: 100 MB reaches the HP in 10 seconds and comes back in 9. No request can leave the shared folder. Off until you switch it on. And <code>fileserver link photo.jpg</code>
+        it touches the disk. Files go to the disk as they arrive, so they can be as large as the disk has room: 100 MB reaches the HP in 10 to 16 seconds. No request can leave the shared folder. Off until you switch it on. And <code>fileserver link photo.jpg</code>
         gives an address that opens that one file in any browser, without a key, until it expires.</p>
     </article>
 

@@ -281,8 +281,9 @@ A file of more than 16 MiB is not read into memory whole: `read_file` says "file
 Whole blocks that lie one after the other on the device are read and
 written with one call, up to 256 at a time (`BlockDevice::read_blocks` /
 `write_blocks`), which a partition passes on and the IDE and SATA drivers
-turn into one command: copying 100 MB on the HP's disk takes 6 s instead
-of 23 s.
+turn into one command. `cp` copies in pieces of 1 MiB (every write ends
+with the bookkeeping and a flush of the disk's cache): 100 MB on the HP's
+disk in under 4 s, where it took 23 s.
 
 **Writing speed:** during one operation BeeFS keeps the bookkeeping blocks
 it works on (bitmap, pointer tables) in memory and writes each once: before
@@ -1144,8 +1145,10 @@ print([o["Key"] for o in s3.list_objects_v2(Bucket="photos", Prefix="2026/")["Co
   upload that is what the client signed gets its own name. Anything else
   (a cut connection, a changed byte, a full disk) is removed again, and so
   is what a restart interrupted. Downloads are read from the disk in
-  pieces. On the HP a 100 MB file goes up in 10 s and comes back in 9 s
-  (about 11 MB/s), byte for byte; other threads keep running meanwhile.
+  pieces. On the HP a 100 MB file goes up in 10 to 16 s and comes back in
+  9 to 12 s, byte for byte (the same build measured both ends of that on
+  one day; larger TCP buffers changed nothing, so what limits it is not
+  known yet); other threads keep running meanwhile.
   (It was 14 s and 30 s while every 512-byte block cost the disk a command
   of its own: BeeFS now reads and writes blocks that lie one after the
   other with one call, and the SATA driver moves them in one command.)
