@@ -48,6 +48,12 @@ const SETTING_FILE: &str = "/system/fileserver";
 pub const MAX_BODY: u64 = 2 * 1024 * 1024;
 /// The size of the pieces in which a file is received and sent.
 const PIECE: usize = 64 * 1024;
+/// The size of the pieces in which parts are put together on the disk:
+/// every write ends with the file system's bookkeeping and a flush of the
+/// disk's cache, so fewer, larger writes are faster. (Not for uploads:
+/// while a write is under way nothing is taken from the network, and with
+/// writes this large an upload was slower, 16 s against 10 s for 100 MB.)
+const WRITE_PIECE: usize = 1024 * 1024;
 /// Uploads are written under this name in the shared folder until they are
 /// complete and checked; only then do they get their own name.
 const UPLOAD_PREFIX: &str = ".up-";
@@ -512,7 +518,7 @@ fn complete_parts(stream: &net::TcpStream, folder: &str, head: &Head, xml: &[u8]
     let result = (|| -> Result<(u32, u64), FsError> {
         // The first part becomes the file; the others are added to it piece by piece.
         storage.fs().rename(&format!("{dir}/{}", parts[0]), &temp)?;
-        let mut piece = alloc::vec![0u8; PIECE];
+        let mut piece = alloc::vec![0u8; WRITE_PIECE];
         let mut last_sign = time::uptime_ms();
         for part in &parts[1..] {
             let from = format!("{dir}/{part}");
@@ -967,7 +973,7 @@ fn receive_upload(stream: &net::TcpStream, head: &Head, early: Vec<u8>, mut read
     let result = (|| {
         let mut left = length;
         let mut written = 0u64;
-        let mut piece = Vec::with_capacity(PIECE);
+        let mut piece = Vec::with_capacity(2 * PIECE);
         let mut take = |received: &[u8], last: bool, reader: &mut s3::BodyReader| -> Result<(), BodyError> {
             reader.feed(received, &mut piece).map_err(|_| BodyError::NotAsSigned)?;
             if piece.len() >= PIECE || (last && !piece.is_empty()) {
