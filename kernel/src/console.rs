@@ -1038,24 +1038,27 @@ pub fn scroll_focused(up: bool) {
 
 /// Terminals show on their scroll bar where in their history they are.
 fn update_terminal_scroll_bars() {
-    let Some(desk) = DESKTOP.get().as_mut() else { return };
-    let mut changed = Vec::new();
+    // No heap in here: the timer interrupt comes this way (`on_tick`), also
+    // while the code it interrupted is inside the allocator, holding its
+    // lock. (A list of the changed windows was made here once: now and then
+    // a long output froze the machine.)
+    let changed = |id: usize, view: (usize, usize, usize)| {
+        let Some(desk) = DESKTOP.get().as_mut() else { return };
+        if view.2 > view.1 && desk.set_scroll(id, Some(view)) {
+            if let Some(bar) = desk.window(id).and_then(|w| w.scroll_bar()) {
+                compose(bar);
+            }
+        }
+    };
+    if DESKTOP.get().is_none() {
+        return;
+    }
     if let Screen::Graphics(screen) = SCREEN.get() {
-        let view = screen.history_view();
-        if view.2 > view.1 && desk.set_scroll(TERMINAL, Some(view)) {
-            changed.push(TERMINAL);
-        }
+        changed(TERMINAL, screen.history_view());
     }
-    for pane in PANES.get().iter() {
-        let view = pane.con.history_view();
-        if view.2 > view.1 && desk.set_scroll(pane.window, Some(view)) {
-            changed.push(pane.window);
-        }
-    }
-    for id in changed {
-        if let Some(bar) = desk.window(id).and_then(|w| w.scroll_bar()) {
-            compose(bar);
-        }
+    for i in 0..PANES.get().len() {
+        let pane = &PANES.get()[i];
+        changed(pane.window, pane.con.history_view());
     }
 }
 
